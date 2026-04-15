@@ -1,6 +1,20 @@
 
 export type AgentRole = 'Leader' | 'Developer' | 'QA' | 'Designer' | 'Researcher';
 
+export interface CodeFile {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  projectId: string;
+  type: 'component' | 'service' | 'util' | 'style';
+}
+
+export interface CodeDependency {
+  from: string; // file id
+  to: string; // file id
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -11,6 +25,7 @@ export interface Agent {
   status: 'idle' | 'working' | 'meeting' | 'thinking';
   currentTask?: string;
   lastMessage?: string;
+  workingOnFileId?: string;
 }
 
 export interface Project {
@@ -25,6 +40,8 @@ export interface Project {
 export interface GameState {
   projects: Project[];
   agents: Agent[];
+  files: CodeFile[];
+  dependencies: CodeDependency[];
 }
 
 export interface Task {

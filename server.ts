@@ -17,10 +17,32 @@ async function startServer() {
   // In-memory state (for demo purposes, could be persistent)
   let gameState: GameState = {
     projects: [],
-    agents: []
+    agents: [],
+    files: [],
+    dependencies: []
   };
 
   let tasks: any[] = [];
+
+  // Initial code files for a default project
+  const defaultProjectId = uuidv4();
+  const initialFiles: any[] = [
+    { id: 'f1', name: 'App.tsx', x: 150, y: 150, projectId: defaultProjectId, type: 'component' },
+    { id: 'f2', name: 'Header.tsx', x: 300, y: 100, projectId: defaultProjectId, type: 'component' },
+    { id: 'f3', name: 'Sidebar.tsx', x: 300, y: 200, projectId: defaultProjectId, type: 'component' },
+    { id: 'f4', name: 'api.ts', x: 500, y: 150, projectId: defaultProjectId, type: 'service' },
+    { id: 'f5', name: 'utils.ts', x: 650, y: 150, projectId: defaultProjectId, type: 'util' },
+  ];
+  const initialDeps = [
+    { from: 'f1', to: 'f2' },
+    { from: 'f1', to: 'f3' },
+    { from: 'f2', to: 'f4' },
+    { from: 'f3', to: 'f4' },
+    { from: 'f4', to: 'f5' },
+  ];
+
+  gameState.files = initialFiles;
+  gameState.dependencies = initialDeps;
 
   // Initial agents
   const initialAgents: Agent[] = [
@@ -29,6 +51,16 @@ async function startServer() {
     { id: uuidv4(), name: '감마', role: 'QA', spriteTemplate: 'char3', x: 300, y: 200, status: 'idle' }
   ];
   gameState.agents = initialAgents;
+
+  // Initial project
+  gameState.projects.push({
+    id: defaultProjectId,
+    name: 'Core System',
+    description: 'The main engine of LLM Tycoon',
+    workspacePath: './workspaces/core',
+    agents: [],
+    status: 'active'
+  });
 
   // API Routes
   app.get('/api/state', (req, res) => {
@@ -106,6 +138,14 @@ async function startServer() {
         agent.x = x;
         agent.y = y;
         socket.broadcast.emit('agent:moved', { agentId, x, y });
+      }
+    });
+
+    socket.on('agent:working', ({ agentId, fileId }) => {
+      const agent = gameState.agents.find(a => a.id === agentId);
+      if (agent) {
+        agent.workingOnFileId = fileId;
+        io.emit('agent:working', { agentId, fileId });
       }
     });
 

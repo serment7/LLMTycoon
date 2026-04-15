@@ -102,6 +102,13 @@ export default function App() {
       }, 5000);
     });
 
+    newSocket.on('agent:working', ({ agentId, fileId }) => {
+      setGameState(prev => ({
+        ...prev,
+        agents: prev.agents.map(a => a.id === agentId ? { ...a, workingOnFileId: fileId } : a)
+      }));
+    });
+
     return () => {
       newSocket.close();
     };
@@ -192,10 +199,8 @@ export default function App() {
         const randomAgent = otherAgents[Math.floor(Math.random() * otherAgents.length)];
         const randomProject = gameState.projects[Math.floor(Math.random() * gameState.projects.length)];
         
-        // Move leader towards the assigned agent for "briefing"
-        const targetX = randomAgent.x + (Math.random() > 0.5 ? 60 : -60);
-        const targetY = randomAgent.y + (Math.random() > 0.5 ? 60 : -60);
-        socket.emit('agent:move', { agentId: agent.id, x: targetX, y: targetY });
+        // Leader doesn't work on files, just moves to center
+        socket.emit('agent:move', { agentId: agent.id, x: 400, y: 300 });
 
         await fetch('/api/tasks', {
           method: 'POST',
@@ -213,20 +218,15 @@ export default function App() {
         });
       }
     } else {
-      // Regular agent action
-      const otherAgents = gameState.agents.filter(a => a.id !== agent.id);
-      const shouldVisit = Math.random() > 0.7 && otherAgents.length > 0;
-
-      if (shouldVisit) {
-        const target = otherAgents[Math.floor(Math.random() * otherAgents.length)];
-        socket.emit('agent:message', { agentId: agent.id, message: `${target.name}님과 협업 중...` });
+      // Regular agent action - pick a file to work on
+      const files = gameState.files;
+      if (files.length > 0) {
+        const randomFile = files[Math.floor(Math.random() * files.length)];
+        socket.emit('agent:working', { agentId: agent.id, fileId: randomFile.id });
         
-        // Move close to target
-        const targetX = target.x + (Math.random() > 0.5 ? 50 : -50);
-        const targetY = target.y + (Math.random() > 0.5 ? 50 : -50);
-        socket.emit('agent:move', { agentId: agent.id, x: targetX, y: targetY });
-      } else {
-        socket.emit('agent:message', { agentId: agent.id, message: "다음 단계를 생각 중..." });
+        // Move to file position
+        socket.emit('agent:move', { agentId: agent.id, x: randomFile.x, y: randomFile.y + 40 });
+        socket.emit('agent:message', { agentId: agent.id, message: `${randomFile.name} 파일 작업 중...` });
       }
       
       try {
@@ -239,14 +239,6 @@ export default function App() {
         
         const message = response.text || "열심히 일하는 중!";
         socket.emit('agent:message', { agentId: agent.id, message });
-        
-        // Randomly move agent if not visiting
-        if (!shouldVisit) {
-          const newX = Math.max(50, Math.min(750, agent.x + (Math.random() - 0.5) * 200));
-          const newY = Math.max(50, Math.min(450, agent.y + (Math.random() - 0.5) * 200));
-          socket.emit('agent:move', { agentId: agent.id, x: newX, y: newY });
-        }
-        
       } catch (error) {
         console.error("Agent thinking failed:", error);
       }
@@ -341,6 +333,58 @@ export default function App() {
                   backgroundSize: '32px 32px'
                 }}
               >
+                {/* SVG Layer for Connections */}
+                <svg className="absolute inset-0 w-full h-full pointer-events-none z-0">
+                  {/* Dependencies */}
+                  {gameState.dependencies?.map((dep, idx) => {
+                    const from = gameState.files.find(f => f.id === dep.from);
+                    const to = gameState.files.find(f => f.id === dep.to);
+                    if (!from || !to) return null;
+                    return (
+                      <line 
+                        key={`dep-${idx}`}
+                        x1={from.x} y1={from.y}
+                        x2={to.x} y2={to.y}
+                        stroke="var(--pixel-border)"
+                        strokeWidth="1"
+                        strokeDasharray="4 4"
+                      />
+                    );
+                  })}
+                  {/* Agent to File Connections */}
+                  {gameState.agents.map(agent => {
+                    if (!agent.workingOnFileId) return null;
+                    const file = gameState.files.find(f => f.id === agent.workingOnFileId);
+                    if (!file) return null;
+                    return (
+                      <motion.line 
+                        key={`work-${agent.id}`}
+                        initial={{ pathLength: 0, opacity: 0 }}
+                        animate={{ pathLength: 1, opacity: 0.5 }}
+                        x1={agent.x + 24} y1={agent.y + 24}
+                        x2={file.x} y2={file.y}
+                        stroke="var(--pixel-accent)"
+                        strokeWidth="2"
+                        strokeDasharray="2 2"
+                      />
+                    );
+                  })}
+                </svg>
+
+                {/* Code Files (Dots) */}
+                {gameState.files?.map(file => (
+                  <div 
+                    key={file.id}
+                    className="absolute w-3 h-3 bg-[var(--pixel-accent)] border border-black shadow-[0_0_10px_var(--pixel-accent)] z-5"
+                    style={{ left: file.x - 6, top: file.y - 6 }}
+                    title={file.name}
+                  >
+                    <div className="absolute top-4 left-1/2 -translate-x-1/2 whitespace-nowrap text-[8px] font-bold text-[var(--pixel-accent)] opacity-50">
+                      {file.name}
+                    </div>
+                  </div>
+                ))}
+
                 <AnimatePresence>
                   {gameState.agents.map((agent) => (
                     <AgentSprite 
