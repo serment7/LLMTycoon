@@ -1,0 +1,6 @@
+{
+  "name": "LLM 타이쿤",
+  "description": "LLM 에이전트들을 직원으로 고용하여 협업시키는 게임 형태의 워크플로우 시뮬레이터",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@theme {
+  --font-game: 'Courier New', Courier, monospace;
+}
+
+:root {
+  --pixel-bg: #1a1a2e;
+  --pixel-card: #16213e;
+  --pixel-border: #4e4e6a;
+  --pixel-accent: #00d2ff;
+  --pixel-text: #e94560;
+  --pixel-white: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+  image-rendering: pixelated;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--pixel-bg);
+  color: var(--pixel-white);
+  font-family: var(--font-game);
+}
