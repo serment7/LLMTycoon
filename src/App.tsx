@@ -11,6 +11,8 @@ import {
   Users, 
   Briefcase, 
   Plus, 
+  Minus,
+  Search,
   MessageSquare, 
   Settings, 
   Play, 
@@ -33,6 +35,12 @@ export default function App() {
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [confirmFire, setConfirmFire] = useState<{ id: string; name: string } | null>(null);
   const [logs, setLogs] = useState<{ id: string; text: string; time: string }[]>([]);
+  const [agentPaths, setAgentPaths] = useState<Record<string, { x: number; y: number; id: string; timestamp: number }[]>>({});
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const gameWorldRef = useRef<HTMLDivElement>(null);
 
   const addLog = (text: string) => {
@@ -67,6 +75,9 @@ export default function App() {
 
     newSocket.on('state:initial', (state: GameState) => {
       setGameState(state);
+      if (state.projects.length > 0 && !selectedProjectId) {
+        setSelectedProjectId(state.projects[0].id);
+      }
     });
 
     newSocket.on('state:updated', (state: GameState) => {
@@ -82,6 +93,15 @@ export default function App() {
         ...prev,
         agents: prev.agents.map(a => a.id === agentId ? { ...a, x, y } : a)
       }));
+      
+      setAgentPaths(prev => {
+        const currentPath = prev[agentId] || [];
+        const newPoint = { x, y, id: uuidv4(), timestamp: Date.now() };
+        return {
+          ...prev,
+          [agentId]: [...currentPath, newPoint].slice(-10) // Keep last 10 points
+        };
+      });
     });
 
     newSocket.on('agent:messaged', ({ agentId, message }) => {
@@ -125,6 +145,56 @@ export default function App() {
     return () => clearInterval(interval);
   }, [gameState.agents, socket]);
 
+  // Cleanup old path points
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setAgentPaths(prev => {
+        const next = { ...prev };
+        let changed = false;
+        Object.keys(next).forEach(agentId => {
+          const filtered = next[agentId].filter(p => now - p.timestamp < 3000);
+          if (filtered.length !== next[agentId].length) {
+            next[agentId] = filtered;
+            changed = true;
+          }
+        });
+        return changed ? next : prev;
+      });
+    }, 500);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (activeTab !== 'game') return;
+    const delta = e.deltaY > 0 ? -0.1 : 0.1;
+    setZoom(prev => Math.max(0.5, Math.min(3, prev + delta)));
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (activeTab !== 'game') return;
+    setIsDragging(true);
+    setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging || activeTab !== 'game') return;
+    setPan({
+      x: e.clientX - dragStart.x,
+      y: e.clientY - dragStart.y
+    });
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const selectProject = (projectId: string) => {
+    setSelectedProjectId(projectId);
+    setActiveTab('game');
+    addLog(`워크스페이스 전환: ${gameState.projects.find(p => p.id === projectId)?.name}`);
+  };
+
   const hireAgent = async (name: string, role: AgentRole, spriteTemplate: string) => {
     await fetch('/api/agents/hire', {
       method: 'POST',
@@ -146,11 +216,11 @@ export default function App() {
     addLog(`에이전트 해고: ${name}`);
   };
 
-  const createProject = async (name: string, description: string) => {
+  const createProject = async (name: string, description: string, workspacePath?: string) => {
     await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description })
+      body: JSON.stringify({ name, description, workspacePath })
     });
     addLog(`새 프로젝트 시작: ${name}`);
     setShowProjectModal(false);
@@ -253,6 +323,9 @@ export default function App() {
           LLM 타이쿤 v1.0
         </div>
         <div className="flex gap-5 text-sm">
+          <div className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] text-[var(--pixel-accent)]">
+            확대: {Math.round(zoom * 100)}%
+          </div>
           <div className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)]">
             에이전트: {gameState.agents.length}
           </div>
@@ -321,22 +394,67 @@ export default function App() {
         <main className="flex-1 flex flex-col overflow-hidden">
           <div className="flex-1 overflow-auto p-0 relative">
           {activeTab === 'game' && (
-            <div className="h-full flex flex-col p-0">
+            <div 
+              className="h-full flex flex-col p-0 overflow-hidden relative cursor-grab active:cursor-grabbing" 
+              onWheel={handleWheel}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+            >
               <div 
                 ref={gameWorldRef}
-                className="flex-1 bg-[var(--pixel-bg)] relative overflow-hidden"
+                className="flex-1 bg-[var(--pixel-bg)] relative"
                 style={{
                   backgroundImage: `
                     linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
                     linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)
                   `,
-                  backgroundSize: '32px 32px'
+                  backgroundSize: '32px 32px',
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                  transformOrigin: 'center center',
+                  width: '100%',
+                  height: '100%'
                 }}
               >
                 {/* SVG Layer for Connections */}
                 <svg className="absolute inset-0 w-full h-full pointer-events-none z-0">
+                  {/* Movement Paths */}
+                  {Object.keys(agentPaths).map(agentId => {
+                    // Only show paths for agents in the selected project
+                    const agent = gameState.agents.find(a => a.id === agentId);
+                    const project = gameState.projects.find(p => p.id === selectedProjectId);
+                    if (!agent || !project || !project.agents.includes(agent.id)) return null;
+
+                    const points = agentPaths[agentId];
+                    return (
+                      <g key={`path-group-${agentId}`}>
+                        {points.map((point, idx) => {
+                          if (idx === 0) return null;
+                          const prev = points[idx - 1];
+                          const age = Date.now() - point.timestamp;
+                          const opacity = Math.max(0, 1 - age / 3000);
+                          return (
+                            <motion.line
+                              key={`path-${point.id}`}
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: opacity * 0.4 }}
+                              x1={prev.x + 24} y1={prev.y + 24}
+                              x2={point.x + 24} y2={point.y + 24}
+                              stroke="var(--pixel-accent)"
+                              strokeWidth="2"
+                              strokeDasharray="4 4"
+                            />
+                          );
+                        })}
+                      </g>
+                    );
+                  })}
                   {/* Dependencies */}
-                  {gameState.dependencies?.map((dep, idx) => {
+                  {gameState.dependencies?.filter(dep => {
+                    const file = gameState.files.find(f => f.id === dep.from);
+                    return file?.projectId === selectedProjectId;
+                  }).map((dep, idx) => {
                     const from = gameState.files.find(f => f.id === dep.from);
                     const to = gameState.files.find(f => f.id === dep.to);
                     if (!from || !to) return null;
@@ -352,10 +470,13 @@ export default function App() {
                     );
                   })}
                   {/* Agent to File Connections */}
-                  {gameState.agents.map(agent => {
+                  {gameState.agents.filter(a => {
+                    const project = gameState.projects.find(p => p.id === selectedProjectId);
+                    return project?.agents.includes(a.id);
+                  }).map(agent => {
                     if (!agent.workingOnFileId) return null;
                     const file = gameState.files.find(f => f.id === agent.workingOnFileId);
-                    if (!file) return null;
+                    if (!file || file.projectId !== selectedProjectId) return null;
                     return (
                       <motion.line 
                         key={`work-${agent.id}`}
@@ -372,7 +493,7 @@ export default function App() {
                 </svg>
 
                 {/* Code Files (Dots) */}
-                {gameState.files?.map(file => (
+                {gameState.files?.filter(f => f.projectId === selectedProjectId).map(file => (
                   <div 
                     key={file.id}
                     className="absolute w-3 h-3 bg-[var(--pixel-accent)] border border-black shadow-[0_0_10px_var(--pixel-accent)] z-5"
@@ -386,7 +507,10 @@ export default function App() {
                 ))}
 
                 <AnimatePresence>
-                  {gameState.agents.map((agent) => (
+                  {gameState.agents.filter(a => {
+                    const project = gameState.projects.find(p => p.id === selectedProjectId);
+                    return project?.agents.includes(a.id);
+                  }).map((agent) => (
                     <AgentSprite 
                       key={agent.id} 
                       agent={agent} 
@@ -394,6 +518,31 @@ export default function App() {
                     />
                   ))}
                 </AnimatePresence>
+              </div>
+
+              {/* Zoom Controls Overlay - FIXED relative to viewport */}
+              <div className="absolute bottom-6 right-6 z-30 flex flex-col gap-2 pointer-events-auto">
+                <button 
+                  onClick={() => setZoom(prev => Math.min(3, prev + 0.2))}
+                  className="w-10 h-10 bg-[var(--pixel-card)] border-2 border-[var(--pixel-border)] flex items-center justify-center hover:border-[var(--pixel-accent)] text-[var(--pixel-accent)] transition-all active:scale-90"
+                  title="확대"
+                >
+                  <Plus size={20} />
+                </button>
+                <button 
+                  onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
+                  className="w-10 h-10 bg-[var(--pixel-card)] border-2 border-[var(--pixel-border)] flex items-center justify-center hover:border-[var(--pixel-accent)] text-[10px] font-bold transition-all active:scale-90"
+                  title="초기화"
+                >
+                  1:1
+                </button>
+                <button 
+                  onClick={() => setZoom(prev => Math.max(0.5, prev - 0.2))}
+                  className="w-10 h-10 bg-[var(--pixel-card)] border-2 border-[var(--pixel-border)] flex items-center justify-center hover:border-[var(--pixel-accent)] text-[var(--pixel-accent)] transition-all active:scale-90"
+                  title="축소"
+                >
+                  <Minus size={20} />
+                </button>
               </div>
             </div>
           )}
@@ -417,7 +566,10 @@ export default function App() {
                         </div>
                       ))}
                     </div>
-                    <button className="p-2 bg-black/30 border-2 border-[var(--pixel-border)] hover:border-[var(--pixel-accent)] transition-colors">
+                    <button 
+                      onClick={() => selectProject(project.id)}
+                      className="p-2 bg-black/30 border-2 border-[var(--pixel-border)] hover:border-[var(--pixel-accent)] transition-colors"
+                    >
                       <Play size={14} />
                     </button>
                   </div>
@@ -583,7 +735,6 @@ function AgentSprite({ agent, onClick }: { agent: Agent; onClick: () => void | P
   return (
     <motion.div
       key={agent.id}
-      layoutId={agent.id}
       initial={{ x: agent.x, y: agent.y, opacity: 0 }}
       animate={{ x: agent.x, y: agent.y, opacity: 1 }}
       transition={{ type: 'spring', stiffness: 100, damping: 20 }}
@@ -694,9 +845,10 @@ function HireForm({ onHire }: { onHire: (name: string, role: AgentRole, sprite: 
   );
 }
 
-function ProjectForm({ onCreate }: { onCreate: (name: string, description: string) => void }) {
+function ProjectForm({ onCreate }: { onCreate: (name: string, description: string, path?: string) => void }) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [workspacePath, setWorkspacePath] = useState('');
 
   return (
     <div className="space-y-4">
@@ -710,6 +862,15 @@ function ProjectForm({ onCreate }: { onCreate: (name: string, description: strin
         />
       </div>
       <div>
+        <label className="block text-[10px] font-bold text-[var(--pixel-accent)] uppercase mb-2">로컬 경로 (선택사항)</label>
+        <input 
+          value={workspacePath}
+          onChange={e => setWorkspacePath(e.target.value)}
+          className="w-full bg-black/30 border-2 border-[var(--pixel-border)] px-4 py-2 text-sm focus:outline-none focus:border-[var(--pixel-accent)] transition-colors text-white"
+          placeholder="C:\Projects\MyProject..."
+        />
+      </div>
+      <div>
         <label className="block text-[10px] font-bold text-[var(--pixel-accent)] uppercase mb-2">설명</label>
         <textarea 
           value={description}
@@ -719,7 +880,7 @@ function ProjectForm({ onCreate }: { onCreate: (name: string, description: strin
         />
       </div>
       <button 
-        onClick={() => onCreate(name, description)}
+        onClick={() => onCreate(name, description, workspacePath)}
         className="w-full bg-[var(--pixel-accent)] text-black py-3 font-bold uppercase border-b-4 border-[#0099cc] mt-4"
       >
         프로젝트 초기화
