@@ -31,6 +31,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'game' | 'projects' | 'agents' | 'tasks'>('game');
   const [showHireModal, setShowHireModal] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
+  const [confirmFire, setConfirmFire] = useState<{ id: string; name: string } | null>(null);
   const [logs, setLogs] = useState<{ id: string; text: string; time: string }[]>([]);
   const gameWorldRef = useRef<HTMLDivElement>(null);
 
@@ -106,6 +107,17 @@ export default function App() {
     };
   }, []);
 
+  // Periodic autonomous actions
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (gameState.agents.length > 0 && socket) {
+        const randomAgent = gameState.agents[Math.floor(Math.random() * gameState.agents.length)];
+        simulateAgentAction(randomAgent);
+      }
+    }, 10000); // Every 10 seconds an agent does something
+    return () => clearInterval(interval);
+  }, [gameState.agents, socket]);
+
   const hireAgent = async (name: string, role: AgentRole, spriteTemplate: string) => {
     await fetch('/api/agents/hire', {
       method: 'POST',
@@ -114,6 +126,17 @@ export default function App() {
     });
     addLog(`새 에이전트 고용: ${name} (${translateRole(role)})`);
     setShowHireModal(false);
+  };
+
+  const fireAgent = (id: string, name: string) => {
+    setConfirmFire({ id, name });
+  };
+
+  const executeFire = async (id: string, name: string) => {
+    await fetch(`/api/agents/${id}`, {
+      method: 'DELETE'
+    });
+    addLog(`에이전트 해고: ${name}`);
   };
 
   const createProject = async (name: string, description: string) => {
@@ -169,6 +192,11 @@ export default function App() {
         const randomAgent = otherAgents[Math.floor(Math.random() * otherAgents.length)];
         const randomProject = gameState.projects[Math.floor(Math.random() * gameState.projects.length)];
         
+        // Move leader towards the assigned agent for "briefing"
+        const targetX = randomAgent.x + (Math.random() > 0.5 ? 60 : -60);
+        const targetY = randomAgent.y + (Math.random() > 0.5 ? 60 : -60);
+        socket.emit('agent:move', { agentId: agent.id, x: targetX, y: targetY });
+
         await fetch('/api/tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -186,7 +214,20 @@ export default function App() {
       }
     } else {
       // Regular agent action
-      socket.emit('agent:message', { agentId: agent.id, message: "다음 단계를 생각 중..." });
+      const otherAgents = gameState.agents.filter(a => a.id !== agent.id);
+      const shouldVisit = Math.random() > 0.7 && otherAgents.length > 0;
+
+      if (shouldVisit) {
+        const target = otherAgents[Math.floor(Math.random() * otherAgents.length)];
+        socket.emit('agent:message', { agentId: agent.id, message: `${target.name}님과 협업 중...` });
+        
+        // Move close to target
+        const targetX = target.x + (Math.random() > 0.5 ? 50 : -50);
+        const targetY = target.y + (Math.random() > 0.5 ? 50 : -50);
+        socket.emit('agent:move', { agentId: agent.id, x: targetX, y: targetY });
+      } else {
+        socket.emit('agent:message', { agentId: agent.id, message: "다음 단계를 생각 중..." });
+      }
       
       try {
         const response = await ai.models.generateContent({
@@ -199,10 +240,12 @@ export default function App() {
         const message = response.text || "열심히 일하는 중!";
         socket.emit('agent:message', { agentId: agent.id, message });
         
-        // Randomly move agent
-        const newX = Math.max(50, Math.min(750, agent.x + (Math.random() - 0.5) * 150));
-        const newY = Math.max(50, Math.min(550, agent.y + (Math.random() - 0.5) * 150));
-        socket.emit('agent:move', { agentId: agent.id, x: newX, y: newY });
+        // Randomly move agent if not visiting
+        if (!shouldVisit) {
+          const newX = Math.max(50, Math.min(750, agent.x + (Math.random() - 0.5) * 200));
+          const newY = Math.max(50, Math.min(450, agent.y + (Math.random() - 0.5) * 200));
+          socket.emit('agent:move', { agentId: agent.id, x: newX, y: newY });
+        }
         
       } catch (error) {
         console.error("Agent thinking failed:", error);
@@ -384,18 +427,26 @@ export default function App() {
           {activeTab === 'agents' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 p-8">
               {gameState.agents.map(agent => (
-                <div key={agent.id} className="bg-[#0f3460] border-2 border-[var(--pixel-border)] p-5 flex items-center gap-4 hover:border-[var(--pixel-accent)] transition-all">
-                  <div className={`w-14 h-14 border-2 border-black ${agent.role === 'Leader' ? 'bg-[var(--pixel-accent)]' : 'bg-[var(--pixel-text)]'} flex items-center justify-center text-2xl`}>
-                    {getAgentEmoji(agent.role)}
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-sm text-[var(--pixel-accent)]">{agent.name}</h3>
-                    <p className="text-[10px] uppercase tracking-widest font-bold opacity-70">{translateRole(agent.role)}</p>
-                    <div className="flex items-center gap-2 mt-2">
-                      <div className={`w-2 h-2 ${agent.status === 'idle' ? 'bg-white/20' : 'bg-green-500 animate-pulse'}`} />
-                      <span className="text-[10px] opacity-60 uppercase">{translateStatus(agent.status)}</span>
+                <div key={agent.id} className="bg-[#0f3460] border-2 border-[var(--pixel-border)] p-5 flex items-center justify-between hover:border-[var(--pixel-accent)] transition-all group">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-14 h-14 border-2 border-black ${agent.role === 'Leader' ? 'bg-[var(--pixel-accent)]' : 'bg-[var(--pixel-text)]'} flex items-center justify-center text-2xl`}>
+                      {getAgentEmoji(agent.role)}
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-sm text-[var(--pixel-accent)]">{agent.name}</h3>
+                      <p className="text-[10px] uppercase tracking-widest font-bold opacity-70">{translateRole(agent.role)}</p>
+                      <div className="flex items-center gap-2 mt-2">
+                        <div className={`w-2 h-2 ${agent.status === 'idle' ? 'bg-white/20' : 'bg-green-500 animate-pulse'}`} />
+                        <span className="text-[10px] opacity-60 uppercase">{translateStatus(agent.status)}</span>
+                      </div>
                     </div>
                   </div>
+                  <button 
+                    onClick={() => fireAgent(agent.id, agent.name)}
+                    className="opacity-0 group-hover:opacity-100 p-2 bg-red-900/30 border-2 border-red-900 hover:bg-red-900 transition-all text-[10px] font-bold uppercase"
+                  >
+                    해고
+                  </button>
                 </div>
               ))}
             </div>
@@ -453,6 +504,30 @@ export default function App() {
         {showProjectModal && (
           <Modal title="Start New Project" onClose={() => setShowProjectModal(false)}>
             <ProjectForm onCreate={createProject} />
+          </Modal>
+        )}
+        {confirmFire && (
+          <Modal title="직원 해고 확인" onClose={() => setConfirmFire(null)}>
+            <div className="space-y-4">
+              <p className="text-sm text-white/80">{confirmFire.name}님을 정말로 해고하시겠습니까?</p>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => {
+                    executeFire(confirmFire.id, confirmFire.name);
+                    setConfirmFire(null);
+                  }}
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white py-3 font-bold uppercase border-b-4 border-red-800"
+                >
+                  해고하기
+                </button>
+                <button 
+                  onClick={() => setConfirmFire(null)}
+                  className="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-3 font-bold uppercase border-b-4 border-gray-800"
+                >
+                  취소
+                </button>
+              </div>
+            </div>
           </Modal>
         )}
       </AnimatePresence>

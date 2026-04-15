@@ -84,6 +84,17 @@ async function startServer() {
     res.json(newAgent);
   });
 
+  app.delete('/api/agents/:id', (req, res) => {
+    const { id } = req.params;
+    gameState.agents = gameState.agents.filter(a => a.id !== id);
+    // Also remove from tasks if assigned
+    tasks = tasks.filter(t => t.assignedTo !== id);
+    
+    io.emit('state:updated', gameState);
+    io.emit('tasks:updated', tasks);
+    res.json({ success: true });
+  });
+
   // Socket logic
   io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
