@@ -3,7 +3,45 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
+    <meta name="description" content="LLMTycoon - LLM agent workflow simulator" />
+    <title>LLMTycoon</title>
+    <style>
+      /*
+       * Grid background design spec (designer handoff)
+       * - --grid-size       : base cell size. 40px keeps blueprint feel at 1x zoom.
+       * - --grid-major      : every 5th line darker for readability at scale.
+       * - --grid-line       : RGB triple; opacity controlled separately via --grid-alpha.
+       * - --grid-alpha      : minor line alpha (0.06 over dark bg, 0.08 over light).
+       * - --grid-alpha-major: major line alpha (2-3x minor).
+       * Pattern tiles seamlessly in both axes via background-size = --grid-size,
+       * so any scroll/pan offset lines up — no seams, no reflow jitter.
+       */
+      :root {
+        --grid-bg: #0f1115;
+        --grid-line: 148, 163, 184;
+        --grid-alpha: 0.08;
+        --grid-alpha-major: 0.18;
+        --grid-size: 40px;
+        --grid-major: calc(var(--grid-size) * 5);
+        --grid-thickness: 1px;
+      }
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        background-color: var(--grid-bg);
+        background-image:
+          linear-gradient(to right, rgba(var(--grid-line), var(--grid-alpha-major)) var(--grid-thickness), transparent var(--grid-thickness)),
+          linear-gradient(to bottom, rgba(var(--grid-line), var(--grid-alpha-major)) var(--grid-thickness), transparent var(--grid-thickness)),
+          linear-gradient(to right, rgba(var(--grid-line), var(--grid-alpha)) var(--grid-thickness), transparent var(--grid-thickness)),
+          linear-gradient(to bottom, rgba(var(--grid-line), var(--grid-alpha)) var(--grid-thickness), transparent var(--grid-thickness));
+        background-size:
+          var(--grid-major) var(--grid-major),
+          var(--grid-major) var(--grid-major),
+          var(--grid-size) var(--grid-size),
+          var(--grid-size) var(--grid-size);
+        background-attachment: fixed;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

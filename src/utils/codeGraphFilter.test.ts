@@ -233,6 +233,35 @@ test('회귀: 프로젝트 설정 배지를 흉내 낸 "docs" 변종 파일은 H
   }
 });
 
+// ─── 첫-1초 스냅샷 · 파일 호버 오버레이 가시성 (디자이너 보호선) ──────────────
+//
+// AgentStatusSnapshot.tsx 는 사용자가 돌아왔을 때 "지금 팀 상태"를 1초 내에
+// 읽게 해주는 상단 고정 스냅샷 패널이고, FileTooltip.tsx 는 파일 노드 hover
+// 시 뜨는 오버레이다. 둘 다 렌더되려면 코드그래프에 해당 소스 노드가 살아
+// 있어야 하고, 필터에서 잘못 탈락하면 디자인 계약(at-a-glance readability,
+// hover affordance)이 통째로 깨진다. AGENT_HUD_FILES 와 동일한 3축 (정규,
+// ./ prefix, 윈도우 구분자) 변형으로 고정한다.
+const VISUAL_OVERLAY_HUD_FILES: readonly string[] = [
+  'src/components/AgentStatusSnapshot.tsx',
+  'src/components/FileTooltip.tsx',
+];
+
+test('스냅샷·툴팁 오버레이 소스는 어떤 경로 변형으로도 그래프에서 탈락하지 않는다', () => {
+  for (const path of VISUAL_OVERLAY_HUD_FILES) {
+    assert.equal(isExcludedFromCodeGraph(path), false, `${path}는 그래프에 포함되어야 한다`);
+    assert.equal(
+      isExcludedFromCodeGraph(`./${path}`),
+      false,
+      `상대경로에도 흔들리면 안 된다: ${path}`,
+    );
+    assert.equal(
+      isExcludedFromCodeGraph(path.replace(/\//g, '\\')),
+      false,
+      `윈도우 구분자에도 흔들리면 안 된다: ${path}`,
+    );
+  }
+});
+
 // ─── 타입 추론: 신규 파일의 시각 분류 일관성 ────────────────────────────────
 //
 // 배경: add_file 경로는 type 이 비면 일괄적으로 'util' 로 저장해왔다. 그러면

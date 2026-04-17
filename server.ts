@@ -89,13 +89,15 @@ function callClaude(prompt: string, ctx?: AgentContext): Promise<string> {
   return new Promise((resolve, reject) => {
     const run = () => {
       let mcpConfigPath: string | null = null;
-      let mcpFlag = '';
       if (ctx && ctx.agentId && ctx.projectId) {
         mcpConfigPath = writeMcpConfig(ctx);
-        mcpFlag = `--mcp-config ${shellQuote(mcpConfigPath)}`;
       }
-      const shellCmd = `${CLAUDE_BIN} --dangerously-skip-permissions ${mcpFlag} -p ${shellQuote(prompt)}`.replace(/\s+/g, ' ');
-      if (DEBUG_CLAUDE) console.log('[claude] $', shellCmd);
+      // 셸을 거치지 않고 직접 spawn하여 한글 프롬프트가 cmd.exe 파싱에 깨지는 문제를 방지.
+      // shell:true + 문자열 명령 대신 argv 배열로 전달하면 OS가 인자를 그대로 넘긴다.
+      const args = ['--dangerously-skip-permissions'];
+      if (mcpConfigPath) args.push('--mcp-config', mcpConfigPath);
+      args.push('-p', prompt.replace(/\r?\n/g, ' '));
+      if (DEBUG_CLAUDE) console.log('[claude] spawn', CLAUDE_BIN, args.map(a => a.length > 80 ? a.slice(0, 80) + '…' : a));
       const env: Record<string, string | undefined> = {
         ...process.env,
         PYTHONIOENCODING: 'utf-8',
@@ -111,8 +113,8 @@ function callClaude(prompt: string, ctx?: AgentContext): Promise<string> {
       };
       const cwd = ctx?.workspacePath ? resolveWorkspace(ctx.workspacePath) : undefined;
       if (DEBUG_CLAUDE && cwd) console.log('[claude] cwd =', cwd);
-      const child = spawn(shellCmd, {
-        shell: true,
+      const child = spawn(CLAUDE_BIN, args, {
+        shell: false,
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'pipe'],
         env,
