@@ -4,5 +4,9 @@ dist/
 coverage/
 .DS_Store
 *.log
+*.db
+workspaces/
+docs/
+.claude/settings.local.json
 .env*
 !.env.example

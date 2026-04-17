@@ -4,70 +4,397 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Users, 
-  Briefcase, 
-  Plus, 
+import {
+  Briefcase,
+  Plus,
   Minus,
-  Search,
-  MessageSquare, 
-  Settings, 
-  Play, 
-  CheckCircle2, 
-  Terminal,
+  Play,
+  CheckCircle2,
   UserPlus,
-  LayoutDashboard
+  Trash2,
 } from 'lucide-react';
-import { Agent, Project, GameState, AgentRole } from './types';
-import { GoogleGenAI } from "@google/genai";
+import { Agent, Project, GameState, AgentRole, CodeFile, CodeDependency, Task, GitAutomationSettings } from './types';
+import { LogFilter } from './components/LogFilter';
+import { FileTooltip } from './components/FileTooltip';
+import { ProjectManagement } from './components/ProjectManagement';
+import { AgentStatusPanel } from './components/AgentStatusPanel';
+import { AgentContextBubble, AgentLogLine } from './components/AgentContextBubble';
+import { CollabTimeline } from './components/CollabTimeline';
+import { computeWorkspaceInsights } from './utils/workspaceInsights';
+import type { LedgerEntry } from './utils/handoffLedger';
+import { EXCLUDED_PATHS } from './utils/codeGraphFilter';
+import { useReducedMotion } from './utils/useReducedMotion';
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+interface AskClaudeContext {
+  agentId: string;
+  projectId?: string | null;
+}
+
+interface AskClaudeResponse {
+  text?: string;
+  error?: string;
+}
+
+/**
+ * 서버의 /api/agent/think 엔드포인트를 호출하여 LLM 응답을 받아옵니다.
+ * 실패 시 서버가 보낸 error 필드를 우선 사용하고, 없으면 HTTP 상태를 포함한 에러를 throw 합니다.
+ */
+async function askClaude(prompt: string, ctx?: AskClaudeContext): Promise<string> {
+  const res = await fetch('/api/agent/think', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt,
+      agentId: ctx?.agentId,
+      projectId: ctx?.projectId || undefined,
+    }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      const body = (await res.json()) as AskClaudeResponse;
+      detail = body?.error || '';
+    } catch {
+      // 응답 본문이 JSON이 아닐 수 있으므로 무시하고 상태 코드만 사용
+    }
+    throw new Error(detail || `claude api ${res.status}`);
+  }
+  const data = (await res.json()) as AskClaudeResponse;
+  return (data.text || '').trim();
+}
+
+const MCP_TOOL_HINT = `당신은 현재 프로젝트의 워크스페이스 디렉터리에서 실행되고 있습니다. 실제로 소스코드를 읽고/쓰고/편집하는 개발 에이전트입니다.
+
+[빌트인 도구 — 실제 파일 조작]
+- Read / Glob / Grep: 워크스페이스 파일 탐색·이해
+- Write / Edit: 파일 생성·수정 (실제 디스크에 반영)
+- Bash: 빌드·테스트·git 등 명령 실행
+
+[MCP 도구 — 게임 상태/그래프 동기화 (llm-tycoon 서버)]
+- list_files: 현재 프로젝트의 코드그래프 파일 노드 목록/ID 조회
+- update_status(status, working_on_file_id): 작업 시작 시 "working"+파일ID, 종료 시 "idle"+""로 보고
+- add_file(name, type): 신규 파일 생성 후 그래프에 노드 추가 (실제 파일도 Write로 만들어야 함)
+- add_dependency(from_file_id, to_file_id): 파일 간 의존성 엣지 기록
+
+[필수 작업 흐름]
+1) MCP update_status로 작업 시작 보고
+2) Read/Glob로 워크스페이스 현황 파악
+3) Write/Edit로 실제 코드 변경 수행
+4) 변경한 파일이 새로 생긴 것이면 MCP add_file 호출, 의존 관계가 생겼으면 add_dependency 호출
+5) MCP update_status(status="idle", working_on_file_id="")로 종료 보고
+6) 맨 마지막 한 줄로 한국어 답변 메시지만 출력 (도구 호출 로그/설명 금지)`;
+
+// QA: 화면에 쌓이는 상태·타이밍 상수를 한곳에 모아 매직 넘버를 제거한다.
+// 값을 바꿀 때 여러 곳을 동시에 손대지 않도록 단일 출처(single source of truth)를
+// 유지하며, 근거를 주석으로 남겨 후속 튜닝 시 "왜 이 숫자인가"를 잃지 않게 한다.
+//
+//  - LOG_PANEL_MAX: 로그 패널은 최근 맥락을 빠르게 훑는 용도라 상한을 둬
+//    DOM/메모리 누수와 스크롤 성능 저하를 막는다.
+//  - AGENT_MESSAGE_TTL_MS: 머리 위 말풍선은 "방금 한 말"만 보여야 새 대화를
+//    가리지 않는다. 5초는 사람 눈으로 읽을 수 있는 최소한의 체류 시간.
+//  - AGENT_PATH_*: 에이전트 꼬리 궤적은 최근 움직임만 잔상으로 남기면 된다.
+//    점이 너무 길면 그래프가 지저분해지고, 너무 짧으면 이동 방향이 안 보인다.
+//  - AGENT_PATH_CLEANUP_MS: 만료된 점 정리 주기. 렌더 부담을 고려해
+//    PATH_RETENTION_MS 보다 짧게 잡아 잔점이 남지 않게 한다.
+//  - REPLY_DELAY_MS: 한 에이전트가 말한 뒤 상대가 답하기까지의 지연.
+//    즉답은 부자연스럽고, 길면 대화 흐름이 끊긴다.
+const LOG_PANEL_MAX = 50;
+// 새로고침 후에도 최근 대화 맥락을 잃지 않도록 localStorage 에 최근 로그 일부를 보관한다.
+// 너무 많이 되살리면 "오래된 맥락"이 현재 상황을 가리므로 의도적으로 적게 잡는다.
+const LOG_PERSIST_MAX = 20;
+const LOG_STORAGE_KEY = 'llm-tycoon:logs';
+
+type LogEntry = { id: string; from: string; to?: string; text: string; time: string };
+
+function loadPersistedLogs(): LogEntry[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(LOG_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((e): e is LogEntry =>
+        !!e && typeof e.id === 'string' && typeof e.from === 'string' &&
+        typeof e.text === 'string' && typeof e.time === 'string')
+      .slice(0, LOG_PERSIST_MAX);
+  } catch {
+    return [];
+  }
+}
+const AGENT_MESSAGE_TTL_MS = 5000;
+const AGENT_PATH_MAX_POINTS = 10;
+const AGENT_PATH_RETENTION_MS = 3000;
+const AGENT_PATH_CLEANUP_MS = 500;
+const REPLY_DELAY_MS = 2500;
 
 export default function App() {
-  const [gameState, setGameState] = useState<GameState>({ projects: [], agents: [] });
-  const [tasks, setTasks] = useState<any[]>([]);
+  // Agents 탭 라이브 닷·기타 펄스 마이크로 인터랙션을 prefers-reduced-motion 사용자에게 비활성화한다.
+  const reducedMotion = useReducedMotion();
+  const [gameState, setGameState] = useState<GameState>({ projects: [], agents: [], files: [], dependencies: [] });
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [activeTab, setActiveTab] = useState<'game' | 'projects' | 'agents' | 'tasks'>('game');
+  const [activeTab, setActiveTab] = useState<'game' | 'projects' | 'agents' | 'tasks' | 'project-management'>('game');
   const [showHireModal, setShowHireModal] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
+  const [manageMembersProjectId, setManageMembersProjectId] = useState<string | null>(null);
   const [confirmFire, setConfirmFire] = useState<{ id: string; name: string } | null>(null);
-  const [logs, setLogs] = useState<{ id: string; text: string; time: string }[]>([]);
+  const [confirmDeleteProject, setConfirmDeleteProject] = useState<{ id: string; name: string } | null>(null);
+  const [logs, setLogs] = useState<LogEntry[]>(() => loadPersistedLogs());
+  const [logQuery, setLogQuery] = useState('');
+  const [hoveredFileId, setHoveredFileId] = useState<string | null>(null);
+  const [commandInput, setCommandInput] = useState('');
+  const [commandBusy, setCommandBusy] = useState(false);
+  // 자동 개발 모드: 켜두면 일정 주기로 idle 에이전트를 골라 simulateAgentAction 을
+  // 실행해 "리더 지시 없이도 팀이 스스로 굴러가는" 옵션을 제공한다. 기본값은
+  // off — 사용자가 직접 지시할 때와 명시적 자동화 모드를 구분하기 위함.
+  const [autoDevEnabled, setAutoDevEnabled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('llm-tycoon:auto-dev') === '1';
+  });
   const [agentPaths, setAgentPaths] = useState<Record<string, { x: number; y: number; id: string; timestamp: number }[]>>({});
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  // Git 자동화 설정은 프로젝트 진입(selectedProjectId 변경) 시점에 서버에서 한 번 읽어
+  // 앱 전역 상태로 보관한다. ProjectManagement 화면을 열지 않아도 리더 자동화가 즉시
+  // 제 설정을 따르도록 하기 위함. socket 'git-automation:updated' 로 동기화 유지.
+  const [gitAutomationSettings, setGitAutomationSettings] = useState<GitAutomationSettings | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const gameWorldRef = useRef<HTMLDivElement>(null);
+  const [layoutPositions, setLayoutPositions] = useState<Record<string, { x: number; y: number }>>({});
+  // 팀 축 협업 타임라인 데이터. 서버가 docs/handoffs · docs/reports frontmatter를 파싱해 반환.
+  const [collabEntries, setCollabEntries] = useState<LedgerEntry[]>([]);
+  // 타임라인 행 호버 시 지목된 에이전트 이름. AgentContextBubble 하이라이트 링 구동용(프로펠 다운 1개).
+  const [highlightedAgent, setHighlightedAgent] = useState<string | null>(null);
+  const positionsRef = useRef<Record<string, { x: number; y: number }>>({});
+  const velocitiesRef = useRef<Record<string, { x: number; y: number }>>({});
+  const gameStateRef = useRef<GameState>(gameState);
+  useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
+  const tasksRef = useRef<Task[]>(tasks);
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
 
-  const addLog = (text: string) => {
-    setLogs(prev => [{ id: uuidv4(), text, time: new Date().toLocaleTimeString() }, ...prev].slice(0, 50));
-  };
-
-  const translateRole = (role: string) => {
-    const roles: Record<string, string> = {
-      'Leader': '리더',
-      'Developer': '개발자',
-      'QA': '품질 관리',
-      'Designer': '디자이너',
-      'Researcher': '연구원'
+  // 로그 패널(리더 지시 입력 + 로그)의 전체 높이. 사용자가 상단 핸들을 위아래로
+  // 드래그해 조절할 수 있으며, 새로고침 후에도 취향이 유지되도록 localStorage 에
+  // 보관한다. 최소/최대값은 좁은 화면에서도 한 줄은 보이고, 상단 게임 뷰가
+  // 완전히 가려지지 않도록 경험적으로 정했다.
+  // QA: 모듈 상단의 LOG_PANEL_MAX(=로그 엔트리 개수 50) 와 이름이 겹치지 않도록
+  // 높이 상수는 LOG_PANEL_HEIGHT_* 로 분리한다. 과거 동일 이름으로 인해
+  // App 내부에서 addLog 의 slice 가 50 이 아닌 640 을 사용하던 버그가 있었다.
+  const LOG_PANEL_HEIGHT_MIN = 120;
+  const LOG_PANEL_HEIGHT_MAX = 640;
+  const LOG_PANEL_KEY = 'llm-tycoon:log-panel-h';
+  const [logPanelHeight, setLogPanelHeight] = useState<number>(() => {
+    if (typeof window === 'undefined') return 240;
+    const raw = window.localStorage.getItem(LOG_PANEL_KEY)
+      ?? window.localStorage.getItem('llm-tycoon:bottom-panel-h');
+    const n = raw ? parseInt(raw, 10) : NaN;
+    return Number.isFinite(n)
+      ? Math.min(LOG_PANEL_HEIGHT_MAX, Math.max(LOG_PANEL_HEIGHT_MIN, n))
+      : 240;
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try { window.localStorage.setItem(LOG_PANEL_KEY, String(logPanelHeight)); }
+    catch { /* 쿼터 초과 등은 무시: 기능은 세션 내에서 정상 동작 */ }
+  }, [logPanelHeight]);
+  const logPanelDragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const startLogPanelResize = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    logPanelDragRef.current = { startY: e.clientY, startH: logPanelHeight };
+    const onMove = (ev: MouseEvent) => {
+      const ctx = logPanelDragRef.current;
+      if (!ctx) return;
+      // 핸들을 위로 끌면 패널이 커지고(+), 아래로 끌면 작아지는(-) 직관과 일치.
+      const delta = ctx.startY - ev.clientY;
+      const next = Math.min(
+        LOG_PANEL_HEIGHT_MAX,
+        Math.max(LOG_PANEL_HEIGHT_MIN, ctx.startH + delta),
+      );
+      setLogPanelHeight(next);
     };
-    return roles[role] || role;
+    const onUp = () => {
+      logPanelDragRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   };
 
-  const translateStatus = (status: string) => {
-    const statuses: Record<string, string> = {
-      'idle': '대기 중',
-      'active': '활성',
-      'pending': '대기',
-      'in-progress': '진행 중',
-      'completed': '완료'
-    };
-    return statuses[status] || status;
+  const addLog = (text: string, from: string = '시스템', to?: string) => {
+    setLogs(prev => [{ id: uuidv4(), from, to, text, time: new Date().toLocaleTimeString() }, ...prev].slice(0, LOG_PANEL_MAX));
   };
+
+  // 새로고침 이후에도 "몇 개 정도"의 이전 대화가 복원되도록 localStorage 에 상단 일부만 저장한다.
+  // 저장은 변경 시마다 수행하되 상한을 걸어 용량 증가를 막는다.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const snapshot = logs.slice(0, LOG_PERSIST_MAX);
+      window.localStorage.setItem(LOG_STORAGE_KEY, JSON.stringify(snapshot));
+    } catch {
+      // 쿼터 초과 등은 무시한다. 로그는 휘발돼도 기능에 지장이 없다.
+    }
+  }, [logs]);
+
+  const workspaceInsights = useMemo(
+    () => computeWorkspaceInsights(
+      selectedProjectId,
+      gameState.projects,
+      gameState.agents,
+      gameState.files,
+      gameState.dependencies || [],
+    ),
+    [selectedProjectId, gameState.projects, gameState.agents, gameState.files, gameState.dependencies],
+  );
+
+  // 연구 지표: 선택된 프로젝트에 소속된 에이전트 중 실제 파일 작업 중인 비율.
+  // idle/thinking/meeting 는 제외하고 workingOnFileId 가 찍힌 에이전트만 '활성'으로 카운트한다.
+  // byRole 은 역할별 (활성/전체) 를 분해하여 "왜 활성률이 낮은가" 같은 후속 질문에
+  // 바로 답할 수 있게 한다. 역할 라벨 번역은 소비 지점에서 수행.
+  const agentActivity = useMemo(() => {
+    const proj = gameState.projects.find(p => p.id === selectedProjectId);
+    const scope = proj
+      ? gameState.agents.filter(a => proj.agents.includes(a.id))
+      : gameState.agents;
+    const total = scope.length;
+    const active = scope.filter(a => !!a.workingOnFileId).length;
+    const ratio = total === 0 ? 0 : Math.round((active / total) * 100);
+    const byRole: Record<string, { active: number; total: number }> = {};
+    for (const a of scope) {
+      const bucket = byRole[a.role] ?? { active: 0, total: 0 };
+      bucket.total += 1;
+      if (a.workingOnFileId) bucket.active += 1;
+      byRole[a.role] = bucket;
+    }
+    return { total, active, ratio, byRole };
+  }, [selectedProjectId, gameState.projects, gameState.agents]);
+
+  const visibleLogs = useMemo(() => {
+    const q = logQuery.trim().toLowerCase();
+    if (!q) return logs;
+    return logs.filter(l =>
+      l.text.toLowerCase().includes(q) ||
+      l.from.toLowerCase().includes(q) ||
+      (l.to ?? '').toLowerCase().includes(q)
+    );
+  }, [logs, logQuery]);
+
+  const translateRole = getRoleLabel;
+  const translateStatus = getStatusLabel;
+
+  // 역할별 (활성/전체) 를 한 줄로 요약한 툴팁 라벨. translateRole 은 렌더 마다 새로
+  // 만들어지지만 useMemo 의존성에 agentActivity 만 넣어도 충분하다 — 동일 데이터에 대해
+  // 동일 결과를 낸다.
+  const activityBreakdownLabel = useMemo(() => {
+    // QA: Object.entries 반환 타입은 값이 unknown 으로 넓어질 수 있어
+    // 명시 타입을 달아 sort 비교자가 `.total` 에 안전하게 접근하도록 고정한다.
+    const entries = Object.entries(agentActivity.byRole) as [string, { active: number; total: number }][];
+    const base = `활성 ${agentActivity.active} / 전체 ${agentActivity.total}`;
+    if (entries.length === 0) return base;
+    const parts = entries
+      .sort((a, b) => b[1].total - a[1].total)
+      .map(([role, { active, total }]) => `${getRoleLabel(role)} ${active}/${total}`);
+    return `${base} · ${parts.join(', ')}`;
+  }, [agentActivity]);
+
+  // 연구 지표: 로그 패널에 쌓인 메시지를 바탕으로 협업 밀도를 추정한다.
+  // messages: 시스템 메시지를 제외한 에이전트 간 통신 수. broadcasts 는 타겟이
+  // 비어 있는(전체 공지) 비율. pairs 는 고유한 from→to 쌍 수로, 같은 두 사람이
+  // 반복 대화해도 1로 집계해 "서로 다른 협업 채널이 얼마나 열려 있는가"를 본다.
+  // topSender 는 가장 많이 발화한 에이전트. 연구·QA 브리핑에서 "지나치게 말을
+  // 많이 하는 역할이 있는가"를 판단하는 신호로 쓴다.
+  // 추가 지표:
+  //  - uniqueSenders: 서로 다른 발화자 수. 침묵하는 구성원을 발견하는 1차 필터.
+  //  - participationRate: 전체 에이전트 대비 최근 발화한 에이전트 비율.
+  //    0% 에 수렴하면 팀이 비동기 작업에만 몰두 중이거나 커뮤니케이션이
+  //    막혔다는 신호다.
+  //  - concentration: 최다 발화자가 전체 메시지에서 차지하는 비율.
+  //    50% 를 넘으면 특정 에이전트가 채널을 독점하고 있다고 본다.
+  //  - silentAgents: 등록되어 있으나 이번 세션에서 한 번도 발화하지 않은
+  //    에이전트의 수. 로그는 최근 50건으로 잘리므로 장기 침묵이 아닌
+  //    "최근 침묵" 지표로 읽어야 한다.
+  const collaborationStats = useMemo(() => {
+    const messages = logs.filter(l => l.from !== '시스템' && l.from !== '사용자');
+    const pairKeys = new Set<string>();
+    const senderCounts = new Map<string, number>();
+    let broadcasts = 0;
+    for (const m of messages) {
+      if (m.to) pairKeys.add(`${m.from}->${m.to}`);
+      else broadcasts += 1;
+      senderCounts.set(m.from, (senderCounts.get(m.from) ?? 0) + 1);
+    }
+    let topSender: { name: string; count: number } | null = null;
+    senderCounts.forEach((count, name) => {
+      if (!topSender || count > topSender.count) topSender = { name, count };
+    });
+    const broadcastRatio = messages.length === 0
+      ? 0
+      : Math.round((broadcasts / messages.length) * 100);
+    const uniqueSenders = senderCounts.size;
+    const totalAgents = gameState.agents.length;
+    const participationRate = totalAgents === 0
+      ? 0
+      : Math.round((uniqueSenders / totalAgents) * 100);
+    const concentration = messages.length === 0 || !topSender
+      ? 0
+      : Math.round((topSender.count / messages.length) * 100);
+    const silentAgents = gameState.agents.filter(a => !senderCounts.has(a.name)).length;
+    return {
+      messageCount: messages.length,
+      pairCount: pairKeys.size,
+      broadcastRatio,
+      topSender,
+      uniqueSenders,
+      participationRate,
+      concentration,
+      silentAgents,
+    };
+  }, [logs, gameState.agents]);
+
+  // 상단 상태 줄/툴팁에 붙여 쓰는 한 줄 요약.
+  // 메시지가 한 건도 없을 때는 조용히 빈 상태를 드러내 "데이터 아직 없음"을
+  // 명시한다. 숫자가 0이어도 의미가 있는 신호라 감추지 않는다.
+  const collaborationLabel = useMemo(() => {
+    const {
+      messageCount,
+      pairCount,
+      broadcastRatio,
+      topSender,
+      participationRate,
+      concentration,
+      silentAgents,
+    } = collaborationStats;
+    if (messageCount === 0) return '협업 로그 없음';
+    const parts = [
+      `메시지 ${messageCount}`,
+      `채널 ${pairCount}`,
+      `공지 ${broadcastRatio}%`,
+      `참여율 ${participationRate}%`,
+      `집중도 ${concentration}%`,
+    ];
+    if (silentAgents > 0) parts.push(`침묵 ${silentAgents}명`);
+    if (topSender) parts.push(`최다 발화 ${topSender.name}(${topSender.count})`);
+    return parts.join(' · ');
+  }, [collaborationStats]);
+
+  // 헤더 칩에 한 눈에 띄는 숫자를 고른다.
+  // 메시지가 없으면 "-" 를 보여 "0%" 와 "데이터 없음" 을 혼동하지 않게 한다.
+  // 참여율은 "지금 팀이 서로 말을 하고 있는가" 를 가장 빠르게 답하는 지표라
+  // 대표값으로 선택했다. 자세한 분해는 툴팁(collaborationLabel)에서 본다.
+  const collaborationBadge = useMemo(() => {
+    if (collaborationStats.messageCount === 0) return '-';
+    return `${collaborationStats.participationRate}%`;
+  }, [collaborationStats]);
 
   useEffect(() => {
     const newSocket = io();
@@ -84,7 +411,7 @@ export default function App() {
       setGameState(state);
     });
 
-    newSocket.on('tasks:updated', (newTasks: any[]) => {
+    newSocket.on('tasks:updated', (newTasks: Task[]) => {
       setTasks(newTasks);
     });
 
@@ -99,27 +426,27 @@ export default function App() {
         const newPoint = { x, y, id: uuidv4(), timestamp: Date.now() };
         return {
           ...prev,
-          [agentId]: [...currentPath, newPoint].slice(-10) // Keep last 10 points
+          [agentId]: [...currentPath, newPoint].slice(-AGENT_PATH_MAX_POINTS)
         };
       });
     });
 
-    newSocket.on('agent:messaged', ({ agentId, message }) => {
+    newSocket.on('agent:messaged', ({ agentId, message, targetAgentId }) => {
       setGameState(prev => {
-        const agent = prev.agents.find(a => a.id === agentId);
-        if (agent) addLog(`[${agent.name}] ${message}`);
+        const fromAgent = prev.agents.find(a => a.id === agentId);
+        const toAgent = targetAgentId ? prev.agents.find(a => a.id === targetAgentId) : undefined;
+        if (fromAgent) addLog(message, fromAgent.name, toAgent?.name);
         return {
           ...prev,
-          agents: prev.agents.map(a => a.id === agentId ? { ...a, lastMessage: message } : a)
+          agents: prev.agents.map(a => a.id === agentId ? { ...a, lastMessage: message, lastMessageTo: targetAgentId } : a)
         };
       });
-      // Clear message after 5 seconds
       setTimeout(() => {
         setGameState(prev => ({
           ...prev,
-          agents: prev.agents.map(a => a.id === agentId && a.lastMessage === message ? { ...a, lastMessage: undefined } : a)
+          agents: prev.agents.map(a => a.id === agentId && a.lastMessage === message ? { ...a, lastMessage: undefined, lastMessageTo: undefined } : a)
         }));
-      }, 5000);
+      }, AGENT_MESSAGE_TTL_MS);
     });
 
     newSocket.on('agent:working', ({ agentId, fileId }) => {
@@ -134,16 +461,57 @@ export default function App() {
     };
   }, []);
 
-  // Periodic autonomous actions
+  // Git 자동화 설정 fetch. 프로젝트 진입 시 한 번 읽어 전역 상태로 보관하고,
+  // socket 의 'git-automation:updated' 이벤트로 폴링 없이 즉시 동기화한다.
+  // ProjectManagement.tsx 의 localStorage 로드와는 독립적으로 돈다.
   useEffect(() => {
-    const interval = setInterval(() => {
-      if (gameState.agents.length > 0 && socket) {
-        const randomAgent = gameState.agents[Math.floor(Math.random() * gameState.agents.length)];
-        simulateAgentAction(randomAgent);
+    if (!selectedProjectId) { setGitAutomationSettings(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/projects/${selectedProjectId}/git-automation`);
+        if (!res.ok) return;
+        const data = (await res.json()) as GitAutomationSettings;
+        if (!cancelled) setGitAutomationSettings(data);
+      } catch {
+        // 서버 재시작 등 일시적 실패는 무시. 다음 프로젝트 전환 시 다시 시도.
       }
-    }, 10000); // Every 10 seconds an agent does something
-    return () => clearInterval(interval);
-  }, [gameState.agents, socket]);
+    })();
+    return () => { cancelled = true; };
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handler = (payload: { projectId: string; settings: GitAutomationSettings }) => {
+      if (payload?.projectId && payload.projectId === selectedProjectId) {
+        setGitAutomationSettings(payload.settings);
+      }
+    };
+    socket.on('git-automation:updated', handler);
+    return () => { socket.off('git-automation:updated', handler); };
+  }, [socket, selectedProjectId]);
+
+  // 협업 타임라인 폴링. 파일 수가 적은 구간이라 간단히 15초 주기 폴링.
+  // 서버가 단일 소스이므로 클라이언트는 파일 I/O를 하지 않는다.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/collab/timeline');
+        if (!res.ok) return;
+        const data = (await res.json()) as LedgerEntry[];
+        if (!cancelled) setCollabEntries(data);
+      } catch {
+        // 서버 재시작 등 일시적 실패는 조용히 건너뛰고 다음 틱에 복구한다.
+      }
+    };
+    load();
+    const interval = setInterval(load, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   // Cleanup old path points
   useEffect(() => {
@@ -153,7 +521,7 @@ export default function App() {
         const next = { ...prev };
         let changed = false;
         Object.keys(next).forEach(agentId => {
-          const filtered = next[agentId].filter(p => now - p.timestamp < 3000);
+          const filtered = next[agentId].filter(p => now - p.timestamp < AGENT_PATH_RETENTION_MS);
           if (filtered.length !== next[agentId].length) {
             next[agentId] = filtered;
             changed = true;
@@ -161,14 +529,90 @@ export default function App() {
         });
         return changed ? next : prev;
       });
-    }, 500);
+    }, AGENT_PATH_CLEANUP_MS);
     return () => clearInterval(interval);
   }, []);
 
+  // Force-directed circular layout engine.
+  // depsKey 는 매 렌더 계산되므로, 의존성 한 건 당 files.find() 를 돌리지 않도록
+  // 프로젝트 파일 ID 를 Set 으로 한 번만 모아 O(n+m) 으로 줄인다. 동일한 Set 을
+  // rAF tick 에서도 재사용해 ~33ms 마다 반복되는 선형 탐색을 제거한다.
+  const project = gameState.projects.find(p => p.id === selectedProjectId);
+  const projectFileIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const f of gameState.files) if (f.projectId === selectedProjectId) s.add(f.id);
+    return s;
+  }, [gameState.files, selectedProjectId]);
+  const fileIdsKey = useMemo(() => Array.from(projectFileIds).join(','), [projectFileIds]);
+  const agentIdsKey = project?.agents.join(',') || '';
+  const depsKey = useMemo(
+    () => (gameState.dependencies || [])
+      .filter(d => projectFileIds.has(d.from))
+      .map(d => `${d.from}>${d.to}`)
+      .join(','),
+    [gameState.dependencies, projectFileIds],
+  );
+
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    const center = { x: 500, y: 320 };
+    // Reset simulation for nodes that no longer belong to this project
+    const keep = new Set<string>([
+      ...projectFileIds,
+      ...(project?.agents || []),
+    ]);
+    Object.keys(positionsRef.current).forEach(id => {
+      if (!keep.has(id)) { delete positionsRef.current[id]; delete velocitiesRef.current[id]; }
+    });
+
+    let rafId: number;
+    let last = 0;
+    const FRAME_MS = 33;
+    const tick = (t: number) => {
+      if (t - last >= FRAME_MS) {
+        const state = gameStateRef.current;
+        const curProject = state.projects.find(p => p.id === selectedProjectId);
+        const memberIds = curProject ? new Set(curProject.agents) : null;
+        const files = state.files.filter(f => f.projectId === selectedProjectId);
+        const fileIds = new Set(files.map(f => f.id));
+        const agents = memberIds ? state.agents.filter(a => memberIds.has(a.id)) : [];
+        const deps = (state.dependencies || []).filter(d => fileIds.has(d.from));
+        runForceStep(positionsRef.current, velocitiesRef.current, files, agents, deps, center);
+        setLayoutPositions({ ...positionsRef.current });
+        last = t;
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [selectedProjectId, fileIdsKey, agentIdsKey, depsKey]);
+
   const handleWheel = (e: React.WheelEvent) => {
     if (activeTab !== 'game') return;
+    e.preventDefault();
+    // 포인터의 캔버스 내부 좌표(offsetX/Y)는 getBoundingClientRect 기준으로 계산한다.
+    // 사이드바 폭·레이아웃 변화가 있어도 실제 컨테이너 경계에 맞춰 보정되므로
+    // 포인터 아래 월드 좌표가 줌 전후로 정확히 고정된다.
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
     const delta = e.deltaY > 0 ? -0.1 : 0.1;
-    setZoom(prev => Math.max(0.5, Math.min(3, prev + delta)));
+    const prevZoom = zoom;
+    const newZoom = Math.max(0.5, Math.min(3, prevZoom + delta));
+    if (newZoom === prevZoom) return;
+    // transformOrigin='0 0' 기준 커서 고정 줌 공식.
+    //   worldX  = (mouseX - panX) / prevZoom           — 포인터 아래 월드 좌표
+    //   newPanX = mouseX - worldX * newZoom
+    //           = mouseX - (mouseX - panX) * (newZoom / prevZoom)
+    // 두 표현은 대수적으로 동일하지만, worldX 중간값을 남겨두면 테스트·디버깅 시
+    // 포인터가 가리키는 요소를 반사적으로 확인할 수 있다.
+    const worldX = (mouseX - pan.x) / prevZoom;
+    const worldY = (mouseY - pan.y) / prevZoom;
+    setZoom(newZoom);
+    setPan({
+      x: mouseX - worldX * newZoom,
+      y: mouseY - worldY * newZoom,
+    });
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -189,20 +633,111 @@ export default function App() {
     setIsDragging(false);
   };
 
+  // 키보드 단축키:
+  //  - Esc: 열려 있는 모달/확인 다이얼로그를 위에서부터 하나씩 닫는다.
+  //  - 0:   게임 탭에서만 카메라(줌/팬) 초기화. 모달이 떠 있을 땐 그 안의 입력을
+  //         방해하지 않도록 무시한다.
+  //  - 1~5: 탭 전환 단축키. 1=오피스, 2=프로젝트, 3=작업, 4=직원, 5=프로젝트 관리.
+  //         IME 조합 중(e.isComposing)이거나 입력 필드 포커스 시에는 차단해야
+  //         한국어 입력 중간에 탭이 튀는 사고를 막을 수 있다.
+  useEffect(() => {
+    const TAB_BY_KEY: Record<string, typeof activeTab> = {
+      '1': 'game',
+      '2': 'projects',
+      '3': 'tasks',
+      '4': 'agents',
+      '5': 'project-management',
+    };
+    const anyModalOpen = !!(showHireModal || showProjectModal || manageMembersProjectId || confirmFire || confirmDeleteProject);
+
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const typing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+      if (e.key === 'Escape') {
+        if (showHireModal) setShowHireModal(false);
+        else if (showProjectModal) setShowProjectModal(false);
+        else if (manageMembersProjectId) setManageMembersProjectId(null);
+        else if (confirmFire) setConfirmFire(null);
+        else if (confirmDeleteProject) setConfirmDeleteProject(null);
+        return;
+      }
+      if (typing || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (anyModalOpen) return;
+      if (activeTab === 'game' && e.key === '0') {
+        setZoom(1);
+        setPan({ x: 0, y: 0 });
+        return;
+      }
+      const nextTab = TAB_BY_KEY[e.key];
+      if (nextTab && nextTab !== activeTab) {
+        setActiveTab(nextTab);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [activeTab, showHireModal, showProjectModal, manageMembersProjectId, confirmFire, confirmDeleteProject]);
+
   const selectProject = (projectId: string) => {
     setSelectedProjectId(projectId);
     setActiveTab('game');
     addLog(`워크스페이스 전환: ${gameState.projects.find(p => p.id === projectId)?.name}`);
   };
 
-  const hireAgent = async (name: string, role: AgentRole, spriteTemplate: string) => {
-    await fetch('/api/agents/hire', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, role, spriteTemplate })
-    });
-    addLog(`새 에이전트 고용: ${name} (${translateRole(role)})`);
-    setShowHireModal(false);
+  // QA: fetch()는 HTTP 4xx/5xx를 예외로 던지지 않는다. mutation은 반드시 res.ok를
+  // 검사해 서버 오류가 사용자 로그에 "성공"처럼 찍히는 것을 막아야 한다.
+  const safeFetch = async (input: string, init?: RequestInit): Promise<Response> => {
+    const res = await fetch(input, init);
+    if (!res.ok) {
+      let detail = '';
+      try { const body = await res.clone().json(); detail = body?.error || ''; } catch { /* ignore */ }
+      throw new Error(detail || `${res.status} ${res.statusText}`);
+    }
+    return res;
+  };
+
+  // QA: 사용자 입력은 서버가 방어한다고 가정하지 말고 클라이언트에서도 최소한의
+  // 무결성을 강제한다. 이름 길이(NAME_MAX_LEN)는 렌더링 시 말줄임표/줄바꿈 깨짐을
+  // 유발하는 한계점에서 역산했고, 중복 검사는 실수로 같은 사람을 두 번 고용해
+  // 그래프/메시지 로그에서 동명이인을 구분하지 못하는 사고를 막는다. 페르소나는
+  // 프롬프트에 직접 주입되므로 길이를 별도로 제한해 토큰/요금 사고를 예방한다.
+  const NAME_MAX_LEN = 40;
+  const PERSONA_MAX_LEN = 300;
+
+  const isDuplicateAgentName = (candidate: string): boolean => {
+    const normalized = candidate.toLowerCase();
+    return gameState.agents.some(a => a.name.trim().toLowerCase() === normalized);
+  };
+
+  const hireAgent = async (name: string, role: AgentRole, spriteTemplate: string, persona?: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      addLog('에이전트 이름이 비어 있습니다.');
+      return;
+    }
+    if (trimmed.length > NAME_MAX_LEN) {
+      addLog(`에이전트 이름이 너무 깁니다(최대 ${NAME_MAX_LEN}자).`);
+      return;
+    }
+    if (isDuplicateAgentName(trimmed)) {
+      addLog(`이미 같은 이름의 에이전트가 있습니다: ${trimmed}`);
+      return;
+    }
+    const trimmedPersona = persona?.trim();
+    if (trimmedPersona && trimmedPersona.length > PERSONA_MAX_LEN) {
+      addLog(`페르소나 설명이 너무 깁니다(최대 ${PERSONA_MAX_LEN}자).`);
+      return;
+    }
+    try {
+      await safeFetch('/api/agents/hire', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed, role, spriteTemplate, persona: trimmedPersona || undefined })
+      });
+      addLog(`새 에이전트 고용: ${trimmed} (${translateRole(role)})`);
+      setShowHireModal(false);
+    } catch (e) {
+      addLog(`에이전트 고용 실패: ${(e as Error).message}`);
+    }
   };
 
   const fireAgent = (id: string, name: string) => {
@@ -210,117 +745,485 @@ export default function App() {
   };
 
   const executeFire = async (id: string, name: string) => {
-    await fetch(`/api/agents/${id}`, {
-      method: 'DELETE'
-    });
-    addLog(`에이전트 해고: ${name}`);
+    try {
+      await safeFetch(`/api/agents/${id}`, { method: 'DELETE' });
+      addLog(`에이전트 해고: ${name}`);
+    } catch (e) {
+      addLog(`해고 실패 (${name}): ${(e as Error).message}`);
+    }
   };
+
+  // QA: 프로젝트 이름은 사이드바/헤더/로그에 짧게 노출되므로 NAME_MAX_LEN 와
+  // 같은 한계를 공유한다. 중복 이름은 selectedProjectId 로 식별하는 현재 모델에선
+  // 기능적으로 문제 없으나, 사용자 혼동을 막기 위해 정보 로그를 남기고 허용한다.
+  // 설명은 표시 영역이 넓어 1KB 상한만 두고 잘라 내는 대신 거부해 사용자가
+  // 명시적으로 줄이도록 유도한다.
+  const DESCRIPTION_MAX_LEN = 1024;
 
   const createProject = async (name: string, description: string, workspacePath?: string) => {
-    await fetch('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description, workspacePath })
-    });
-    addLog(`새 프로젝트 시작: ${name}`);
-    setShowProjectModal(false);
+    const trimmed = name.trim();
+    if (!trimmed) {
+      addLog('프로젝트 이름이 비어 있습니다.');
+      return;
+    }
+    if (trimmed.length > NAME_MAX_LEN) {
+      addLog(`프로젝트 이름이 너무 깁니다(최대 ${NAME_MAX_LEN}자).`);
+      return;
+    }
+    const trimmedDescription = description.trim();
+    if (trimmedDescription.length > DESCRIPTION_MAX_LEN) {
+      addLog(`프로젝트 설명이 너무 깁니다(최대 ${DESCRIPTION_MAX_LEN}자).`);
+      return;
+    }
+    if (gameState.projects.some(p => p.name.trim().toLowerCase() === trimmed.toLowerCase())) {
+      addLog(`이미 같은 이름의 프로젝트가 있습니다: ${trimmed} (중복 허용)`);
+    }
+    try {
+      await safeFetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: trimmed, description: trimmedDescription, workspacePath: workspacePath?.trim() || undefined })
+      });
+      addLog(`새 프로젝트 시작: ${trimmed}`);
+      setShowProjectModal(false);
+    } catch (e) {
+      addLog(`프로젝트 생성 실패: ${(e as Error).message}`);
+    }
   };
 
-  const startMeeting = async () => {
-    if (!socket) return;
-    addLog("팀 회의 시작 중...");
-    
-    // Move all agents to the center
-    gameState.agents.forEach((agent, i) => {
-      const targetX = 400 + (Math.cos(i) * 100);
-      const targetY = 300 + (Math.sin(i) * 100);
-      socket.emit('agent:move', { agentId: agent.id, x: targetX, y: targetY });
-    });
+  const inviteAgentToProject = async (projectId: string, agentId: string) => {
+    const project = gameState.projects.find(p => p.id === projectId);
+    const agent = gameState.agents.find(a => a.id === agentId);
+    try {
+      await safeFetch(`/api/projects/${projectId}/agents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId })
+      });
+      if (project && agent) addLog(`${agent.name}님을 ${project.name} 프로젝트에 초대`);
+    } catch (e) {
+      addLog(`초대 실패: ${(e as Error).message}`);
+    }
+  };
 
-    // Sequence of speaking
-    const agents = [...gameState.agents];
-    for (let i = 0; i < agents.length; i++) {
-      const agent = agents[i];
-      const prompt = i === 0 
-        ? "You are the leader of a team meeting. Start the meeting and ask for updates."
-        : `You are in a team meeting. The leader just spoke. Give a short update on your ${agent.role} work.`;
-      
-      try {
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: `You are ${agent.name} (${agent.role}). ${prompt} Max 10 words.`,
-        });
-        socket.emit('agent:message', { agentId: agent.id, message: response.text || "I'm ready!" });
-        await new Promise(resolve => setTimeout(resolve, 3000)); // Wait for bubble to show
-      } catch (e) {
-        console.error(e);
+  const removeAgentFromProject = async (projectId: string, agentId: string) => {
+    const project = gameState.projects.find(p => p.id === projectId);
+    const agent = gameState.agents.find(a => a.id === agentId);
+    try {
+      await safeFetch(`/api/projects/${projectId}/agents/${agentId}`, { method: 'DELETE' });
+      if (project && agent) addLog(`${agent.name}님을 ${project.name} 프로젝트에서 제외`);
+    } catch (e) {
+      addLog(`팀원 제외 실패: ${(e as Error).message}`);
+    }
+  };
+
+  const deleteProject = async (projectId: string, name: string) => {
+    try {
+      await safeFetch(`/api/projects/${projectId}`, { method: 'DELETE' });
+      addLog(`프로젝트 삭제: ${name}`);
+      if (selectedProjectId === projectId) {
+        const remaining = gameState.projects.filter(p => p.id !== projectId);
+        setSelectedProjectId(remaining[0]?.id || null);
       }
+    } catch (e) {
+      addLog(`프로젝트 삭제 실패 (${name}): ${(e as Error).message}`);
+    }
+  };
+
+  const personaLine = (a: Agent) => a.persona ? `페르소나: ${a.persona}. 이 성격/말투를 충실히 반영하세요. ` : '';
+
+  const projectIdForAgent = (agent: Agent): string | undefined => {
+    const selected = gameState.projects.find(p => p.id === selectedProjectId && p.agents.includes(agent.id));
+    if (selected) return selected.id;
+    return gameState.projects.find(p => p.agents.includes(agent.id))?.id;
+  };
+
+  // 같은 프로젝트에 속한 동료만 피어로 간주한다. 에이전트가 어떤 프로젝트에도
+  // 속해 있지 않은 경우(온보딩 직후 등)에만 전체 에이전트로 폴백한다.
+  // 그래야 주기적 시뮬레이션에서 개발자가 엉뚱한 프로젝트의 동료에게 리뷰를
+  // 요청하거나 업무를 공유하는 비현실적인 상황을 방지할 수 있다.
+  const peersForAgent = (agent: Agent): Agent[] => {
+    const pid = projectIdForAgent(agent);
+    const proj = pid ? gameState.projects.find(p => p.id === pid) : undefined;
+    if (!proj) return gameState.agents.filter(a => a.id !== agent.id);
+    const scoped = gameState.agents.filter(a => a.id !== agent.id && proj.agents.includes(a.id));
+    return scoped.length > 0 ? scoped : gameState.agents.filter(a => a.id !== agent.id);
+  };
+
+  const respondAsAgent = async (responder: Agent, sender: Agent, incoming: string) => {
+    if (!socket) return;
+    const prompt = `${MCP_TOOL_HINT}\n\n당신은 ${translateRole(responder.role)} "${responder.name}"입니다. ${personaLine(responder)}동료 ${translateRole(sender.role)} "${sender.name}"가 방금 이렇게 말했습니다: "${incoming}". 먼저 MCP 도구로 작업 상태를 갱신한 뒤, 한국어로 자연스럽고 짧은 답장(최대 15단어)을 한 줄로만 출력하세요. 따옴표나 이름표를 붙이지 마세요.`;
+    try {
+      const text = await askClaude(prompt, { agentId: responder.id, projectId: projectIdForAgent(responder) });
+      if (text) socket.emit('agent:message', { agentId: responder.id, message: text, targetAgentId: sender.id });
+    } catch (e) {
+      // 기존에는 console.error 로만 삼켜져 사용자가 실패를 인지하지 못했다.
+      // 다른 mutation 실패와 톤을 맞춰 로그 패널에도 노출한다.
+      console.error('response failed:', e);
+      addLog(`${responder.name} 응답 실패: ${(e as Error).message}`);
+    }
+  };
+
+  const sendLeaderCommand = async () => {
+    if (!socket) {
+      addLog('서버 연결이 없습니다. 새로고침 후 다시 시도하세요.');
+      return;
+    }
+    const instruction = commandInput.trim();
+    if (!instruction) return;
+    if (commandBusy) {
+      addLog('이전 명령을 처리 중입니다. 잠시 후 다시 시도하세요.');
+      return;
+    }
+
+    const project = gameState.projects.find(p => p.id === selectedProjectId);
+    if (!project) {
+      addLog('프로젝트를 먼저 선택하세요.');
+      return;
+    }
+    const leader =
+      gameState.agents.find(a => a.role === 'Leader' && project.agents.includes(a.id)) ||
+      gameState.agents.find(a => a.role === 'Leader');
+    if (!leader) {
+      addLog('리더 에이전트가 없습니다.');
+      return;
+    }
+
+    addLog(instruction, '사용자', leader.name);
+    setCommandInput('');
+    setCommandBusy(true);
+
+    const peers = gameState.agents.filter(
+      a => a.id !== leader.id && project.agents.includes(a.id)
+    );
+
+    if (peers.length === 0) {
+      addLog('프로젝트에 팀원이 없습니다. 에이전트를 먼저 배정하세요.', leader.name);
+      setCommandBusy(false);
+      return;
+    }
+
+    // 리더는 직접 코드를 작성하지 않고, 업무를 분석하여 팀원에게 태스크로 분배한다.
+    const memberList = peers.map(a => `- ${a.name} (${translateRole(a.role)}, id: ${a.id})`).join('\n');
+    const prompt = `당신은 팀 리더 "${leader.name}"입니다. ${personaLine(leader)}` +
+      `\n사용자의 지시: "${instruction}"` +
+      `\n프로젝트: ${project.name}` +
+      `\n\n팀원 목록:\n${memberList}` +
+      `\n\n당신의 역할은 직접 코드를 작성하는 것이 아니라 업무를 분석하고 팀원에게 분배하는 것입니다.` +
+      `\n지시 사항을 분석하여 팀원별로 구체적인 업무를 나누세요.` +
+      `\n\n반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트를 포함하지 마세요:` +
+      `\n{"tasks": [{"assignedTo": "에이전트id", "description": "구체적 업무 설명"}], "message": "팀 전체에 전달할 한 줄 메시지(최대 30단어)"}` +
+      `\n\n규칙:` +
+      `\n- 각 팀원의 role에 맞는 업무를 할당하세요 (Developer=구현, QA=테스트, Designer=UI/UX, Researcher=조사)` +
+      `\n- description은 구체적이어야 합니다 (파일명, 함수명, 기능 상세 포함)` +
+      `\n- 팀원이 없으면 tasks를 빈 배열로 반환하세요`;
+
+    try {
+      const text = await askClaude(prompt, { agentId: leader.id, projectId: project.id });
+      if (!text) {
+        addLog('리더가 빈 응답을 반환했습니다. 다시 시도해주세요.', leader.name);
+        return;
+      }
+
+      // JSON 파싱 시도 — 리더의 분배 계획을 태스크로 생성
+      let parsed: { tasks?: { assignedTo: string; description: string }[]; message?: string } | null = null;
+      try {
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+      } catch {
+        addLog(`리더 응답 파싱 실패 — 원문: ${text.slice(0, 100)}`, leader.name);
+      }
+
+      if (parsed?.tasks && parsed.tasks.length > 0) {
+        let created = 0;
+        for (const t of parsed.tasks) {
+          const assignee = peers.find(a => a.id === t.assignedTo);
+          if (!assignee) {
+            addLog(`알 수 없는 에이전트 ID: ${t.assignedTo} — 건너뜀`, leader.name);
+            continue;
+          }
+          try {
+            await safeFetch('/api/tasks', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                projectId: project.id,
+                assignedTo: t.assignedTo,
+                description: t.description,
+              }),
+            });
+            addLog(`${t.description}`, leader.name, assignee.name);
+            created++;
+          } catch (e) {
+            addLog(`태스크 생성 실패 (${assignee.name}): ${(e as Error).message}`);
+          }
+        }
+        if (created === 0) {
+          addLog('태스크를 생성하지 못했습니다.', leader.name);
+        }
+      } else {
+        addLog(`업무 분배 없음 — 리더 응답: ${text.slice(0, 120)}`, leader.name);
+      }
+
+      const msg = parsed?.message || text.slice(0, 60);
+      socket.emit('agent:message', { agentId: leader.id, message: msg });
+      addLog(msg, leader.name);
+    } catch (e) {
+      console.error('leader command failed:', e);
+      addLog(`리더 응답 실패: ${(e as Error).message}`);
+    } finally {
+      setCommandBusy(false);
+    }
+  };
+
+  // 긴급중단: 모든 에이전트 활동을 즉시 멈춘다.
+  //  1) 자동 개발 루프를 끄고 LLM 호출 로컬 큐가 새로 뜨지 않도록 한다.
+  //  2) 서버에 상태·작업 리셋을 요청해 모든 에이전트를 idle 로, 완료되지 않은
+  //     작업을 pending(대기) 로 돌린다. 완료 이력은 그대로 보존한다.
+  // 현재 진행 중인 LLM 호출은 서버 측에서 취소할 수 없지만, 응답이 돌아와도
+  // 상태 머신이 idle 스냅샷이라 다음 액션이 트리거되지 않는다.
+  const emergencyStop = async () => {
+    if (commandBusy) {
+      // 명령 중이면 사용자에게 즉시 피드백이 돌아가도록 우선 버튼 락을 해제한다.
+      setCommandBusy(false);
+    }
+    setAutoDevEnabled(false);
+    try {
+      const res = await safeFetch('/api/emergency-stop', { method: 'POST' });
+      const body = await res.json().catch(() => ({} as { agentsReset?: number; tasksPending?: number }));
+      const agentsReset = typeof body.agentsReset === 'number' ? body.agentsReset : 0;
+      const tasksPending = typeof body.tasksPending === 'number' ? body.tasksPending : 0;
+      addLog(`긴급중단: 에이전트 ${agentsReset}명 대기 상태로 전환, 미완료 작업 ${tasksPending}건 대기열 복귀`);
+    } catch (e) {
+      addLog(`긴급중단 실패: ${(e as Error).message}`);
     }
   };
 
   const simulateAgentAction = async (agent: Agent) => {
     if (!socket) return;
-    
-    if (agent.role === 'Leader') {
-      // Leader distributes tasks
-      addLog(`${agent.name} 리더가 업무를 분배하고 있습니다...`);
-      const otherAgents = gameState.agents.filter(a => a.id !== agent.id);
-      if (otherAgents.length > 0 && gameState.projects.length > 0) {
-        const randomAgent = otherAgents[Math.floor(Math.random() * otherAgents.length)];
-        const randomProject = gameState.projects[Math.floor(Math.random() * gameState.projects.length)];
-        
-        // Leader doesn't work on files, just moves to center
-        socket.emit('agent:move', { agentId: agent.id, x: 400, y: 300 });
+    // 주기적 시뮬레이션에서 target 을 같은 프로젝트 동료로 한정한다.
+    // (리더 지시, QA 리뷰 요청 등은 팀 경계 안에서 이루어지는 게 자연스럽다.)
+    const peers = peersForAgent(agent);
+    if (peers.length === 0) return;
+    const target = peers[Math.floor(Math.random() * peers.length)];
 
-        await fetch('/api/tasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            projectId: randomProject.id, 
-            assignedTo: randomAgent.id, 
-            description: `${randomProject.name} 프로젝트 기능 구현` 
-          })
-        });
-        
-        socket.emit('agent:message', { 
-          agentId: agent.id, 
-          message: `${randomAgent.name}님, ${randomProject.name} 작업을 진행해 주세요.` 
-        });
+    if (agent.role === 'Leader') {
+      // auto-dev 모드: 리더가 자율적으로 업무를 분석하여 팀원에게 분배
+      const project = gameState.projects.find(p => p.agents.includes(agent.id))
+        || gameState.projects[0];
+      if (!project) return;
+
+      const memberList = peers.map(a => `- ${a.name} (${translateRole(a.role)}, id: ${a.id})`).join('\n');
+      const prompt = `당신은 팀 리더 "${agent.name}"입니다. ${personaLine(agent)}` +
+        `\n프로젝트: ${project.name} — ${project.description || ''}` +
+        `\n\n팀원 목록:\n${memberList}` +
+        `\n\n프로젝트의 현재 상태를 고려하여 팀원들에게 다음으로 해야 할 업무를 분배하세요.` +
+        `\n\n반드시 아래 JSON 형식으로만 응답하세요:` +
+        `\n{"tasks": [{"assignedTo": "에이전트id", "description": "구체적 업무 설명"}], "message": "팀에 전달할 한 줄 메시지(최대 20단어)"}` +
+        `\n\n규칙:` +
+        `\n- 각 팀원의 role에 맞는 업무를 할당 (Developer=구현, QA=테스트, Designer=UI/UX, Researcher=조사)` +
+        `\n- description은 구체적으로 (파일명, 함수명, 기능 상세 포함)` +
+        `\n- idle 상태인 팀원에게만 할당하세요`;
+
+      try {
+        const text = await askClaude(prompt, { agentId: agent.id, projectId: project.id });
+        if (text) {
+          let parsed: { tasks?: { assignedTo: string; description: string }[]; message?: string } | null = null;
+          try {
+            const jsonMatch = text.match(/\{[\s\S]*\}/);
+            if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+          } catch { /* 파싱 실패 시 무시 */ }
+
+          if (parsed?.tasks && parsed.tasks.length > 0) {
+            for (const t of parsed.tasks) {
+              const assignee = peers.find(a => a.id === t.assignedTo);
+              if (!assignee) continue;
+              try {
+                await safeFetch('/api/tasks', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    projectId: project.id,
+                    assignedTo: t.assignedTo,
+                    description: t.description,
+                  }),
+                });
+                addLog(`${t.description}`, agent.name, assignee.name);
+              } catch (e) {
+                addLog(`작업 생성 실패: ${(e as Error).message}`);
+              }
+            }
+          }
+
+          const msg = parsed?.message || text;
+          socket.emit('agent:message', { agentId: agent.id, message: msg });
+        }
+      } catch (e) {
+        console.error('leader action failed:', e);
       }
     } else {
-      // Regular agent action - pick a file to work on
-      const files = gameState.files;
+      const agentProjectId = projectIdForAgent(agent);
+      const files = gameState.files.filter(f => !agentProjectId || f.projectId === agentProjectId);
       if (files.length > 0) {
-        const randomFile = files[Math.floor(Math.random() * files.length)];
-        socket.emit('agent:working', { agentId: agent.id, fileId: randomFile.id });
-        
-        // Move to file position
-        socket.emit('agent:move', { agentId: agent.id, x: randomFile.x, y: randomFile.y + 40 });
-        socket.emit('agent:message', { agentId: agent.id, message: `${randomFile.name} 파일 작업 중...` });
-      }
-      
-      try {
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: `You are an AI agent named ${agent.name} with the role of ${agent.role} in a software company. 
-          Current status: ${agent.status}. 
-          Give a short (max 10 words) status update or a thought about your work in Korean.`,
-        });
-        
-        const message = response.text || "열심히 일하는 중!";
-        socket.emit('agent:message', { agentId: agent.id, message });
-      } catch (error) {
-        console.error("Agent thinking failed:", error);
+        const file = files[Math.floor(Math.random() * files.length)];
+        socket.emit('agent:working', { agentId: agent.id, fileId: file.id });
+        const prompt = `${MCP_TOOL_HINT}\n\n당신은 ${translateRole(agent.role)} "${agent.name}"입니다. ${personaLine(agent)}담당 파일: "${file.name}" (id: ${file.id}).\n\n수행할 작업:\n1) update_status("working", "${file.id}")로 작업 시작 보고\n2) Read로 "${file.name}"의 현재 내용 확인 (존재하지 않으면 Write로 의미 있는 초기 내용을 실제 생성)\n3) 당신의 역할(${translateRole(agent.role)})과 페르소나에 맞게 Edit 또는 Write로 파일을 실제로 개선·확장 (주석 추가, 함수 구현, 타입 보강 등)\n4) 새 파일 생성이 필요하면 Write로 실제 생성 후 add_file 호출, 의존성 생기면 add_dependency 호출\n5) update_status("idle", "")로 종료 보고\n6) 마지막 한 줄로 동료 ${translateRole(target.role)} "${target.name}"에게 변경 사항을 공유하거나 리뷰를 요청하는 한국어 메시지(최대 20단어)만 출력. 따옴표·이름표 금지.`;
+        try {
+          const text = await askClaude(prompt, { agentId: agent.id, projectId: projectIdForAgent(agent) });
+          if (text) {
+            socket.emit('agent:message', { agentId: agent.id, message: text, targetAgentId: target.id });
+            setTimeout(() => respondAsAgent(target, agent, text), REPLY_DELAY_MS);
+          }
+          // auto-dev 모드에서도 에이전트에 할당된 태스크가 있으면 완료 처리 → git-automation 트리거
+          if (agent.currentTask) {
+            await safeFetch(`/api/tasks/${agent.currentTask}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ status: 'completed' }),
+            }).catch(() => {});
+          }
+        } catch (e) {
+          console.error('worker action failed:', e);
+        }
       }
     }
   };
+
+  // pending 태스크를 할당받은 에이전트가 해당 태스크를 수행하도록 깨운다.
+  const processAgentTask = async (agent: Agent, task: Task) => {
+    if (!socket) return;
+    const project = gameState.projects.find(p => p.id === task.projectId);
+    const agentProjectId = projectIdForAgent(agent);
+    const files = gameState.files.filter(f => !agentProjectId || f.projectId === agentProjectId);
+
+    // 태스크 in-progress 전환 + 에이전트 working 전환
+    try {
+      await Promise.all([
+        safeFetch(`/api/tasks/${task.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'in-progress' }),
+        }),
+        safeFetch(`/api/agents/${agent.id}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'working' }),
+        }),
+      ]);
+    } catch (e) {
+      addLog(`태스크 착수 실패: ${(e as Error).message}`);
+      return;
+    }
+
+    const file = files.length > 0
+      ? files[Math.floor(Math.random() * files.length)]
+      : undefined;
+    if (file) {
+      socket.emit('agent:working', { agentId: agent.id, fileId: file.id });
+    }
+
+    const peers = peersForAgent(agent);
+    const target = peers.length > 0 ? peers[Math.floor(Math.random() * peers.length)] : agent;
+
+    const prompt = `${MCP_TOOL_HINT}\n\n당신은 ${translateRole(agent.role)} "${agent.name}"입니다. ${personaLine(agent)}` +
+      `\n할당된 업무: "${task.description}"` +
+      (project ? `\n프로젝트: ${project.name}` : '') +
+      (file ? `\n담당 파일: "${file.name}" (id: ${file.id})` : '') +
+      `\n\n수행할 작업:\n1) update_status("working"${file ? `, "${file.id}"` : ', ""'})로 작업 시작 보고` +
+      `\n2) 할당된 업무를 실제로 수행하세요. 파일 읽기/쓰기, 코드 작성 등.` +
+      `\n3) 새 파일 생성이 필요하면 Write로 실제 생성 후 add_file 호출, 의존성 생기면 add_dependency 호출` +
+      `\n4) update_status("idle", "")로 종료 보고` +
+      `\n5) 마지막 한 줄로 동료에게 변경 사항을 공유하는 한국어 메시지(최대 20단어)만 출력. 따옴표·이름표 금지.`;
+
+    try {
+      const text = await askClaude(prompt, { agentId: agent.id, projectId: task.projectId });
+      if (text) {
+        socket.emit('agent:message', { agentId: agent.id, message: text, targetAgentId: target.id });
+        if (target !== agent) {
+          setTimeout(() => respondAsAgent(target, agent, text), REPLY_DELAY_MS);
+        }
+      }
+      // 태스크 완료 처리
+      await safeFetch(`/api/tasks/${task.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'completed' }),
+      });
+    } catch (e) {
+      console.error('task processing failed:', e);
+      addLog(`태스크 처리 실패 (${agent.name}): ${(e as Error).message}`);
+      // 실패 시 에이전트를 idle로 복구하고 태스크를 pending으로 되돌려 재시도 가능하게 한다
+      await Promise.all([
+        safeFetch(`/api/agents/${agent.id}/status`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'idle' }),
+        }).catch(() => {}),
+        safeFetch(`/api/tasks/${task.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'pending' }),
+        }).catch(() => {}),
+      ]);
+    }
+  };
+  const processAgentTaskRef = useRef(processAgentTask);
+  useEffect(() => { processAgentTaskRef.current = processAgentTask; });
+
+  // 자동 개발 루프: autoDevEnabled 가 켜져 있는 동안 주기적으로 idle 상태
+  // 에이전트 중 한 명을 뽑아 simulateAgentAction 을 실행한다. 동시에 여러 명이
+  // 발화하면 로그와 말풍선이 난잡해지므로 한 틱당 한 명만 깨운다. 최신 state/
+  // 함수 참조는 ref 로 가져와 이펙트 재구독 비용을 없앤다.
+  const simulateRef = useRef(simulateAgentAction);
+  useEffect(() => { simulateRef.current = simulateAgentAction; });
+  useEffect(() => {
+    if (!autoDevEnabled) return;
+    const AUTO_DEV_TICK_MS = 12000;
+    const interval = setInterval(() => {
+      const current = gameStateRef.current;
+      const proj = current.projects.find(p => p.id === selectedProjectId);
+      const pool = proj
+        ? current.agents.filter(a => proj.agents.includes(a.id))
+        : current.agents;
+      const idle = pool.filter(a => a.status === 'idle');
+      if (idle.length === 0) return;
+      const pick = idle[Math.floor(Math.random() * idle.length)];
+      simulateRef.current(pick);
+    }, AUTO_DEV_TICK_MS);
+    return () => clearInterval(interval);
+  }, [autoDevEnabled, selectedProjectId]);
+  // 자동 개발 OFF: 12초마다 pending 태스크가 할당된 idle 에이전트를 깨워
+  // 해당 태스크를 처리하게 한다. (지시받은 일만 수행)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('llm-tycoon:auto-dev', autoDevEnabled ? '1' : '0');
+    }
+    if (autoDevEnabled) return;
+    const TASK_TICK_MS = 12000;
+    const interval = setInterval(() => {
+      const current = gameStateRef.current;
+      const currentTasks = tasksRef.current;
+      const pendingTasks = currentTasks.filter(t => t.status === 'pending');
+      if (pendingTasks.length === 0) return;
+
+      for (const task of pendingTasks) {
+        const agent = current.agents.find(
+          a => a.id === task.assignedTo && a.status === 'idle',
+        );
+        if (agent) {
+          processAgentTaskRef.current(agent, task);
+        }
+      }
+    }, TASK_TICK_MS);
+    return () => clearInterval(interval);
+  }, [autoDevEnabled]);
 
   return (
     <div className="min-h-screen bg-[var(--pixel-bg)] text-[var(--pixel-white)] font-game flex flex-col overflow-hidden h-screen">
       {/* Header */}
       <header className="h-[60px] bg-[#0f3460] border-b-4 border-[var(--pixel-border)] flex items-center justify-between px-6 z-20">
         <div className="text-2xl font-bold text-[var(--pixel-accent)] uppercase tracking-[2px]">
-          LLM 타이쿤 v1.0
+          LLMTycoon
         </div>
         <div className="flex gap-5 text-sm">
           <div className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] text-[var(--pixel-accent)]">
@@ -331,6 +1234,29 @@ export default function App() {
           </div>
           <div className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)]">
             프로젝트: {gameState.projects.length}
+          </div>
+          <div
+            className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] border-l-[6px]"
+            style={{ borderLeftColor: getMetricTierColor(workspaceInsights.coveragePercent) }}
+            title={workspaceInsights.isolatedFiles.length > 0
+              ? `고립 파일: ${workspaceInsights.isolatedFiles.join(', ')}`
+              : '의존성이 연결되지 않은 파일이 없습니다'}
+          >
+            커버리지: {workspaceInsights.coveragePercent}%
+          </div>
+          <div
+            className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] border-l-[6px]"
+            style={{ borderLeftColor: getMetricTierColor(agentActivity.total === 0 ? null : agentActivity.ratio) }}
+            title={activityBreakdownLabel}
+          >
+            활성률: {agentActivity.ratio}%
+          </div>
+          <div
+            className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] border-l-[6px]"
+            style={{ borderLeftColor: getMetricTierColor(collaborationStats.messageCount === 0 ? null : collaborationStats.participationRate) }}
+            title={collaborationLabel}
+          >
+            협업: {collaborationBadge}
           </div>
         </div>
       </header>
@@ -365,12 +1291,19 @@ export default function App() {
               <span className="text-sm font-bold block">작업</span>
               <span className="text-[10px] opacity-70">대기열</span>
             </button>
-            <button 
+            <button
               onClick={() => setActiveTab('agents')}
               className={`w-full text-left p-3 border-2 transition-all ${activeTab === 'agents' ? 'border-[var(--pixel-accent)] bg-[var(--pixel-bg)]' : 'border-[var(--pixel-border)] bg-[#0f3460] hover:bg-[#1a1a2e]'}`}
             >
               <span className="text-sm font-bold block">직원 목록</span>
               <span className="text-[10px] opacity-70">직원 명단</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('project-management')}
+              className={`w-full text-left p-3 border-2 transition-all ${activeTab === 'project-management' ? 'border-[var(--pixel-accent)] bg-[var(--pixel-bg)]' : 'border-[var(--pixel-border)] bg-[#0f3460] hover:bg-[#1a1a2e]'}`}
+            >
+              <span className="text-sm font-bold block">프로젝트 관리</span>
+              <span className="text-[10px] opacity-70">GitHub · GitLab</span>
             </button>
           </nav>
 
@@ -381,11 +1314,12 @@ export default function App() {
             >
               에이전트 고용
             </button>
-            <button 
-              onClick={startMeeting}
-              className="w-full bg-[var(--pixel-text)] text-white py-3 font-bold uppercase border-b-4 border-[#a02d42] hover:brightness-110 transition-all"
+            <button
+              onClick={emergencyStop}
+              title="모든 에이전트 작업을 즉시 중단하고 미완료 작업을 대기 상태로 되돌립니다"
+              className="w-full bg-[#c23b4a] text-white py-3 font-bold uppercase border-b-4 border-[#7a1a25] hover:brightness-110 transition-all"
             >
-              팀 회의
+              긴급중단
             </button>
           </div>
         </aside>
@@ -394,152 +1328,208 @@ export default function App() {
         <main className="flex-1 flex flex-col overflow-hidden">
           <div className="flex-1 overflow-auto p-0 relative">
           {activeTab === 'game' && (
-            <div 
-              className="h-full flex flex-col p-0 overflow-hidden relative cursor-grab active:cursor-grabbing" 
+            <div
+              className="h-full flex flex-col p-0 overflow-hidden relative cursor-grab active:cursor-grabbing infinite-grid"
               onWheel={handleWheel}
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseUp}
+              style={{
+                backgroundSize: `${32 * zoom}px ${32 * zoom}px`,
+                backgroundPosition: `${pan.x}px ${pan.y}px`
+              }}
             >
-              <div 
+              <div
                 ref={gameWorldRef}
-                className="flex-1 bg-[var(--pixel-bg)] relative"
+                className="flex-1 relative"
                 style={{
-                  backgroundImage: `
-                    linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
-                    linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px)
-                  `,
-                  backgroundSize: '32px 32px',
                   transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-                  transformOrigin: 'center center',
+                  transformOrigin: '0 0',
                   width: '100%',
                   height: '100%'
                 }}
               >
                 {/* SVG Layer for Connections */}
-                <svg className="absolute inset-0 w-full h-full pointer-events-none z-0">
-                  {/* Movement Paths */}
-                  {Object.keys(agentPaths).map(agentId => {
-                    // Only show paths for agents in the selected project
-                    const agent = gameState.agents.find(a => a.id === agentId);
-                    const project = gameState.projects.find(p => p.id === selectedProjectId);
-                    if (!agent || !project || !project.agents.includes(agent.id)) return null;
-
-                    const points = agentPaths[agentId];
-                    return (
-                      <g key={`path-group-${agentId}`}>
-                        {points.map((point, idx) => {
-                          if (idx === 0) return null;
-                          const prev = points[idx - 1];
-                          const age = Date.now() - point.timestamp;
-                          const opacity = Math.max(0, 1 - age / 3000);
-                          return (
-                            <motion.line
-                              key={`path-${point.id}`}
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: opacity * 0.4 }}
-                              x1={prev.x + 24} y1={prev.y + 24}
-                              x2={point.x + 24} y2={point.y + 24}
-                              stroke="var(--pixel-accent)"
-                              strokeWidth="2"
-                              strokeDasharray="4 4"
-                            />
-                          );
-                        })}
-                      </g>
-                    );
-                  })}
-                  {/* Dependencies */}
+                <svg className="absolute inset-0 w-full h-full pointer-events-none z-0" style={{ overflow: 'visible' }}>
+                  {/* Concentric orbital guides */}
+                  {[120, 220, 320].map(r => (
+                    <circle
+                      key={`ring-${r}`}
+                      cx={500} cy={320} r={r}
+                      fill="none"
+                      stroke="var(--pixel-border)"
+                      strokeWidth="1"
+                      strokeDasharray="2 6"
+                      opacity={0.15}
+                    />
+                  ))}
+                  {/* Dependencies — straight dashed lines */}
                   {gameState.dependencies?.filter(dep => {
                     const file = gameState.files.find(f => f.id === dep.from);
                     return file?.projectId === selectedProjectId;
                   }).map((dep, idx) => {
-                    const from = gameState.files.find(f => f.id === dep.from);
-                    const to = gameState.files.find(f => f.id === dep.to);
-                    if (!from || !to) return null;
+                    const a = layoutPositions[dep.from];
+                    const b = layoutPositions[dep.to];
+                    if (!a || !b) return null;
                     return (
-                      <line 
+                      <line
                         key={`dep-${idx}`}
-                        x1={from.x} y1={from.y}
-                        x2={to.x} y2={to.y}
-                        stroke="var(--pixel-border)"
-                        strokeWidth="1"
-                        strokeDasharray="4 4"
+                        x1={a.x} y1={a.y}
+                        x2={b.x} y2={b.y}
+                        stroke="var(--pixel-accent)"
+                        strokeWidth="1.5"
+                        strokeDasharray="5 4"
+                        opacity={0.5}
                       />
                     );
                   })}
                   {/* Agent to File Connections */}
                   {gameState.agents.filter(a => {
-                    const project = gameState.projects.find(p => p.id === selectedProjectId);
-                    return project?.agents.includes(a.id);
+                    const p = gameState.projects.find(pr => pr.id === selectedProjectId);
+                    return p?.agents.includes(a.id);
                   }).map(agent => {
                     if (!agent.workingOnFileId) return null;
                     const file = gameState.files.find(f => f.id === agent.workingOnFileId);
                     if (!file || file.projectId !== selectedProjectId) return null;
+                    const pa = layoutPositions[agent.id];
+                    const pf = layoutPositions[file.id];
+                    if (!pa || !pf) return null;
                     return (
-                      <motion.line 
+                      <motion.line
                         key={`work-${agent.id}`}
-                        initial={{ pathLength: 0, opacity: 0 }}
-                        animate={{ pathLength: 1, opacity: 0.5 }}
-                        x1={agent.x + 24} y1={agent.y + 24}
-                        x2={file.x} y2={file.y}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 0.8 }}
+                        x1={pa.x + 24} y1={pa.y + 24}
+                        x2={pf.x} y2={pf.y}
                         stroke="var(--pixel-accent)"
                         strokeWidth="2"
-                        strokeDasharray="2 2"
+                        strokeDasharray="2 3"
                       />
                     );
                   })}
                 </svg>
 
-                {/* Code Files (Dots) */}
-                {gameState.files?.filter(f => f.projectId === selectedProjectId).map(file => (
-                  <div 
-                    key={file.id}
-                    className="absolute w-3 h-3 bg-[var(--pixel-accent)] border border-black shadow-[0_0_10px_var(--pixel-accent)] z-5"
-                    style={{ left: file.x - 6, top: file.y - 6 }}
-                    title={file.name}
-                  >
-                    <div className="absolute top-4 left-1/2 -translate-x-1/2 whitespace-nowrap text-[8px] font-bold text-[var(--pixel-accent)] opacity-50">
-                      {file.name}
+                {/* Code Files (Nodes) — tinted per file type so the graph reads
+                    as a legend at a glance: component/service/util/style each
+                    get a distinct swatch. See FILE_TYPE_ACCENT below. */}
+                {gameState.files?.filter(f => f.projectId === selectedProjectId).map(file => {
+                  const pos = layoutPositions[file.id];
+                  const x = pos?.x ?? file.x;
+                  const y = pos?.y ?? file.y;
+                  const accent = getFileTypeAccent(file.type);
+                  return (
+                    <div
+                      key={file.id}
+                      className="absolute w-4 h-4 rounded-full border-2 border-black z-10"
+                      style={{
+                        left: 0,
+                        top: 0,
+                        transform: `translate3d(${x - 8}px, ${y - 8}px, 0)`,
+                        willChange: 'transform',
+                        backgroundColor: accent,
+                        boxShadow: `0 0 14px ${accent}`,
+                      }}
+                      onMouseEnter={() => setHoveredFileId(file.id)}
+                      onMouseLeave={() => setHoveredFileId(prev => prev === file.id ? null : prev)}
+                      aria-label={`${file.name} (${translateFileType(file.type)})`}
+                    >
+                      <div
+                        className="absolute top-5 left-1/2 -translate-x-1/2 whitespace-nowrap text-[9px] font-bold opacity-80"
+                        style={{ color: accent }}
+                      >
+                        {file.name}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
+
+                {hoveredFileId && (() => {
+                  const file = gameState.files.find(f => f.id === hoveredFileId);
+                  if (!file || file.projectId !== selectedProjectId) return null;
+                  const pos = layoutPositions[file.id];
+                  const workerNames = gameState.agents
+                    .filter(a => a.workingOnFileId === file.id)
+                    .map(a => a.name);
+                  return (
+                    <FileTooltip
+                      file={file}
+                      x={pos?.x ?? file.x}
+                      y={pos?.y ?? file.y}
+                      workerNames={workerNames}
+                    />
+                  );
+                })()}
 
                 <AnimatePresence>
                   {gameState.agents.filter(a => {
                     const project = gameState.projects.find(p => p.id === selectedProjectId);
                     return project?.agents.includes(a.id);
-                  }).map((agent) => (
-                    <AgentSprite 
-                      key={agent.id} 
-                      agent={agent} 
-                      onClick={() => simulateAgentAction(agent)}
-                    />
-                  ))}
+                  }).map((agent) => {
+                    const pos = layoutPositions[agent.id];
+                    const targetAgent = agent.lastMessageTo ? gameState.agents.find(a => a.id === agent.lastMessageTo) : undefined;
+                    const workingFile = agent.workingOnFileId
+                      ? gameState.files.find(f => f.id === agent.workingOnFileId)
+                      : undefined;
+                    return (
+                      <AgentSprite
+                        key={agent.id}
+                        agent={agent}
+                        targetName={targetAgent?.name}
+                        x={pos?.x ?? agent.x}
+                        y={pos?.y ?? agent.y}
+                        logs={logs}
+                        workingFileName={workingFile?.name}
+                        translateStatus={translateStatus}
+                        highlighted={highlightedAgent === agent.name}
+                        onClick={() => simulateAgentAction(agent)}
+                      />
+                    );
+                  })}
                 </AnimatePresence>
+              </div>
+
+              {/* Excluded paths badge — code graph는 docs/ 같은 문서 디렉터리를
+                  의도적으로 제외한다. 누락처럼 보이지 않도록 좌측 하단에 항상
+                  표시하고, 호버 시 전체 규칙을 툴팁으로 노출. */}
+              <div
+                className="absolute bottom-6 left-6 z-30 pointer-events-auto group"
+                title={`코드그래프에서 의도적으로 제외된 경로입니다 (누락 아님):\n${EXCLUDED_PATHS.join('\n')}`}
+                aria-label={`제외된 경로: ${EXCLUDED_PATHS.join(', ')}`}
+              >
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-[var(--pixel-card)] border-2 border-[var(--pixel-border)] text-[10px] font-bold uppercase tracking-wider text-[var(--pixel-accent)] opacity-70 hover:opacity-100 hover:border-[var(--pixel-accent)] transition-all select-none">
+                  <span aria-hidden className="inline-block w-2 h-2 rounded-full bg-[var(--pixel-accent)] opacity-60" />
+                  <span className="text-[var(--pixel-text)] opacity-60">제외 경로</span>
+                  <span>{EXCLUDED_PATHS.join(' · ')}</span>
+                </div>
+                <div className="hidden group-hover:block absolute bottom-full left-0 mb-2 w-64 p-2 bg-[var(--pixel-bg)] border-2 border-[var(--pixel-border)] text-[10px] text-[var(--pixel-text)] leading-snug shadow-lg">
+                  이 경로들은 코드그래프 표시 대상이 아닙니다. 문서/핸드오프 등 코드 외 자산은 그래프 노드에서 의도적으로 걸러집니다.
+                </div>
               </div>
 
               {/* Zoom Controls Overlay - FIXED relative to viewport */}
               <div className="absolute bottom-6 right-6 z-30 flex flex-col gap-2 pointer-events-auto">
-                <button 
+                <button
                   onClick={() => setZoom(prev => Math.min(3, prev + 0.2))}
                   className="w-10 h-10 bg-[var(--pixel-card)] border-2 border-[var(--pixel-border)] flex items-center justify-center hover:border-[var(--pixel-accent)] text-[var(--pixel-accent)] transition-all active:scale-90"
                   title="확대"
+                  aria-label="확대"
                 >
                   <Plus size={20} />
                 </button>
-                <button 
+                <button
                   onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
                   className="w-10 h-10 bg-[var(--pixel-card)] border-2 border-[var(--pixel-border)] flex items-center justify-center hover:border-[var(--pixel-accent)] text-[10px] font-bold transition-all active:scale-90"
-                  title="초기화"
+                  title="카메라 초기화 (0)"
+                  aria-label="카메라 초기화"
                 >
                   1:1
                 </button>
-                <button 
+                <button
                   onClick={() => setZoom(prev => Math.max(0.5, prev - 0.2))}
                   className="w-10 h-10 bg-[var(--pixel-card)] border-2 border-[var(--pixel-border)] flex items-center justify-center hover:border-[var(--pixel-accent)] text-[var(--pixel-accent)] transition-all active:scale-90"
                   title="축소"
+                  aria-label="축소"
                 >
                   <Minus size={20} />
                 </button>
@@ -561,17 +1551,42 @@ export default function App() {
                   <div className="flex items-center justify-between mt-auto">
                     <div className="flex -space-x-2">
                       {gameState.agents.filter(a => project.agents.includes(a.id)).map(agent => (
-                        <div key={agent.id} title={agent.name} className={`w-8 h-8 border-2 border-black ${agent.role === 'Leader' ? 'bg-[var(--pixel-accent)]' : 'bg-[var(--pixel-text)]'} flex items-center justify-center text-xs`}>
+                        <div
+                          key={agent.id}
+                          title={`${agent.name} · ${translateRole(agent.role)}`}
+                          className="w-8 h-8 border-2 border-black flex items-center justify-center text-xs"
+                          style={{ backgroundColor: getRoleAccent(agent.role) }}
+                        >
                           {getAgentEmoji(agent.role)}
                         </div>
                       ))}
                     </div>
-                    <button 
-                      onClick={() => selectProject(project.id)}
-                      className="p-2 bg-black/30 border-2 border-[var(--pixel-border)] hover:border-[var(--pixel-accent)] transition-colors"
-                    >
-                      <Play size={14} />
-                    </button>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setManageMembersProjectId(project.id)}
+                        aria-label={`${project.name} 팀원 관리`}
+                        className="p-2 bg-black/30 border-2 border-[var(--pixel-border)] hover:border-[var(--pixel-accent)] transition-colors"
+                        title="팀원 관리"
+                      >
+                        <UserPlus size={14} />
+                      </button>
+                      <button
+                        onClick={() => selectProject(project.id)}
+                        aria-label={`${project.name} 워크스페이스 열기`}
+                        className="p-2 bg-black/30 border-2 border-[var(--pixel-border)] hover:border-[var(--pixel-accent)] transition-colors"
+                        title="워크스페이스 열기"
+                      >
+                        <Play size={14} />
+                      </button>
+                      <button
+                        onClick={() => setConfirmDeleteProject({ id: project.id, name: project.name })}
+                        aria-label={`${project.name} 프로젝트 삭제`}
+                        className="p-2 bg-red-900/20 border-2 border-red-900/60 hover:bg-red-900 hover:border-red-500 text-red-300 hover:text-white transition-colors"
+                        title="프로젝트 삭제"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -620,19 +1635,28 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === 'project-management' && (
+            <ProjectManagement onLog={(text, from) => addLog(text, from || '시스템')} />
+          )}
+
           {activeTab === 'agents' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 p-8">
               {gameState.agents.map(agent => (
                 <div key={agent.id} className="bg-[#0f3460] border-2 border-[var(--pixel-border)] p-5 flex items-center justify-between hover:border-[var(--pixel-accent)] transition-all group">
                   <div className="flex items-center gap-4">
-                    <div className={`w-14 h-14 border-2 border-black ${agent.role === 'Leader' ? 'bg-[var(--pixel-accent)]' : 'bg-[var(--pixel-text)]'} flex items-center justify-center text-2xl`}>
+                    <div
+                      className="w-14 h-14 border-2 border-black flex items-center justify-center text-2xl"
+                      style={{ backgroundColor: getRoleAccent(agent.role) }}
+                      title={getRoleDescription(agent.role)}
+                      aria-label={`${translateRole(agent.role)}: ${getRoleDescription(agent.role)}`}
+                    >
                       {getAgentEmoji(agent.role)}
                     </div>
                     <div>
                       <h3 className="font-bold text-sm text-[var(--pixel-accent)]">{agent.name}</h3>
-                      <p className="text-[10px] uppercase tracking-widest font-bold opacity-70">{translateRole(agent.role)}</p>
+                      <p className="text-[10px] uppercase tracking-widest font-bold opacity-70" title={getRoleDescription(agent.role)}>{translateRole(agent.role)}</p>
                       <div className="flex items-center gap-2 mt-2">
-                        <div className={`w-2 h-2 ${agent.status === 'idle' ? 'bg-white/20' : 'bg-green-500 animate-pulse'}`} />
+                        <div className={`w-2 h-2 ${agent.status === 'idle' ? 'bg-white/20' : `bg-green-500${reducedMotion ? '' : ' animate-pulse'}`}`} />
                         <span className="text-[10px] opacity-60 uppercase">{translateStatus(agent.status)}</span>
                       </div>
                     </div>
@@ -652,19 +1676,19 @@ export default function App() {
 
         {/* Right Panel (Management Console Style) */}
         <aside className="w-[280px] bg-[var(--pixel-card)] border-l-4 border-[var(--pixel-border)] p-4 flex flex-col">
-          <div className="text-[12px] text-[var(--pixel-accent)] mb-3 uppercase tracking-wider">현재 직원</div>
-          <div className="flex-1 space-y-2 overflow-y-auto">
-            {gameState.agents.map(agent => (
-              <div key={agent.id} className="bg-black/20 border-2 border-[var(--pixel-border)] p-2 grid grid-cols-[40px_1fr] gap-3">
-                <div className={`w-8 h-8 border-2 border-black ${agent.role === 'Leader' ? 'bg-[var(--pixel-accent)]' : 'bg-[var(--pixel-text)]'} flex items-center justify-center text-xs`}>
-                  {getAgentEmoji(agent.role)}
-                </div>
-                <div className="overflow-hidden">
-                  <h4 className="text-[12px] text-[var(--pixel-accent)] font-bold truncate">{agent.name}</h4>
-                  <p className="text-[10px] opacity-80 truncate">{translateRole(agent.role)} - {translateStatus(agent.status)}</p>
-                </div>
-              </div>
-            ))}
+          <div className="text-[12px] text-[var(--pixel-accent)] mb-3 uppercase tracking-wider">에이전트 작업 현황</div>
+          <div className="flex-1 overflow-y-auto space-y-3">
+            <AgentStatusPanel
+              agents={gameState.agents}
+              files={gameState.files}
+              translateRole={translateRole}
+              translateStatus={translateStatus}
+            />
+            <CollabTimeline
+              entries={collabEntries}
+              onSelect={(path) => addLog(`타임라인 열람: ${path}`)}
+              onHoverAgent={setHighlightedAgent}
+            />
           </div>
           <div className="mt-4 pt-4 border-t-2 border-[var(--pixel-border)]">
             <div className="text-[12px] text-[var(--pixel-accent)] mb-2 uppercase tracking-wider">마켓플레이스</div>
@@ -678,17 +1702,82 @@ export default function App() {
         </aside>
       </div>
 
-      {/* Bottom Log */}
-      <footer className="h-[140px] bg-black border-t-4 border-[var(--pixel-border)] p-3 font-mono text-[11px] text-[#00ff00] overflow-y-auto">
-        {logs.length === 0 && <div className="opacity-50 italic">시스템 준비 완료. 로그 대기 중...</div>}
-        {logs.map(log => (
-          <div key={log.id} className="mb-1 flex gap-3">
-            <span className="text-[#888]">[{log.time}]</span>
-            <span className="text-[var(--pixel-accent)] font-bold uppercase">시스템:</span>
-            <span>{log.text}</span>
+      {/* Resizable Log Panel: Leader Command Prompt + Log */}
+      <div
+        className="flex flex-col shrink-0"
+        style={{ height: `${logPanelHeight}px` }}
+      >
+        {/* 위아래 드래그로 로그 패널 전체 높이(리더 지시 입력 + 로그)를 조절 */}
+        <div
+          onMouseDown={startLogPanelResize}
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="로그 패널 크기 조절"
+          title="위아래로 드래그해서 로그/대화창 크기 조절"
+          className="h-[6px] cursor-ns-resize bg-[var(--pixel-border)] hover:bg-[var(--pixel-accent)] transition-colors"
+        />
+        {/* Leader Command Prompt */}
+        <div className="bg-[var(--pixel-card)] border-t-2 border-[var(--pixel-border)] px-3 py-2 flex gap-2 items-center shrink-0">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoDevEnabled}
+            onClick={() => {
+              setAutoDevEnabled(v => {
+                const next = !v;
+                addLog(next ? '자동 개발 모드 ON' : '자동 개발 모드 OFF');
+                return next;
+              });
+            }}
+            title={autoDevEnabled
+              ? '자동 개발 ON — idle 에이전트를 주기적으로 깨워 작업을 시킨다'
+              : '자동 개발 OFF — 수동 지시/버튼으로만 에이전트가 움직인다'}
+            className={`px-3 py-2 text-[10px] font-bold uppercase tracking-wider border-2 whitespace-nowrap transition-colors ${
+              autoDevEnabled
+                ? 'bg-[var(--pixel-accent)] text-black border-[var(--pixel-accent)]'
+                : 'bg-black/40 text-[var(--pixel-accent)] border-[var(--pixel-border)] hover:border-[var(--pixel-accent)]'
+            }`}
+          >
+            자동 개발 {autoDevEnabled ? 'ON' : 'OFF'}
+          </button>
+          <span className="text-[10px] font-bold text-[var(--pixel-accent)] uppercase tracking-wider whitespace-nowrap">
+            리더 지시 →
+          </span>
+          <input
+            type="text"
+            value={commandInput}
+            onChange={e => setCommandInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); sendLeaderCommand(); } }}
+            disabled={commandBusy}
+            placeholder={commandBusy ? '리더가 응답 중...' : '예: 로그인 기능 개발 계획 세워줘'}
+            className="flex-1 bg-black/40 border-2 border-[var(--pixel-border)] px-3 py-2 text-[12px] text-white focus:outline-none focus:border-[var(--pixel-accent)] transition-colors disabled:opacity-50"
+          />
+          <button
+            onClick={sendLeaderCommand}
+            disabled={commandBusy || !commandInput.trim()}
+            className="px-4 py-2 bg-[var(--pixel-accent)] text-black text-[11px] font-bold uppercase border-b-2 border-[#0099cc] hover:brightness-110 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {commandBusy ? '대기...' : '지시'}
+          </button>
+        </div>
+
+        {/* Bottom Log */}
+        <footer className="flex-1 min-h-0 bg-black border-t-4 border-[var(--pixel-border)] p-3 font-mono text-[11px] text-[#00ff00] overflow-hidden flex flex-col gap-2">
+          <LogFilter logs={logs} query={logQuery} onQueryChange={setLogQuery} />
+          <div className="flex-1 overflow-y-auto">
+            {logs.length === 0 && <div className="opacity-50 italic">시스템 준비 완료. 로그 대기 중...</div>}
+            {visibleLogs.map(log => (
+              <div key={log.id} className="mb-1 flex gap-3">
+                <span className="text-[#888]">[{log.time}]</span>
+                <span className="text-[var(--pixel-accent)] font-bold">
+                  {log.from}{log.to ? <span className="text-[#ffa500]"> → {log.to}</span> : null}:
+                </span>
+                <span>{log.text}</span>
+              </div>
+            ))}
           </div>
-        ))}
-      </footer>
+        </footer>
+      </div>
 
       {/* Modals */}
       <AnimatePresence>
@@ -700,6 +1789,50 @@ export default function App() {
         {showProjectModal && (
           <Modal title="Start New Project" onClose={() => setShowProjectModal(false)}>
             <ProjectForm onCreate={createProject} />
+          </Modal>
+        )}
+        {manageMembersProjectId && (() => {
+          const project = gameState.projects.find(p => p.id === manageMembersProjectId);
+          if (!project) return null;
+          return (
+            <Modal title={`${project.name} 팀원 관리`} onClose={() => setManageMembersProjectId(null)}>
+              <MembersForm
+                project={project}
+                agents={gameState.agents}
+                translateRole={translateRole}
+                onInvite={(agentId) => inviteAgentToProject(project.id, agentId)}
+                onRemove={(agentId) => removeAgentFromProject(project.id, agentId)}
+              />
+            </Modal>
+          );
+        })()}
+        {confirmDeleteProject && (
+          <Modal title="프로젝트 삭제 확인" onClose={() => setConfirmDeleteProject(null)}>
+            <div className="space-y-4">
+              <p className="text-sm text-white/80">
+                <span className="text-[var(--pixel-accent)] font-bold">{confirmDeleteProject.name}</span> 프로젝트를 정말 삭제하시겠습니까?
+              </p>
+              <p className="text-[11px] text-red-400">
+                프로젝트에 속한 모든 파일, 의존성, 작업이 함께 삭제됩니다. (팀원 본인은 유지)
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    deleteProject(confirmDeleteProject.id, confirmDeleteProject.name);
+                    setConfirmDeleteProject(null);
+                  }}
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white py-3 font-bold uppercase border-b-4 border-red-800"
+                >
+                  삭제하기
+                </button>
+                <button
+                  onClick={() => setConfirmDeleteProject(null)}
+                  className="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-3 font-bold uppercase border-b-4 border-gray-800"
+                >
+                  취소
+                </button>
+              </div>
+            </div>
           </Modal>
         )}
         {confirmFire && (
@@ -731,17 +1864,29 @@ export default function App() {
   );
 }
 
-function AgentSprite({ agent, onClick }: { agent: Agent; onClick: () => void | Promise<void>; key?: string }) {
+function AgentSprite({ agent, x, y, targetName, onClick, logs, workingFileName, translateStatus, highlighted }: { agent: Agent; x: number; y: number; targetName?: string; onClick: () => void | Promise<void>; logs?: AgentLogLine[]; workingFileName?: string; translateStatus?: (status: string) => string; highlighted?: boolean; key?: string }) {
   return (
     <motion.div
       key={agent.id}
-      initial={{ x: agent.x, y: agent.y, opacity: 0 }}
-      animate={{ x: agent.x, y: agent.y, opacity: 1 }}
-      transition={{ type: 'spring', stiffness: 100, damping: 20 }}
-      className="absolute cursor-pointer group"
-      style={{ left: 0, top: 0 }}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ opacity: { duration: 0.3 } }}
+      className="absolute cursor-pointer group z-40"
+      style={{ left: 0, top: 0, transform: `translate3d(${x}px, ${y}px, 0)`, willChange: 'transform' }}
       onClick={onClick}
     >
+      {/* Persistent verbose context window above the head */}
+      {logs && translateStatus && (
+        <AgentContextBubble
+          agent={agent}
+          logs={logs}
+          workingFileName={workingFileName}
+          translateStatus={translateStatus}
+          highlighted={highlighted}
+        />
+      )}
+
       {/* Dialogue Bubble */}
       <AnimatePresence>
         {agent.lastMessage && (
@@ -749,8 +1894,11 @@ function AgentSprite({ agent, onClick }: { agent: Agent; onClick: () => void | P
             initial={{ opacity: 0, y: 10, scale: 0.8 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, scale: 0.8 }}
-            className="absolute bottom-[60px] left-[-50px] w-[160px] bg-white text-black p-2 border-2 border-black text-[11px] leading-tight z-20"
+            className="absolute bottom-[180px] left-[-60px] w-[180px] bg-white text-black p-2 border-2 border-black text-[11px] leading-tight z-40"
           >
+            {targetName && (
+              <div className="text-[9px] font-bold text-[#cc6600] mb-1 uppercase">→ {targetName}</div>
+            )}
             {agent.lastMessage}
             <div className="absolute bottom-[-10px] left-1/2 -translate-x-1/2 border-x-[5px] border-x-transparent border-t-[5px] border-t-white" />
           </motion.div>
@@ -759,15 +1907,25 @@ function AgentSprite({ agent, onClick }: { agent: Agent; onClick: () => void | P
 
       {/* Character Sprite */}
       <div className="relative">
-        <div 
-          className={`w-[48px] h-[48px] border-[3px] border-black flex items-center justify-center text-2xl relative ${agent.role === 'Leader' ? 'bg-[var(--pixel-accent)] shadow-[0_0_15px_var(--pixel-accent)]' : 'bg-[var(--pixel-text)]'}`}
+        <div
+          className="w-[48px] h-[48px] border-[3px] border-black flex items-center justify-center text-2xl relative"
+          style={{
+            backgroundColor: getRoleAccent(agent.role),
+            boxShadow: getRoleGlow(
+              agent.role,
+              agent.role === 'Leader' ? 'leader' : agent.workingOnFileId ? 'active' : 'idle',
+            ),
+          }}
         >
           {/* Pixel Eyes */}
           <div className="absolute top-2 left-2 w-[10px] h-[10px] bg-white shadow-[18px_0_white]" />
           <span className="relative z-10">{getAgentEmoji(agent.role)}</span>
         </div>
         <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 whitespace-nowrap">
-          <span className="text-[10px] font-bold bg-black/70 px-2 py-0.5 border border-[var(--pixel-border)]">
+          <span
+            className="text-[10px] font-bold bg-black/70 px-2 py-0.5 border"
+            style={{ borderColor: getRoleAccent(agent.role) }}
+          >
             {agent.name}
           </span>
         </div>
@@ -777,24 +1935,37 @@ function AgentSprite({ agent, onClick }: { agent: Agent; onClick: () => void | P
 }
 
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  // QA: 키보드 사용자와 접근성 도구를 위해 ESC로 닫을 수 있게 한다.
+  // 현재 열린 모달 하나에만 바인딩되도록 언마운트 시 반드시 해제.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const titleId = useMemo(() => `modal-title-${uuidv4()}`, []);
+  const localizedTitle = localizeModalTitle(title);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <motion.div 
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         onClick={onClose}
-        className="absolute inset-0 bg-black/80 backdrop-blur-sm" 
+        className="absolute inset-0 bg-black/80 backdrop-blur-sm"
       />
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, scale: 0.9, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.9, y: 20 }}
         className="relative w-full max-w-md bg-[var(--pixel-card)] border-4 border-[var(--pixel-border)] shadow-2xl overflow-hidden"
       >
         <div className="p-4 border-b-4 border-[var(--pixel-border)] flex justify-between items-center bg-[#0f3460]">
-          <h3 className="text-lg font-bold text-[var(--pixel-accent)] uppercase tracking-wider">{title === 'Hire New Agent' ? '새 에이전트 고용' : title === 'Start New Project' ? '새 프로젝트 시작' : title}</h3>
-          <button onClick={onClose} className="text-[var(--pixel-white)] hover:text-[var(--pixel-accent)] transition-colors">
+          <h3 id={titleId} className="text-lg font-bold text-[var(--pixel-accent)] uppercase tracking-wider">{localizedTitle}</h3>
+          <button onClick={onClose} aria-label="모달 닫기" className="text-[var(--pixel-white)] hover:text-[var(--pixel-accent)] transition-colors">
             <Plus className="rotate-45" />
           </button>
         </div>
@@ -806,15 +1977,23 @@ function Modal({ title, children, onClose }: { title: string; children: React.Re
   );
 }
 
-function HireForm({ onHire }: { onHire: (name: string, role: AgentRole, sprite: string) => void }) {
+function HireForm({ onHire }: { onHire: (name: string, role: AgentRole, sprite: string, persona?: string) => void }) {
   const [name, setName] = useState('');
   const [role, setRole] = useState<AgentRole>('Developer');
+  const [persona, setPersona] = useState('');
+
+  const personaPresets: { label: string; text: string }[] = [
+    { label: '시니어 개발자', text: '10년 이상 경력의 시니어 개발자. 코드 품질과 테스트에 집착하며, 단순함을 선호함.' },
+    { label: '주니어 디자이너', text: '실무 3개월차 UI 디자이너. 최신 트렌드에 밝고 사용자 경험을 중시함. 질문을 많이 함.' },
+    { label: '냉철한 QA', text: '디테일에 강하고 엣지 케이스를 놓치지 않는 QA 엔지니어. 직설적인 말투.' },
+    { label: '카리스마 리더', text: '비전이 뚜렷하고 결단력 있는 팀 리더. 팀원들을 격려하며 명확한 방향을 제시함.' },
+  ];
 
   return (
     <div className="space-y-4">
       <div>
         <label className="block text-[10px] font-bold text-[var(--pixel-accent)] uppercase mb-2">에이전트 이름</label>
-        <input 
+        <input
           value={name}
           onChange={e => setName(e.target.value)}
           className="w-full bg-black/30 border-2 border-[var(--pixel-border)] px-4 py-2 text-sm focus:outline-none focus:border-[var(--pixel-accent)] transition-colors text-white"
@@ -822,8 +2001,8 @@ function HireForm({ onHire }: { onHire: (name: string, role: AgentRole, sprite: 
         />
       </div>
       <div>
-        <label className="block text-[10px] font-bold text-[var(--pixel-accent)] uppercase mb-2">역할 선택</label>
-        <select 
+        <label className="block text-[10px] font-bold text-[var(--pixel-accent)] uppercase mb-2">역할 (아바타/구분용)</label>
+        <select
           value={role}
           onChange={e => setRole(e.target.value as AgentRole)}
           className="w-full bg-black/30 border-2 border-[var(--pixel-border)] px-4 py-2 text-sm focus:outline-none focus:border-[var(--pixel-accent)] transition-colors text-white"
@@ -835,9 +2014,34 @@ function HireForm({ onHire }: { onHire: (name: string, role: AgentRole, sprite: 
           <option value="Researcher">연구원</option>
         </select>
       </div>
-      <button 
-        onClick={() => onHire(name, role, 'char1')}
-        className="w-full bg-[var(--pixel-accent)] text-black py-3 font-bold uppercase border-b-4 border-[#0099cc] mt-4"
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <label className="block text-[10px] font-bold text-[var(--pixel-accent)] uppercase">페르소나 (성격·말투·전문성)</label>
+          <span className="text-[9px] text-white/40">AI 프롬프트에 반영됨</span>
+        </div>
+        <textarea
+          value={persona}
+          onChange={e => setPersona(e.target.value)}
+          className="w-full bg-black/30 border-2 border-[var(--pixel-border)] px-4 py-2 text-[12px] focus:outline-none focus:border-[var(--pixel-accent)] transition-colors h-28 resize-none text-white"
+          placeholder="예: 완벽주의 시니어 개발자. TDD를 선호하며 불필요한 추상화를 경계함. 간결하고 직설적인 말투."
+        />
+        <div className="flex flex-wrap gap-1 mt-2">
+          {personaPresets.map(p => (
+            <button
+              key={p.label}
+              type="button"
+              onClick={() => setPersona(p.text)}
+              className="text-[10px] px-2 py-1 bg-black/40 border border-[var(--pixel-border)] hover:border-[var(--pixel-accent)] hover:text-[var(--pixel-accent)] transition-colors"
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <button
+        onClick={() => onHire(name, role, 'char1', persona)}
+        disabled={!name.trim()}
+        className="w-full bg-[var(--pixel-accent)] text-black py-3 font-bold uppercase border-b-4 border-[#0099cc] mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
       >
         고용 확정
       </button>
@@ -889,15 +2093,225 @@ function ProjectForm({ onCreate }: { onCreate: (name: string, description: strin
   );
 }
 
-function getAgentColor(role: AgentRole) {
-  switch (role) {
-    case 'Leader': return 'from-yellow-400 to-orange-500';
-    case 'Developer': return 'from-blue-400 to-indigo-500';
-    case 'QA': return 'from-red-400 to-pink-500';
-    case 'Designer': return 'from-purple-400 to-fuchsia-500';
-    case 'Researcher': return 'from-green-400 to-emerald-500';
-    default: return 'from-gray-400 to-gray-500';
+function MembersForm({
+  project,
+  agents,
+  translateRole,
+  onInvite,
+  onRemove,
+}: {
+  project: Project;
+  agents: Agent[];
+  translateRole: (role: string) => string;
+  onInvite: (agentId: string) => void | Promise<void>;
+  onRemove: (agentId: string) => void | Promise<void>;
+}) {
+  const members = agents.filter(a => project.agents.includes(a.id));
+  const candidates = agents.filter(a => !project.agents.includes(a.id));
+
+  return (
+    <div className="space-y-5 max-h-[60vh] overflow-y-auto">
+      <div>
+        <div className="text-[10px] font-bold text-[var(--pixel-accent)] uppercase mb-2 tracking-wider">
+          현재 팀원 ({members.length})
+        </div>
+        {members.length === 0 && (
+          <p className="text-[11px] text-white/50 italic">팀원이 없습니다.</p>
+        )}
+        <div className="space-y-2">
+          {members.map(agent => (
+            <div key={agent.id} className="flex items-center justify-between bg-black/30 border-2 border-[var(--pixel-border)] p-2">
+              <div className="flex items-center gap-3">
+                <div
+                  className="w-8 h-8 border-2 border-black flex items-center justify-center text-xs"
+                  style={{ backgroundColor: getRoleAccent(agent.role) }}
+                >
+                  {getAgentEmoji(agent.role)}
+                </div>
+                <div>
+                  <div className="text-[12px] font-bold text-[var(--pixel-accent)]">{agent.name}</div>
+                  <div className="text-[10px] opacity-70">{translateRole(agent.role)}</div>
+                </div>
+              </div>
+              <button
+                onClick={() => onRemove(agent.id)}
+                disabled={agent.role === 'Leader' && members.filter(m => m.role === 'Leader').length === 1}
+                className="px-3 py-1 text-[10px] font-bold uppercase bg-red-900/40 border-2 border-red-900 hover:bg-red-900 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                title={agent.role === 'Leader' ? '유일한 리더는 제외할 수 없습니다' : '프로젝트에서 제외'}
+              >
+                제외
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div className="text-[10px] font-bold text-[var(--pixel-accent)] uppercase mb-2 tracking-wider">
+          초대 가능 ({candidates.length})
+        </div>
+        {candidates.length === 0 && (
+          <p className="text-[11px] text-white/50 italic">모든 직원이 이미 참여 중입니다.</p>
+        )}
+        <div className="space-y-2">
+          {candidates.map(agent => (
+            <div key={agent.id} className="flex items-center justify-between bg-black/20 border-2 border-[var(--pixel-border)] p-2">
+              <div className="flex items-center gap-3">
+                <div
+                  className="w-8 h-8 border-2 border-black flex items-center justify-center text-xs"
+                  style={{ backgroundColor: getRoleAccent(agent.role) }}
+                >
+                  {getAgentEmoji(agent.role)}
+                </div>
+                <div>
+                  <div className="text-[12px] font-bold text-[var(--pixel-accent)]">{agent.name}</div>
+                  <div className="text-[10px] opacity-70">{translateRole(agent.role)}</div>
+                </div>
+              </div>
+              <button
+                onClick={() => onInvite(agent.id)}
+                className="px-3 py-1 text-[10px] font-bold uppercase bg-[var(--pixel-accent)] text-black border-b-2 border-[#0099cc] hover:brightness-110 transition-all"
+              >
+                초대
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function runForceStep(
+  positions: Record<string, { x: number; y: number }>,
+  velocities: Record<string, { x: number; y: number }>,
+  files: CodeFile[],
+  agents: Agent[],
+  deps: CodeDependency[],
+  center: { x: number; y: number }
+) {
+  type Node = { id: string; kind: 'file' | 'agent'; radius: number };
+  const nodes: Node[] = [
+    ...files.map(f => ({ id: f.id, kind: 'file' as const, radius: 18 })),
+    ...agents.map(a => ({ id: a.id, kind: 'agent' as const, radius: 34 })),
+  ];
+  if (nodes.length === 0) return;
+
+  nodes.forEach((n, i) => {
+    if (!positions[n.id]) {
+      const angle = (i / nodes.length) * Math.PI * 2;
+      const r = n.kind === 'file' ? 180 : 240;
+      positions[n.id] = {
+        x: center.x + r * Math.cos(angle) + (Math.random() - 0.5) * 20,
+        y: center.y + r * Math.sin(angle) + (Math.random() - 0.5) * 20,
+      };
+    }
+    if (!velocities[n.id]) velocities[n.id] = { x: 0, y: 0 };
+  });
+
+  const forces: Record<string, { x: number; y: number }> = {};
+  nodes.forEach(n => { forces[n.id] = { x: 0, y: 0 }; });
+
+  // Pairwise repulsion within same kind only — files and agents may overlap
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      if (a.kind !== b.kind) continue;
+      const pa = positions[a.id], pb = positions[b.id];
+      const dx = pb.x - pa.x, dy = pb.y - pa.y;
+      const dist2 = Math.max(dx * dx + dy * dy, 1);
+      const dist = Math.sqrt(dist2);
+      const ux = dx / dist, uy = dy / dist;
+      const minDist = a.radius + b.radius + 8;
+      const overlap = Math.max(0, minDist - dist);
+      const magnitude = 2400 / dist2 + overlap * 0.6;
+      forces[a.id].x -= ux * magnitude;
+      forces[a.id].y -= uy * magnitude;
+      forces[b.id].x += ux * magnitude;
+      forces[b.id].y += uy * magnitude;
+    }
   }
+
+  // Springs along dependencies
+  const REST = 150, K = 0.02;
+  deps.forEach(d => {
+    const pa = positions[d.from], pb = positions[d.to];
+    if (!pa || !pb) return;
+    const dx = pb.x - pa.x, dy = pb.y - pa.y;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    const f = (dist - REST) * K;
+    const ux = dx / dist, uy = dy / dist;
+    forces[d.from].x += ux * f;
+    forces[d.from].y += uy * f;
+    forces[d.to].x -= ux * f;
+    forces[d.to].y -= uy * f;
+  });
+
+  // Agents orbit their working file / otherwise orbit center
+  agents.forEach(a => {
+    const pa = positions[a.id];
+    const target = a.workingOnFileId ? positions[a.workingOnFileId] : null;
+    if (target) {
+      const dx = target.x - pa.x, dy = target.y - pa.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const desired = 58;
+      const f = (dist - desired) * 0.05;
+      forces[a.id].x += (dx / dist) * f;
+      forces[a.id].y += (dy / dist) * f;
+      // tangential orbit
+      forces[a.id].x += (-dy / dist) * 0.5;
+      forces[a.id].y += (dx / dist) * 0.5;
+    } else {
+      // Pull idle agents toward an orbital ring around the center.
+      // (dx, dy) is the outward vector from center → agent. When the agent is
+      // inside the ring (dist < desired) we push outward; when it's outside we
+      // pull inward. The earlier sign was inverted, which let idle agents drift
+      // off-screen because the "restoring" force actually accelerated them away.
+      const dx = pa.x - center.x, dy = pa.y - center.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const desired = 220;
+      const radial = (desired - dist) * 0.02;
+      forces[a.id].x += (dx / dist) * radial;
+      forces[a.id].y += (dy / dist) * radial;
+      // Gentle tangential drift so the ring visibly rotates instead of freezing.
+      forces[a.id].x += (-dy / dist) * 0.15;
+      forces[a.id].y += (dx / dist) * 0.15;
+    }
+  });
+
+  // Hard safety bound: if any agent has somehow escaped the viewport, snap it
+  // back toward the center. Prevents runaway drift from numerical edge cases.
+  const MAX_RADIUS = 520;
+  agents.forEach(a => {
+    const p = positions[a.id];
+    const dx = p.x - center.x, dy = p.y - center.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > MAX_RADIUS) {
+      const scale = MAX_RADIUS / dist;
+      positions[a.id] = { x: center.x + dx * scale, y: center.y + dy * scale };
+      velocities[a.id] = { x: 0, y: 0 };
+    }
+  });
+
+  // Gentle centering for files
+  files.forEach(f => {
+    const p = positions[f.id];
+    forces[f.id].x += (center.x - p.x) * 0.004;
+    forces[f.id].y += (center.y - p.y) * 0.004;
+  });
+
+  const DAMP = 0.82;
+  const MAX_V = 6;
+  nodes.forEach(n => {
+    const v = velocities[n.id];
+    const f = forces[n.id];
+    let vx = (v.x + f.x) * DAMP;
+    let vy = (v.y + f.y) * DAMP;
+    const speed = Math.sqrt(vx * vx + vy * vy);
+    if (speed > MAX_V) { vx = (vx / speed) * MAX_V; vy = (vy / speed) * MAX_V; }
+    velocities[n.id] = { x: vx, y: vy };
+    positions[n.id] = { x: positions[n.id].x + vx, y: positions[n.id].y + vy };
+  });
 }
 
 function getAgentEmoji(role: AgentRole) {
@@ -909,4 +2323,141 @@ function getAgentEmoji(role: AgentRole) {
     case 'Researcher': return '📚';
     default: return '🤖';
   }
+}
+
+// 헤더 지표 칩의 건강도(green/amber/red)를 퍼센트 값으로 분류한다.
+// 각 칩은 동일한 외형을 갖고 있어 어떤 지표가 위험 구간인지 한눈에 보이지 않던
+// 문제를 좌측 3px 인디케이터 바로 해소한다. null 을 넣으면 "데이터 없음" 톤으로
+// 중립색을 반환해 "0% 위험"과 "아직 측정 전"을 시각적으로 구분한다.
+export function getMetricTierColor(value: number | null): string {
+  if (value === null) return 'var(--pixel-border)';
+  if (value >= 70) return '#7bd389';
+  if (value >= 40) return '#ffd166';
+  return '#ff6b6b';
+}
+
+// Role-based accent colors — chosen for legibility on the dark pixel background
+// and to give each discipline a distinct on-screen identity. Pairs with
+// ROLE_CONTRAST so labels placed on the accent swatch remain readable.
+const ROLE_ACCENT: Record<AgentRole | string, string> = {
+  Leader: 'var(--pixel-accent)',
+  Developer: '#7bd389',
+  QA: '#ff6b6b',
+  Designer: '#ffb86b',
+  Researcher: '#c89bff',
+};
+
+// Text color chosen per accent to keep WCAG AA-ish contrast for small labels
+// stamped directly onto the role swatch (emoji avatars, chips, etc.).
+const ROLE_CONTRAST: Record<AgentRole | string, string> = {
+  Leader: '#0b1a2a',
+  Developer: '#0b2313',
+  QA: '#2a0a0a',
+  Designer: '#2a1605',
+  Researcher: '#1a0b2a',
+};
+
+function getRoleAccent(role: AgentRole | string): string {
+  return ROLE_ACCENT[role] ?? 'var(--pixel-text)';
+}
+
+export function getRoleContrast(role: AgentRole | string): string {
+  return ROLE_CONTRAST[role] ?? '#000';
+}
+
+// 역할별 한 줄 설명: 아바타 hover 툴팁과 스크린리더용 aria-label에서 공통 사용.
+// 한 곳에서 문구를 수정하면 팀원 카드/모달/프로젝트 뷰 전반의 설명이 동기화된다.
+const ROLE_DESCRIPTION: Record<AgentRole | string, string> = {
+  Leader: '팀 방향을 정하고 팀원에게 작업을 분배하는 리더',
+  Developer: '기능을 구현하고 버그를 해결하는 개발자',
+  QA: '엣지 케이스를 찾고 품질을 검증하는 QA',
+  Designer: 'UI/UX 흐름과 시각 디자인을 책임지는 디자이너',
+  Researcher: '기술 조사와 실험 설계를 담당하는 연구원',
+};
+
+export function getRoleDescription(role: AgentRole | string): string {
+  return ROLE_DESCRIPTION[role] ?? '팀 구성원';
+}
+
+// 역할 한국어 단축 라벨: 툴팁·칩·요약 문자열처럼 공간이 좁은 곳에서 쓴다.
+// getRoleDescription 이 한 문장짜리 설명이라면, 여기는 2~4자짜리 호칭이다.
+// 모듈 레벨로 올려두어 렌더마다 객체를 새로 만드는 비용을 피하고, 다른
+// 컴포넌트에서도 App 에 의존하지 않고 import 해서 쓸 수 있게 한다.
+const ROLE_LABEL_KO: Record<AgentRole | string, string> = {
+  Leader: '리더',
+  Developer: '개발자',
+  QA: '품질 관리',
+  Designer: '디자이너',
+  Researcher: '연구원',
+};
+
+export function getRoleLabel(role: AgentRole | string): string {
+  return ROLE_LABEL_KO[role] ?? role;
+}
+
+// 에이전트/태스크 상태의 한국어 라벨. 상태 값은 여러 도메인에서 재사용되므로
+// (에이전트: idle/working/meeting/thinking, 태스크: pending/in-progress/completed,
+// 프로젝트: on-hold) 한 맵에 묶어 단일 출처로 관리한다.
+const STATUS_LABEL_KO: Record<string, string> = {
+  idle: '대기 중',
+  active: '활성',
+  working: '작업 중',
+  meeting: '회의 중',
+  thinking: '사고 중',
+  pending: '대기',
+  'in-progress': '진행 중',
+  completed: '완료',
+  'on-hold': '보류',
+};
+
+export function getStatusLabel(status: string): string {
+  return STATUS_LABEL_KO[status] ?? status;
+}
+
+// Consistent halo used on sprites/cards to signal "high-rank" or "currently-active"
+// agents without introducing a second color token. Kept subtle: leaders get a
+// persistent glow, active workers get a softer pulse, idle agents get nothing.
+export function getRoleGlow(role: AgentRole | string, state: 'leader' | 'active' | 'idle' = 'idle'): string | undefined {
+  if (state === 'idle') return undefined;
+  const accent = getRoleAccent(role);
+  return state === 'leader' ? `0 0 15px ${accent}` : `0 0 8px ${accent}`;
+}
+
+// Modal titles travel in from legacy English literals; centralize the Korean
+// display mapping here so designers can rename labels without hunting through
+// the JSX. Unknown titles fall through unchanged.
+const MODAL_TITLE_KO: Record<string, string> = {
+  'Hire New Agent': '새 에이전트 고용',
+  'Start New Project': '새 프로젝트 시작',
+};
+
+export function localizeModalTitle(title: string): string {
+  return MODAL_TITLE_KO[title] ?? title;
+}
+
+// 파일 타입별 색상 팔레트: 의존성 그래프에서 component/service/util/style 을
+// 한눈에 구분할 수 있도록 노드 색을 차별화한다. 어두운 배경 위에서도
+// 도트(점)가 충분히 튀도록 채도를 조금 높여 둔다.
+const FILE_TYPE_ACCENT: Record<NonNullable<CodeFile['type']> | string, string> = {
+  component: '#4ecdc4', // 민트: UI 컴포넌트
+  service: '#ffd166',   // 앰버: 네트워크/비즈니스 로직
+  util: '#a0e7a0',      // 라임: 공용 유틸
+  style: '#ff9ecb',     // 핑크: 스타일/테마
+};
+
+export function getFileTypeAccent(type?: CodeFile['type'] | string): string {
+  if (!type) return 'var(--pixel-accent)';
+  return FILE_TYPE_ACCENT[type] ?? 'var(--pixel-accent)';
+}
+
+const FILE_TYPE_LABEL_KO: Record<NonNullable<CodeFile['type']> | string, string> = {
+  component: '컴포넌트',
+  service: '서비스',
+  util: '유틸',
+  style: '스타일',
+};
+
+export function translateFileType(type?: CodeFile['type'] | string): string {
+  if (!type) return '파일';
+  return FILE_TYPE_LABEL_KO[type] ?? type;
 }
