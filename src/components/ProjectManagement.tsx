@@ -4,6 +4,7 @@ import type { SourceIntegration, ManagedProject, SourceProvider, UserPreferences
 import { USER_PREFERENCES_KEY, BRANCH_STRATEGY_VALUES } from '../types';
 import { GitAutomationPanel, DEFAULT_AUTOMATION, type GitAutomationSettings, type GitFlowLevel } from './GitAutomationPanel';
 import { GitCredentialsSection } from './GitCredentialsSection';
+import { SharedGoalForm } from './SharedGoalForm';
 import { startGitAutomationScheduler } from '../utils/gitAutomation';
 
 // UX: PR 대상 라디오 선택은 "매번 다시 고르기"보다 "한 번 정해두면 그대로"가 실수를
@@ -1218,6 +1219,15 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
         <span className="sr-only" role="status" aria-live="polite">
           {query.trim() ? `검색 결과 ${visibleManaged.length}개` : ''}
         </span>
+
+        {/* 공동 목표(SharedGoal) 입력 폼: 프로젝트 관리 메뉴에 진입한 순간부터
+            prTarget 등록 여부와 무관하게 항상 렌더되어야 한다. 자동 개발 ON 의
+            전제조건이 "활성 공동 목표 1건" 이기 때문(서버 taskRunner 가드 + App
+            sharedGoalPromptOpen 계약). 폼 내부는 사용자가 [목표 저장] 버튼을
+            명시적으로 누를 때에만 POST 하므로, GET 이 아직 돌아오지 않은 시점
+            에도 사용자의 편집이 서버 응답에 덮이지 않는다 — GitAutomationPanel
+            1587ea9 하이드레이션 레이스와 동일 교훈. */}
+        <SharedGoalForm projectId={selectedProjectId} onLog={onLog} />
 
         {prTargetManaged.length > 0 && (
           <ResearchInsights

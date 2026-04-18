@@ -1,0 +1,239 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 820" font-family="ui-monospace, 'Segoe UI Mono', 'Noto Sans Mono CJK KR', monospace">
+  <!-- backdrop (rgba(10,10,25,0.72) + blur hint) -->
+  <rect width="1280" height="820" fill="#0a0a19" opacity="0.95"/>
+  <rect width="1280" height="820" fill="url(#bg-grain)" opacity="0.35"/>
+
+  <defs>
+    <style>
+      .surface-border { stroke: rgba(127, 212, 255, 0.35); stroke-width: 2; fill: #0f1b3b; }
+      .section-line { stroke: rgba(255,255,255,0.12); stroke-width: 1; }
+      .field-border { stroke: rgba(255,255,255,0.18); stroke-width: 1.5; fill: rgba(0,0,0,0.30); }
+      .field-amber  { stroke: #fbbf24; stroke-width: 1.5; fill: rgba(251,191,36,0.08); }
+      .banner-bg    { fill: rgba(127,212,255,0.10); }
+      .banner-strip { fill: #7fd4ff; }
+      .primary-disabled { fill: rgba(52,211,153,0.25); stroke: rgba(52,211,153,0.45); stroke-width: 1.5; }
+      .primary-active   { fill: #34d399; stroke: #34d399; stroke-width: 1.5; }
+      .secondary        { fill: transparent; stroke: rgba(255,255,255,0.22); stroke-width: 1.5; }
+      .cancel-fg   { fill: rgba(255,255,255,0.80); }
+      .confirm-fg  { fill: #052e1b; }
+      .header-fg   { fill: #ffffff; }
+      .subtle-fg   { fill: rgba(255,255,255,0.65); }
+      .placeholder { fill: rgba(255,255,255,0.42); font-style: italic; }
+      .value-fg    { fill: #ffffff; }
+      .hint-fg     { fill: rgba(255,255,255,0.55); }
+      .counter-fg  { fill: rgba(255,255,255,0.55); }
+      .emerald     { fill: #34d399; }
+      .amber       { fill: #fbbf24; }
+      .red         { fill: #f87171; }
+      .cyan        { fill: #7fd4ff; }
+      .caption     { fill: rgba(255,255,255,0.70); }
+      .diff-tag    { fill: #fbbf24; }
+
+      .title    { font-size: 14px; font-weight: 700; letter-spacing: 0.04em; }
+      .h1       { font-size: 15px; font-weight: 700; }
+      .h2       { font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+      .label    { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; }
+      .field-v  { font-size: 12px; }
+      .body     { font-size: 11px; }
+      .tiny     { font-size: 10px; }
+      .xtiny    { font-size: 9px; letter-spacing: 0.03em; }
+    </style>
+    <pattern id="bg-grain" width="24" height="24" patternUnits="userSpaceOnUse">
+      <rect width="24" height="24" fill="transparent"/>
+      <circle cx="4" cy="4" r="0.6" fill="rgba(127,212,255,0.05)"/>
+    </pattern>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="12"/>
+      <feOffset dx="0" dy="18" result="offsetblur"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.55"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrow-cyan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#7fd4ff"/>
+    </marker>
+  </defs>
+
+  <!-- file header -->
+  <text x="32" y="34" class="cyan title">SharedGoalModal · 폼 상태 대비 시안 (empty-create vs editing)</text>
+  <text x="32" y="54" class="subtle-fg body">2026-04-19 · tests/shared-goal-modal-mockup.md §2B 동반 · 토큰 --shared-goal-modal-* 직접 참조 · 폼 렌더 누락 회귀 재발 방지용</text>
+
+  <!-- ─────────── LEFT : empty-create ─────────── -->
+  <g transform="translate(32, 88)" filter="url(#shadow)">
+    <rect x="0" y="0" width="600" height="680" rx="10" ry="10" class="surface-border"/>
+
+    <!-- state tag -->
+    <rect x="16" y="16" width="160" height="22" rx="4" ry="4" fill="rgba(127,212,255,0.12)" stroke="#7fd4ff" stroke-width="1"/>
+    <text x="26" y="31" class="cyan tiny">◇ STATE · empty-create</text>
+
+    <!-- header -->
+    <g transform="translate(0, 56)">
+      <text x="24" y="22" class="header-fg h1">공동 목표 등록이 필요합니다</text>
+      <text x="24" y="44" class="subtle-fg body">자동 개발 ON 은 리더가 동료들에게 분배할 목표가 있어야 시작됩니다.</text>
+      <rect x="548" y="6" width="36" height="22" rx="4" class="secondary"/>
+      <text x="554" y="21" class="cancel-fg tiny">Esc ×</text>
+      <line x1="16" y1="64" x2="584" y2="64" class="section-line"/>
+    </g>
+
+    <!-- body -->
+    <g transform="translate(0, 136)">
+      <!-- empty-state banner (72px fixed) -->
+      <rect x="16" y="0" width="568" height="72" rx="4" ry="4" class="banner-bg"/>
+      <rect x="16" y="0" width="2" height="72" class="banner-strip"/>
+      <text x="30" y="22" class="header-fg body" font-weight="700">📝 아직 공동 목표가 없습니다</text>
+      <text x="30" y="42" class="subtle-fg body">아래 4개 항목을 채우면 저장 + 자동 개발 시작 준비가</text>
+      <text x="30" y="58" class="subtle-fg body">완료됩니다. (role="status" aria-live="polite" · 1회 낭독)</text>
+      <text x="540" y="14" class="cyan xtiny" text-anchor="end">72px 고정</text>
+
+      <!-- title field -->
+      <g transform="translate(0, 92)">
+        <text x="24" y="14" class="subtle-fg label">목표 제목 *</text>
+        <text x="584" y="14" class="counter-fg tiny" text-anchor="end">0 / 80</text>
+        <rect x="24" y="22" width="560" height="30" rx="3" ry="3" class="field-border"/>
+        <text x="34" y="42" class="placeholder field-v">예: 결제 모듈 보안 강화</text>
+        <text x="34" y="66" class="hint-fg tiny">리더가 동료들에게 1문장으로 분배할 핵심 제목</text>
+      </g>
+
+      <!-- description field -->
+      <g transform="translate(0, 184)">
+        <text x="24" y="14" class="subtle-fg label">상세 설명 *</text>
+        <text x="584" y="14" class="counter-fg tiny" text-anchor="end">0 / 500</text>
+        <rect x="24" y="22" width="560" height="58" rx="3" ry="3" class="field-border"/>
+        <text x="34" y="42" class="placeholder field-v">예: 토큰 검증·AES 암호화·PCI 감사로그 추가.</text>
+        <text x="34" y="58" class="placeholder field-v">범위·완료 기준을 적어주세요.</text>
+        <text x="34" y="94" class="hint-fg tiny">20–500자. 범위와 '완료 판단 기준' 을 함께 써주세요</text>
+      </g>
+
+      <!-- priority + due date row -->
+      <g transform="translate(0, 304)">
+        <text x="24" y="14" class="subtle-fg label">우선순위 *</text>
+        <circle cx="40" cy="36" r="6" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1.5"/>
+        <text x="54" y="40" class="subtle-fg body">P1</text>
+        <circle cx="90" cy="36" r="6" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1.5"/>
+        <text x="104" y="40" class="subtle-fg body">P2</text>
+        <circle cx="140" cy="36" r="6" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1.5"/>
+        <text x="154" y="40" class="subtle-fg body">P3</text>
+        <text x="34" y="64" class="hint-fg tiny">리더가 분배할 때 우선순위 태그로 사용</text>
+
+        <text x="300" y="14" class="subtle-fg label">기한</text>
+        <rect x="300" y="22" width="180" height="28" rx="3" ry="3" class="field-border"/>
+        <text x="310" y="41" class="placeholder field-v">연-월-일</text>
+        <text x="490" y="41" class="subtle-fg tiny">📅</text>
+        <text x="300" y="64" class="hint-fg tiny">선택 · 비워두면 "기한 없음" 으로 저장</text>
+      </g>
+
+      <!-- leader preview (placeholder variant) -->
+      <g transform="translate(0, 400)">
+        <rect x="24" y="0" width="560" height="56" rx="4" ry="4" fill="rgba(52,211,153,0.06)" stroke="rgba(52,211,153,0.35)" stroke-width="1" stroke-dasharray="4 3"/>
+        <text x="38" y="22" class="emerald body">🤖 리더 분배 미리보기</text>
+        <text x="38" y="42" class="hint-fg body">4명에게 분배 예정 · 제목을 먼저 입력해주세요</text>
+      </g>
+    </g>
+
+    <!-- footer -->
+    <g transform="translate(0, 600)">
+      <line x1="16" y1="0" x2="584" y2="0" class="section-line"/>
+      <text x="24" y="30" class="hint-fg tiny">💡 저장 직후 자동 개발이 ON 으로 전환되고 리더가 즉시 분배를 시작합니다.</text>
+      <rect x="360" y="44" width="66" height="30" rx="4" ry="4" class="secondary"/>
+      <text x="379" y="64" class="cancel-fg body">취소</text>
+      <rect x="436" y="44" width="148" height="30" rx="4" ry="4" class="primary-disabled"/>
+      <text x="449" y="64" class="confirm-fg body">💾 목표 저장 후 시작</text>
+      <text x="584" y="90" class="hint-fg xtiny" text-anchor="end">primary = disabled (모든 필수 필드 공란)</text>
+    </g>
+  </g>
+
+  <!-- ─────────── RIGHT : editing ─────────── -->
+  <g transform="translate(664, 88)" filter="url(#shadow)">
+    <rect x="0" y="0" width="600" height="680" rx="10" ry="10" class="surface-border"/>
+
+    <rect x="16" y="16" width="140" height="22" rx="4" ry="4" fill="rgba(251,191,36,0.12)" stroke="#fbbf24" stroke-width="1"/>
+    <text x="26" y="31" class="amber tiny">✎ STATE · editing</text>
+
+    <!-- header (same) -->
+    <g transform="translate(0, 56)">
+      <text x="24" y="22" class="header-fg h1">공동 목표 등록이 필요합니다</text>
+      <text x="24" y="44" class="subtle-fg body">자동 개발 ON 은 리더가 동료들에게 분배할 목표가 있어야 시작됩니다.</text>
+      <rect x="548" y="6" width="36" height="22" rx="4" class="secondary"/>
+      <text x="554" y="21" class="cancel-fg tiny">Esc ×</text>
+      <line x1="16" y1="64" x2="584" y2="64" class="section-line"/>
+    </g>
+
+    <!-- body -->
+    <g transform="translate(0, 136)">
+      <!-- banner slot : 128ms fade-out; placeholder boundary to show height is preserved -->
+      <rect x="16" y="0" width="568" height="72" rx="4" ry="4" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.10)" stroke-width="1" stroke-dasharray="3 3"/>
+      <text x="300" y="30" class="hint-fg body" text-anchor="middle">(빈 상태 배너 자리 — 128ms 페이드아웃 후 비움)</text>
+      <text x="300" y="50" class="amber xtiny" text-anchor="middle">⟲ layout shift 0 · BODY 높이 360px 고정</text>
+      <text x="540" y="14" class="amber xtiny" text-anchor="end">72px 유지</text>
+
+      <!-- title field (amber accent) -->
+      <g transform="translate(0, 92)">
+        <text x="24" y="14" class="subtle-fg label">목표 제목 *</text>
+        <text x="584" y="14" class="counter-fg tiny" text-anchor="end">11 / 80</text>
+        <rect x="24" y="22" width="560" height="30" rx="3" ry="3" class="field-amber"/>
+        <rect x="24" y="22" width="2" height="30" class="amber"/>
+        <text x="34" y="42" class="value-fg field-v">결제 모듈 보안 강화</text>
+        <text x="34" y="66" class="hint-fg tiny">리더가 동료들에게 1문장으로 분배할 핵심 제목</text>
+      </g>
+
+      <!-- description field (amber accent) -->
+      <g transform="translate(0, 184)">
+        <text x="24" y="14" class="subtle-fg label">상세 설명 *</text>
+        <text x="584" y="14" class="counter-fg tiny" text-anchor="end">76 / 500</text>
+        <rect x="24" y="22" width="560" height="58" rx="3" ry="3" class="field-amber"/>
+        <rect x="24" y="22" width="2" height="58" class="amber"/>
+        <text x="34" y="42" class="value-fg field-v">토큰 검증·AES 암호화·PCI 감사로그 추가.</text>
+        <text x="34" y="58" class="value-fg field-v">프론트·백엔드·테스트 범위 포함 · ▌</text>
+        <text x="34" y="94" class="hint-fg tiny">20–500자. 범위와 '완료 판단 기준' 을 함께 써주세요</text>
+      </g>
+
+      <!-- priority + due date row (filled) -->
+      <g transform="translate(0, 304)">
+        <text x="24" y="14" class="subtle-fg label">우선순위 *</text>
+        <circle cx="40" cy="36" r="6" fill="#f87171"/>
+        <text x="54" y="40" class="red body" font-weight="700">P1</text>
+        <circle cx="90" cy="36" r="6" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1.5"/>
+        <text x="104" y="40" class="subtle-fg body">P2</text>
+        <circle cx="140" cy="36" r="6" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1.5"/>
+        <text x="154" y="40" class="subtle-fg body">P3</text>
+        <text x="34" y="64" class="hint-fg tiny">리더가 분배할 때 우선순위 태그로 사용</text>
+
+        <text x="300" y="14" class="subtle-fg label">기한</text>
+        <rect x="300" y="22" width="180" height="28" rx="3" ry="3" class="field-border"/>
+        <text x="310" y="41" class="value-fg field-v">2026-04-25</text>
+        <text x="490" y="41" class="cyan tiny">📅</text>
+        <text x="300" y="64" class="hint-fg tiny">D-6 · 오늘 이후 유효</text>
+      </g>
+
+      <!-- leader preview (active) -->
+      <g transform="translate(0, 400)">
+        <rect x="24" y="0" width="560" height="56" rx="4" ry="4" fill="rgba(52,211,153,0.14)" stroke="#34d399" stroke-width="1.5"/>
+        <text x="38" y="22" class="emerald body" font-weight="700">🤖 4명 → "결제 모듈 보안 강화" (P1, ~4/25)</text>
+        <text x="38" y="42" class="value-fg body">· Thanos (리더)  · Aurora  · Nova  · Orion</text>
+      </g>
+    </g>
+
+    <!-- footer (primary active) -->
+    <g transform="translate(0, 600)">
+      <line x1="16" y1="0" x2="584" y2="0" class="section-line"/>
+      <text x="24" y="30" class="hint-fg tiny">💡 저장 직후 자동 개발이 ON 으로 전환되고 리더가 즉시 분배를 시작합니다.</text>
+      <rect x="360" y="44" width="66" height="30" rx="4" ry="4" class="secondary"/>
+      <text x="379" y="64" class="cancel-fg body">취소</text>
+      <rect x="436" y="44" width="148" height="30" rx="4" ry="4" class="primary-active"/>
+      <text x="449" y="64" class="confirm-fg body" font-weight="700">💾 목표 저장 후 시작</text>
+      <text x="584" y="90" class="emerald xtiny" text-anchor="end">primary = active · ⌘/Ctrl + Enter</text>
+    </g>
+  </g>
+
+  <!-- ─────────── bottom legend / diff ─────────── -->
+  <g transform="translate(32, 792)">
+    <text x="0" y="0" class="cyan h2">State Diff</text>
+    <text x="110" y="0" class="subtle-fg body">• empty-create → editing : 배너 페이드아웃(128ms) · 필드 테두리 amber 전환 · primary 활성 · 카운터·미리보기 갱신</text>
+    <text x="110" y="16" class="subtle-fg body">• 공통 : 필드 개수/순서/높이/레이블/힌트 불변 — DOM subtree 유지(=과거 '폼이 사라지는' 회귀 방지 계약)</text>
+  </g>
+
+  <!-- cross-state arrow -->
+  <g>
+    <line x1="632" y1="420" x2="664" y2="420" stroke="#7fd4ff" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+    <text x="648" y="410" class="cyan xtiny" text-anchor="middle">첫 키 입력</text>
+  </g>
+</svg>
