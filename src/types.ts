@@ -140,14 +140,18 @@ export interface GitAutomationLogEntry {
   // 이 엔트리가 속한 파이프라인 실행의 식별자. 같은 taskId 아래 여러 엔트리가
   // 들어올 수 있다. 서버 측 디바운스 키와 동일.
   taskId?: string;
-  // 파이프라인을 촉발한 에이전트 이름(디버깅/표시용). 알 수 없으면 비운다.
+  // 파이프라인을 촉발한 에이전트 이름(로그/감사용 메타데이터). 리더 단일 브랜치 정책
+  // (2026-04-18)에 따라 UI 는 이 값을 기반으로 에이전트별 브랜치 축을 그리지 않는다
+  // — GitAutomationStageBadge/GitAutomationPanel 은 branch 한 줄만 소비한다.
+  // 알 수 없으면 비운다.
   agent?: string;
   stage: GitAutomationLogStage;
   outcome: GitAutomationLogOutcome;
   // 해당 outcome 이 발생한 시각(epoch ms). 시작/종료가 구분되지 않는 경로
   // (예: skipped) 에서는 관측된 순간 하나만 기록한다.
   at: number;
-  // 자동화가 대상으로 잡은 브랜치 이름. skipped 엔트리에서도 빈 값을 허용한다.
+  // 자동화가 대상으로 잡은 브랜치 이름. 리더 트리거당 한 줄로 고정(단일 브랜치).
+  // skipped 엔트리에서도 빈 값을 허용한다.
   branch?: string;
   // commit 단계 성공 시 server.ts 가 stdout 에서 파싱한 단축 SHA(7자+).
   commitSha?: string;
