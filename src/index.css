@@ -11,6 +11,38 @@
   --pixel-accent: #00d2ff;
   --pixel-text: #e94560;
   --pixel-white: #ffffff;
+
+  /* ── 에이전트 상태 뱃지 디자인 토큰 (2026-04-18 디자이너 정의) ──────────
+   * ProjectManagement.tsx 의 에이전트 카드 UI 3-상태(대기/작업/재개) 시각
+   * 구분을 위한 단일 진원. agent-status-badge[data-state] 셀렉터에서
+   * var(--agent-state-*) 로 일괄 참조한다.
+   *
+   * 상태별 의미 계층:
+   *   idle     — 대기 중. "지금 조치 불필요". 가장 약한 톤(흰색 muted).
+   *              아이콘: Pause 10px. 애니메이션 없음.
+   *   working  — 작업 중. "실제로 진행 중". emerald pulse 로 활성 신호.
+   *              아이콘 대신 .agent-status-dot[data-state="working"] 를
+   *              좌측에 얹는 것을 권장(도트=상태, 라벨=이름).
+   *   resuming — 작업 재개 중. idle→working 핸드셰이크 진행. accent 계열
+   *              + 회전 아이콘(RotateCw 10px, 1.2s linear)로 "곧 시작"을 약속.
+   *              pending(shimmer=지연/무응답) 과 구분하기 위해 spinner 사용.
+   *
+   * 색상 대비: working 은 gray-900 배경 위 4.8:1, resuming 은 4.6:1,
+   *   idle 은 3.1:1 (muted 톤은 의도적으로 낮춘 contrast — AA large 충족).
+   */
+  --agent-state-idle-border: rgba(255, 255, 255, 0.18);
+  --agent-state-idle-bg: rgba(255, 255, 255, 0.03);
+  --agent-state-idle-fg: rgba(255, 255, 255, 0.55);
+
+  --agent-state-working-border: rgba(52, 211, 153, 0.45);
+  --agent-state-working-bg: rgba(52, 211, 153, 0.08);
+  --agent-state-working-fg: #bef4dd;
+  --agent-state-working-glow: rgba(52, 211, 153, 0.7);
+
+  --agent-state-resuming-border: rgba(0, 210, 255, 0.55);
+  --agent-state-resuming-bg: rgba(0, 210, 255, 0.1);
+  --agent-state-resuming-fg: #b6eaff;
+  --agent-state-resuming-glow: rgba(0, 210, 255, 0.55);
 }
 
 * {
@@ -397,6 +429,171 @@ body {
   50%      { opacity: 0.35; }
 }
 
+/* ── 에이전트 상태 배지 (2026-04-18 디자이너 시안) ─────────────────────
+ * 목표: 작업 중 / 전환 지연 / 오류 3-상태를 "점 + 라벨 + 카운트 칩" 조합의
+ *   pill 배지로 한눈에 구분한다. .agent-status-dot 팔레트 위에 얹어 tone
+ *   드리프트를 막는다.
+ * 컬러 토큰:
+ *   - working: emerald (#34d399) + 테두리 rgba(52,211,153,0.45)
+ *   - pending: accent  (#00d2ff) + 테두리 rgba(0,210,255,0.45), shimmer 톤
+ *   - error:   amber   (#fbbf24) + 테두리 rgba(251,191,36,0.55), 빠른 깜빡임
+ * 타이포: 라벨 10px uppercase 0.12em, 카운트 칩 10px bold(색반전).
+ * 접근성: role=status|alert, title 로 원인 가설/점검 포인트 고지.
+ *   prefers-reduced-motion 에서 shimmer/깜빡임 전면 중단.
+ */
+.agent-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background-color: rgba(255, 255, 255, 0.04);
+  font-family: var(--font-game);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.78);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.agent-status-badge[data-state="working"] {
+  border-color: var(--agent-state-working-border);
+  background-color: var(--agent-state-working-bg);
+  color: var(--agent-state-working-fg);
+}
+
+.agent-status-badge[data-state="pending"] {
+  border-color: rgba(0, 210, 255, 0.45);
+  background-color: rgba(0, 210, 255, 0.08);
+  color: #b6eaff;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 전환 지연 배지는 스켈레톤과 동일한 shimmer 스윕으로 "기다리는 중" 신호를 준다. */
+.agent-status-badge[data-state="pending"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 210, 255, 0.18) 50%,
+    transparent 100%
+  );
+  animation: empty-project-placeholder-shimmer 1.6s linear infinite;
+}
+
+.agent-status-badge[data-state="error"] {
+  border-color: rgba(251, 191, 36, 0.55);
+  background-color: rgba(251, 191, 36, 0.1);
+  color: #fde6a8;
+  animation: agent-status-blink 1.1s steps(2, end) infinite;
+}
+
+/* missing-file: 코드그래프 참조 유실. error(amber=백엔드 실패) 와 구분하기 위해
+ * --pixel-text(#e94560) magenta 톤을 사용한다. 깜빡임은 1.6s 로 느리게 두어
+ * error 보다 한 단계 낮은 주목도를 부여한다. */
+.agent-status-badge[data-state="missing-file"] {
+  border-color: rgba(233, 69, 96, 0.55);
+  background-color: rgba(233, 69, 96, 0.1);
+  color: #ffc2cf;
+  animation: agent-status-blink 1.6s steps(2, end) infinite;
+}
+
+/* idle: 대기 상태. "현재 조치 불필요" 를 나타내는 가장 약한 톤.
+ * --pixel-border 계열 회색 테두리 + 투명 배경으로 배지 자체가 눈에 띄지 않게 하여,
+ * 같은 줄에 working/resuming/error 가 함께 놓였을 때 자연스럽게 뒤로 물러난다.
+ * 아이콘(Pause 10px) 은 라벨과 같은 muted 톤(rgba white 0.55) 으로 맞춘다. */
+.agent-status-badge[data-state="idle"] {
+  border-color: var(--agent-state-idle-border);
+  background-color: var(--agent-state-idle-bg);
+  color: var(--agent-state-idle-fg);
+}
+
+.agent-status-badge__idle-icon {
+  color: var(--agent-state-idle-fg);
+  flex-shrink: 0;
+}
+
+/* resuming: "작업 재개 중". idle→working 핸드셰이크가 실제로 진행 중임을 능동적으로
+ * 고지하는 상태. pending(지연=무응답) 과 구분하기 위해 shimmer 대신 명시적인 회전
+ * 아이콘(RotateCw 10px, 1.2s linear)을 쓴다. 색 계열은 accent(--pixel-accent) 로
+ * "곧 작업이 시작된다" 를 약속하고, 배경은 working(emerald) 보다 한 단계 낮은
+ * 채도로 두어 "준비 중" 위계를 유지한다. */
+.agent-status-badge[data-state="resuming"] {
+  border-color: var(--agent-state-resuming-border);
+  background-color: var(--agent-state-resuming-bg);
+  color: var(--agent-state-resuming-fg);
+}
+
+.agent-status-badge__spinner {
+  color: var(--pixel-accent);
+  filter: drop-shadow(0 0 4px var(--agent-state-resuming-glow));
+  flex-shrink: 0;
+  animation: agent-status-badge-spin 1.2s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes agent-status-badge-spin {
+  0%   { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.agent-status-badge__label {
+  letter-spacing: 0.12em;
+}
+
+.agent-status-badge__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: #001018;
+  background-color: currentColor;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+/* currentColor 배경 위의 숫자만 반전색으로 유지. */
+.agent-status-badge__count {
+  background-color: rgba(255, 255, 255, 0.92);
+}
+
+.empty-project-placeholder__status-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.empty-project-placeholder__status-names {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.55);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* missing-file 쪽 이름 칩은 --pixel-text 계열로 tinting 해, 같은 줄에 나란히
+ * 놓인 agent 이름 칩과 시각적으로 계열을 분리한다(에이전트 vs 그래프 주체). */
+.empty-project-placeholder__status-names--graph {
+  color: rgba(255, 194, 207, 0.8);
+  flex-basis: 100%;
+  text-align: center;
+}
+
 .agent-bubble {
   position: relative;
   background-color: rgba(0, 0, 0, 0.85);
@@ -428,7 +625,1685 @@ body {
   .agent-status-dot[data-state="meeting"] {
     animation: none;
   }
+  .agent-status-badge[data-state="error"],
+  .agent-status-badge[data-state="missing-file"] {
+    animation: none;
+  }
+  .agent-status-badge[data-state="pending"]::after {
+    animation: none;
+    display: none;
+  }
+  /* resuming 의 회전 아이콘은 reduce-motion 환경에서 간헐적 깜빡임이 아닌
+   * "정지된 상태 표지" 로 바뀐다 — 아이콘만 남겨 상태는 계속 전달하되
+   * 회전은 멈춘다. prefers-reduced-motion 일관 원칙(깜빡임/회전 제거). */
+  .agent-status-badge__spinner {
+    animation: none;
+  }
   .agent-bubble.is-entering {
     animation: none;
   }
+}
+
+/* ── 프로젝트 미선택 빈 화면 플레이스홀더 (2026-04-18 디자이너 시안) ──
+ * 게임 월드 영역(main.activeTab="game")에서 selectedProjectId 가 null 일 때
+ * 덩그러니 비는 그리드를 대신해 노출되는 "무엇을 할 수 있는가"의 안내 카드.
+ *
+ * 디자인 의도:
+ *   1. 카드를 뷰포트 중앙에 고정하되, 기존 infinite-grid 배경은 살아있게
+ *      두어 "워크스페이스가 비어있다"는 상황을 공간적으로 전달한다.
+ *   2. 컬러 계층은 게임 팔레트(accent #00d2ff / text #e94560)를 그대로 사용해
+ *      툴링 UI들과의 톤 드리프트를 막는다.
+ *   3. CTA는 Primary(accent fill)와 Secondary(accent border)로 두 단계만
+ *      운용한다. 3단계 이상은 주목도 분산을 유발하므로 금지.
+ *   4. prefers-reduced-motion 에서는 카드 진입 애니메이션과 아이콘 링의
+ *      슬로우 펄스를 전부 정지한다.
+ */
+.empty-project-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.empty-project-placeholder__card {
+  width: 100%;
+  max-width: 520px;
+  padding: 40px 36px 32px;
+  background-color: var(--pixel-card);
+  border: 2px solid var(--pixel-border);
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.35), 0 18px 32px rgba(0, 0, 0, 0.45);
+  color: var(--pixel-white);
+  font-family: var(--font-game);
+  text-align: center;
+  pointer-events: auto;
+  animation: empty-project-placeholder-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.empty-project-placeholder__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  margin-bottom: 20px;
+  color: var(--pixel-accent);
+  border: 2px solid var(--pixel-accent);
+  background-color: rgba(0, 210, 255, 0.08);
+  box-shadow: 0 0 18px rgba(0, 210, 255, 0.35);
+  animation: empty-project-placeholder-pulse 3.6s ease-in-out infinite;
+}
+
+.empty-project-placeholder__eyebrow {
+  margin: 0 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--pixel-text);
+  opacity: 0.8;
+}
+
+.empty-project-placeholder__title {
+  margin: 0 0 14px;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pixel-accent);
+  text-shadow: 0 0 12px rgba(0, 210, 255, 0.35);
+}
+
+.empty-project-placeholder__body {
+  margin: 0 auto 24px;
+  max-width: 40ch;
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.empty-project-placeholder__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.empty-project-placeholder__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  font-family: var(--font-game);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: 2px solid var(--pixel-accent);
+  cursor: pointer;
+  transition: transform 120ms ease-out, background-color 140ms ease-out,
+    color 140ms ease-out, border-color 140ms ease-out, box-shadow 140ms ease-out;
+}
+
+.empty-project-placeholder__cta:active {
+  transform: translateY(1px);
+}
+
+.empty-project-placeholder__cta--primary {
+  background-color: var(--pixel-accent);
+  color: #001018;
+  border-bottom: 4px solid #0099cc;
+}
+
+.empty-project-placeholder__cta--primary:hover:not([aria-disabled="true"]) {
+  filter: brightness(1.1);
+  box-shadow: 0 0 14px rgba(0, 210, 255, 0.55);
+}
+
+.empty-project-placeholder__cta--primary[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: not-allowed;
+  border-bottom-color: var(--pixel-border);
+}
+
+.empty-project-placeholder__cta--secondary {
+  background-color: transparent;
+  color: var(--pixel-accent);
+  border-bottom: 4px solid rgba(0, 210, 255, 0.35);
+}
+
+.empty-project-placeholder__cta--secondary:hover {
+  background-color: rgba(0, 210, 255, 0.12);
+  box-shadow: 0 0 10px rgba(0, 210, 255, 0.35);
+}
+
+.empty-project-placeholder__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.empty-project-placeholder__meta-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--pixel-accent);
+  box-shadow: 0 0 6px rgba(0, 210, 255, 0.5);
+}
+
+.empty-project-placeholder__scopes {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.empty-project-placeholder__scope-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border: 1px dashed rgba(0, 210, 255, 0.35);
+  background-color: rgba(0, 210, 255, 0.06);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+@keyframes empty-project-placeholder-in {
+  0%   { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes empty-project-placeholder-pulse {
+  0%, 100% { box-shadow: 0 0 18px rgba(0, 210, 255, 0.35); }
+  50%      { box-shadow: 0 0 26px rgba(0, 210, 255, 0.55); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .empty-project-placeholder__card,
+  .empty-project-placeholder__icon {
+    animation: none;
+  }
+}
+
+/* ── 스켈레톤 로딩 시안 (2026-04-18 디자이너) ─────────────────────────
+ * 목표: 프로젝트 목록 fetch 지연 구간(평균 80~260ms, 최악 1s+)에서
+ *   빈 화면 flash 를 막고 실제 카드와 같은 shape 을 선점한다.
+ * 컬러 토큰:
+ *   - base: rgba(255,255,255,0.06) — 블록 기본
+ *   - highlight: rgba(0,210,255,0.18) — shimmer (accent 계열로 드리프트 방지)
+ *   - edge: rgba(0,0,0,0.25) — 블록 하단 1px 그림자(픽셀 UI 톤 유지)
+ * 간격: 실 카드와 동일. (아이콘 72 → 20 → 타이틀 18 → 14 → 본문 2줄 → 24 → 버튼)
+ * 타이밍:
+ *   - shimmer: 1.4s linear infinite. 600ms 초과 로딩일 때만 체감되도록
+ *     React 쪽에서 150~200ms 디바운스 후 마운트 권장.
+ *   - 카드 fade-in: 220ms cubic-bezier(0.22, 1, 0.36, 1) — 실 카드와 공통.
+ * 접근성: aria-busy="true", role="status". reduced-motion 환경에서는
+ *   shimmer/페이드 모두 끄고 단색 블록만 보여준다.
+ */
+.empty-project-placeholder__card--skeleton {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+.empty-project-placeholder__skeleton-block {
+  position: relative;
+  overflow: hidden;
+  background-color: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+}
+
+.empty-project-placeholder__skeleton-block::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 210, 255, 0.18) 50%,
+    transparent 100%
+  );
+  animation: empty-project-placeholder-shimmer 1.4s linear infinite;
+}
+
+.empty-project-placeholder__skeleton-block--icon {
+  width: 72px;
+  height: 72px;
+  margin-bottom: 20px;
+  background-color: rgba(0, 210, 255, 0.08);
+  border: 2px solid rgba(0, 210, 255, 0.22);
+}
+
+.empty-project-placeholder__skeleton-block--eyebrow {
+  width: 96px;
+  height: 10px;
+  margin-bottom: 10px;
+}
+
+.empty-project-placeholder__skeleton-block--title {
+  width: 240px;
+  height: 18px;
+  margin-bottom: 18px;
+}
+
+.empty-project-placeholder__skeleton-block--body {
+  width: 320px;
+  max-width: 100%;
+  height: 12px;
+  margin-bottom: 8px;
+}
+
+.empty-project-placeholder__skeleton-block--body-short {
+  width: 220px;
+  margin-bottom: 24px;
+}
+
+.empty-project-placeholder__skeleton-actions {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.empty-project-placeholder__skeleton-block--cta {
+  width: 148px;
+  height: 36px;
+  border-width: 2px;
+  border-color: rgba(0, 210, 255, 0.22);
+}
+
+.empty-project-placeholder__skeleton-block--meta {
+  width: 160px;
+  height: 10px;
+}
+
+@keyframes empty-project-placeholder-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .empty-project-placeholder__skeleton-block::after {
+    animation: none;
+    display: none;
+  }
+}
+
+/* ── 코드그래프 참조 유실 배너 (2026-04-18 디자이너 시안) ─────────────────
+ * 사용처: 프로젝트가 선택된 뒤에도 workingOnFileId / dependency 가 실재하지
+ *   않는 파일 ID 를 참조하는 경우. EmptyProjectPlaceholder 와 톤을 맞추기
+ *   위해 --pixel-text / --pixel-accent 팔레트를 그대로 사용한다.
+ * 레이아웃: 수평 flex. 좌측 16px 경고 아이콘 → 타이틀/설명 → 우측 CTA.
+ *   max-width 640px 로 과도하게 넓어지지 않게 상한. 모바일 폭(≤520px)에서는
+ *   CTA 가 줄바꿈되어 전체 너비를 차지한다.
+ * 컬러: --pixel-text(#e94560) 테두리 + alpha 0.1 배경. 타이틀은 동일 색상,
+ *   설명은 rgba(255,255,255,0.72) 로 3-stop 위계(아이콘/타이틀/본문) 를 준다.
+ * 접근성: role="alert" 는 컴포넌트에서 지정. reduced-motion 환경에서는
+ *   카드 fade-in 과 아이콘 깜빡임을 모두 중단한다.
+ */
+.code-graph-missing-banner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto 12px;
+  padding: 10px 14px;
+  border: 2px solid rgba(233, 69, 96, 0.55);
+  background-color: rgba(233, 69, 96, 0.1);
+  /* 바깥 링(검정 2px) + 안쪽 highlight(1px) 로 픽셀 카드 프레임 느낌.
+   * empty-project-placeholder__card 의 "ring + shadow" 위계를 축소 재사용해
+   * 빈-상태 카드 안 배지와 이 경고 배너를 한 세트로 묶는다. */
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, 0.35),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 8px 18px rgba(0, 0, 0, 0.35);
+  color: #ffc2cf;
+  font-family: var(--font-game);
+  animation: code-graph-missing-banner-in 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 좌측 상단 코너 핍 — empty-project-placeholder 의 eyebrow/pixel 감각을 계승해
+ * "픽셀 카드"임을 배너 단독으로도 전달한다. 아이콘과 겹치지 않게 top:-1 로 미세 이동. */
+.code-graph-missing-banner::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  width: 6px;
+  height: 6px;
+  background-color: var(--pixel-text);
+  box-shadow: 0 0 6px rgba(233, 69, 96, 0.55);
+  pointer-events: none;
+}
+
+.code-graph-missing-banner > svg {
+  flex-shrink: 0;
+  color: var(--pixel-text);
+  filter: drop-shadow(0 0 6px rgba(233, 69, 96, 0.55));
+  animation: agent-status-blink 1.6s steps(2, end) infinite;
+}
+
+.code-graph-missing-banner__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.code-graph-missing-banner__title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--pixel-text);
+  text-shadow: 0 0 8px rgba(233, 69, 96, 0.35);
+}
+
+.code-graph-missing-banner__desc {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.code-graph-missing-banner__names {
+  display: inline;
+  margin-left: 2px;
+  padding: 1px 6px;
+  color: #ffe1e8;
+  background-color: rgba(233, 69, 96, 0.22);
+  border: 1px solid rgba(233, 69, 96, 0.45);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+/* ── 코드그래프 완전 빈 상태 (0 파일) ───────────────────────────────
+ * missing-files 배너와 달리, "참조조차 없는" 진짜 빈 그래프 상황을 다룬다.
+ * 빈-상태 플레이스홀더(EmptyProjectPlaceholder)와 색 팔레트는 같지만 위치가
+ * 코드그래프 패널 내부라서 max-width 480px + padding 24px 로 한 단계 작게 운용.
+ * 컴포넌트가 없을 수 있는 상황에도 style-only 로 재사용 가능하게 단독 정의.
+ */
+.code-graph-empty-state {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 480px;
+  margin: 24px auto;
+  padding: 24px 20px;
+  border: 2px dashed rgba(0, 210, 255, 0.45);
+  background-color: rgba(0, 210, 255, 0.04);
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, 0.3),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.78);
+  font-family: var(--font-game);
+  text-align: center;
+  animation: code-graph-missing-banner-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.code-graph-empty-state__title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--pixel-accent);
+  text-shadow: 0 0 10px rgba(0, 210, 255, 0.35);
+}
+
+.code-graph-empty-state__desc {
+  margin: 0;
+  max-width: 38ch;
+  font-size: 11px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-graph-empty-state {
+    animation: none;
+  }
+}
+
+.code-graph-missing-banner__cta {
+  flex-shrink: 0;
+  padding: 8px 14px;
+  font-family: var(--font-game);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #001018;
+  background-color: var(--pixel-text);
+  border: 2px solid var(--pixel-text);
+  border-bottom: 4px solid #a62a42;
+  cursor: pointer;
+  transition: filter 140ms ease-out, box-shadow 140ms ease-out, transform 120ms ease-out;
+}
+
+.code-graph-missing-banner__cta:hover {
+  filter: brightness(1.1);
+  box-shadow: 0 0 12px rgba(233, 69, 96, 0.55);
+}
+
+.code-graph-missing-banner__cta:active {
+  transform: translateY(1px);
+}
+
+@keyframes code-graph-missing-banner-in {
+  0%   { opacity: 0; transform: translateY(-4px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 520px) {
+  .code-graph-missing-banner {
+    flex-wrap: wrap;
+  }
+  .code-graph-missing-banner__cta {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-graph-missing-banner,
+  .code-graph-missing-banner > svg {
+    animation: none;
+  }
+}
+
+/* ── 프로젝트 관리 상단 "편집 중" 헤더 상태 구분 가이드 (2026-04-18 디자이너) ──
+ * 사용처: src/components/ProjectManagement.tsx 상단 <header>. 현 구현은
+ *   인라인 Tailwind 로 `editingLabel.hasProject` 삼항 분기가 한 줄에 섞여
+ *   있어 "선택 vs 미선택" 시각 단서를 코드 리뷰에서 재현하기 어렵다. 이
+ *   클래스 체계는 상태 구분을 4-stop 계층(컨테이너 / 아이콘 / eyebrow
+ *   도트 / 타이틀)으로 분리해, 스크린샷 없이도 상태를 즉시 읽을 수 있게
+ *   한다. EmptyProjectPlaceholder 의 accent 팔레트와 톤 일관성 유지.
+ *
+ * 디자인 의도:
+ *   1. 선택 상태는 .agent-status-dot[data-state="working"] 과 같은 emerald
+ *      펄스를 eyebrow 좌측에 두어 "지금 활성" 을 전역 톤(git-auto-summary
+ *      점등 · AgentStatusBadge) 과 묶는다.
+ *   2. 미선택 상태는 점선 테두리 하나만으로는 "비활성 vs 로딩" 혼동이 있어,
+ *      (점선 테두리 + amber 경고 도트 + italic 플레이스홀더 타이틀) 3종
+ *      세트로 "조치가 필요한 상태" 를 시각화한다. 깜빡임은 넣지 않는다
+ *      (오류 배지와의 혼동을 피하기 위함).
+ *   3. 전환은 border-color / background-color 140ms ease-out 으로만 걸고
+ *      색 페이드 외 형태 변형은 금지. prefers-reduced-motion 에서 펄스 정지.
+ *
+ * 컬러 토큰:
+ *   selected:   border var(--pixel-accent), bg #0f3460, icon bg accent,
+ *               eyebrow-dot #34d399 pulse, title accent + soft glow.
+ *   unselected: border dashed var(--pixel-border), bg rgba(0,0,0,0.2),
+ *               icon bg rgba(0,0,0,0.4) · color white/50,
+ *               eyebrow-dot #fbbf24 static, title white/55 italic.
+ *
+ * 접근성:
+ *   - 컨테이너 aria-label="현재 편집 중인 프로젝트" 유지.
+ *   - data-state="unselected" 는 role="status" + aria-live="polite" 로
+ *     "프로젝트가 선택되지 않았습니다" 를 스크린리더에 고지한다.
+ *   - CTA 칩(.pm-editing-header__cta)은 미선택 상태에서만 렌더.
+ */
+.pm-editing-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 12px 12px 16px;
+  border: 2px solid var(--pixel-border);
+  transition: border-color 140ms ease-out, background-color 140ms ease-out,
+    box-shadow 140ms ease-out, padding-left 140ms ease-out;
+}
+
+/* 좌측 4px 스트라이프 — 선택/미선택 상태를 0.2초 안에 식별시키는 1차 앵커.
+ * 선택: accent 실선 + glow. 미선택: amber 점선. 테두리 계열과 겹치지 않도록
+ * ::before 로 별도 레이어를 두고, padding-left 만 16px 로 확보해 충돌 방지. */
+.pm-editing-header::before {
+  content: "";
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: -2px;
+  width: 4px;
+  pointer-events: none;
+  transition: background-color 140ms ease-out, box-shadow 140ms ease-out;
+}
+
+.pm-editing-header[data-state="selected"] {
+  border-color: var(--pixel-accent);
+  background-color: #0f3460;
+  box-shadow: 0 0 0 1px rgba(0, 210, 255, 0.25),
+    0 0 18px rgba(0, 210, 255, 0.15);
+}
+
+.pm-editing-header[data-state="selected"]::before {
+  background-color: var(--pixel-accent);
+  box-shadow: 0 0 10px rgba(0, 210, 255, 0.55);
+}
+
+.pm-editing-header[data-state="unselected"] {
+  border-style: dashed;
+  border-color: var(--pixel-border);
+  background-color: rgba(0, 0, 0, 0.28);
+  box-shadow: none;
+}
+
+.pm-editing-header[data-state="unselected"]::before {
+  background-image: repeating-linear-gradient(
+    180deg,
+    rgba(251, 191, 36, 0.55) 0 4px,
+    transparent 4px 8px
+  );
+}
+
+/* 선택 → 미선택, 또는 미선택 → 선택 전환 시 한 번만 돌아가는 "상태 변화"
+ * 하이라이트. 컴포넌트는 data-state 변경 직후 .is-transitioning 클래스를
+ * 220ms 동안 부여해, 사용자가 "방금 바뀌었다" 는 신호를 잡아낼 수 있게 한다.
+ * 색/형태 변형은 넣지 않고 좌측 스트라이프만 한 번 1.6배로 번쩍인다. */
+.pm-editing-header.is-transitioning::before {
+  animation: pm-editing-header-stripe-flash 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes pm-editing-header-stripe-flash {
+  0%   { transform: scaleX(1);   filter: brightness(1); }
+  50%  { transform: scaleX(1.6); filter: brightness(1.4); }
+  100% { transform: scaleX(1);   filter: brightness(1); }
+}
+
+.pm-editing-header__lead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex: 1;
+}
+
+.pm-editing-header__icon {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #000;
+  flex-shrink: 0;
+  transition: background-color 140ms ease-out, color 140ms ease-out;
+}
+
+.pm-editing-header[data-state="selected"] .pm-editing-header__icon {
+  background-color: var(--pixel-accent);
+  color: #001018;
+}
+
+.pm-editing-header[data-state="unselected"] .pm-editing-header__icon {
+  background-color: rgba(0, 0, 0, 0.4);
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.pm-editing-header__eyebrow {
+  margin: 0 0 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* eyebrow 좌측 상태 도트 — 선택=emerald pulse, 미선택=amber 정적 경고. */
+.pm-editing-header__eyebrow-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.pm-editing-header[data-state="selected"] .pm-editing-header__eyebrow-dot {
+  background-color: #34d399;
+  box-shadow: 0 0 6px 1px rgba(52, 211, 153, 0.7);
+  animation: agent-status-pulse 1.4s ease-in-out infinite;
+}
+
+.pm-editing-header[data-state="unselected"] .pm-editing-header__eyebrow-dot {
+  background-color: #fbbf24;
+  box-shadow: 0 0 6px rgba(251, 191, 36, 0.45);
+}
+
+.pm-editing-header__title {
+  margin: 0;
+  font-family: var(--font-game);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pm-editing-header[data-state="selected"] .pm-editing-header__title {
+  color: var(--pixel-accent);
+  text-shadow: 0 0 10px rgba(0, 210, 255, 0.35);
+}
+
+.pm-editing-header[data-state="unselected"] .pm-editing-header__title {
+  color: rgba(255, 255, 255, 0.55);
+  font-style: italic;
+  font-weight: 500;
+}
+
+/* 미선택 상태 전용 "조치 필요" CTA 칩 — 헤더 우측 인라인. amber 톤으로
+ * "경고성 알림" 이 아닌 "조치 가능" 을 전달하기 위해 .agent-status-badge
+ * error 보다 한 단계 낮은 opacity 로 테두리 색을 낮춘다. */
+.pm-editing-header__cta {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-family: var(--font-game);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #fde6a8;
+  border: 1px solid rgba(251, 191, 36, 0.55);
+  background-color: rgba(251, 191, 36, 0.1);
+  cursor: pointer;
+  transition: filter 140ms ease-out, box-shadow 140ms ease-out;
+}
+
+.pm-editing-header__cta:hover {
+  filter: brightness(1.15);
+  box-shadow: 0 0 10px rgba(251, 191, 36, 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pm-editing-header,
+  .pm-editing-header::before {
+    transition: none;
+  }
+  .pm-editing-header[data-state="selected"] .pm-editing-header__eyebrow-dot {
+    animation: none;
+  }
+  .pm-editing-header.is-transitioning::before {
+    animation: none;
+  }
+}
+
+/* ── 범용 스켈레톤 shimmer (2026-04-18 Joker) ─────────────────────────
+ * ProjectManagement 등 "데이터 fetch 중 플래시" 가 발생하기 쉬운 영역에서
+ * 실제 컴포넌트와 같은 shape 을 선점해 깜빡임을 숨긴다. 로컬 상태 복원이
+ * 동기이므로 150~200ms 디바운스 후에만 마운트하는 것을 권장한다.
+ * 컬러 토큰은 게임 팔레트 accent(#00d2ff)를 유지해 빈 화면 플레이스홀더
+ * 스켈레톤(empty-project-placeholder__skeleton-block)과 톤이 어긋나지 않는다. */
+.skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+  background-color: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+}
+
+.skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 210, 255, 0.18) 50%,
+    transparent 100%
+  );
+  animation: skeleton-shimmer 1.4s linear infinite;
+}
+
+@keyframes skeleton-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-shimmer::after {
+    animation: none;
+    display: none;
+  }
+}
+
+/* ── 코드그래프 누락 파일 노드 하이라이트 (2026-04-18 디자이너 시안) ─────
+ * 사용처: ProjectManagement.tsx 코드그래프 뷰에서 workingOnFileId /
+ *   add_dependency 가 가리키는 ID 가 현재 files 에 없는 "좀비 노드" 를
+ *   개별 위치에 지목하는 하이라이트. .code-graph-missing-banner(요약) 와
+ *   .agent-status-badge[data-state="missing-file"](집계 배지)와 톤을 맞춰
+ *   마젠타(--pixel-text) 계열을 재사용한다.
+ * 계층:
+ *   - wrapper: 노드 DOM 을 감싸는 relative 박스. padding 4px + dashed 2px.
+ *   - inline : 노드 자체에 테두리만 얹는 합성용. padding/margin 불변.
+ * 주목도: error(amber, 1.1s 깜빡임) 보다 한 단계 낮은 1.6s slow pulse
+ *   (code-graph-missing-node-pulse) 로 화면 과점을 피한다. */
+.code-graph-missing-node {
+  position: relative;
+  display: inline-block;
+  padding: 4px;
+  border: 2px dashed rgba(233, 69, 96, 0.7);
+  background-color: rgba(233, 69, 96, 0.08);
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, 0.35),
+    0 0 12px rgba(233, 69, 96, 0.3);
+  animation: code-graph-missing-node-pulse 1.6s ease-in-out infinite;
+}
+
+.code-graph-missing-node[data-variant="inline"] {
+  display: inline;
+  padding: 0;
+  background-color: transparent;
+  box-shadow: inset 0 0 0 2px rgba(233, 69, 96, 0.7);
+  outline: 1px dashed rgba(233, 69, 96, 0.45);
+  outline-offset: 2px;
+}
+
+/* severity 스케일 — banner(집계) 와 달리 개별 노드에 priority 를 실어주는 차등 강도.
+ * low     : 단발성 유실. pulse 약화 + glow 최소화. 코너 pip 은 숫자 칩이 없으면 생략.
+ * critical: 허브 노드 유실. 외곽 magenta 2중 glow + 1.0s fast pulse. 주변 노드 대비
+ *           즉시 눈에 띄도록 box-shadow spread 를 한 단계 키운다. */
+.code-graph-missing-node[data-severity="low"] {
+  border-style: dotted;
+  border-color: rgba(233, 69, 96, 0.55);
+  animation-duration: 2s;
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, 0.25),
+    0 0 8px rgba(233, 69, 96, 0.18);
+}
+
+.code-graph-missing-node[data-severity="low"] .code-graph-missing-node__corner {
+  display: none;
+}
+
+.code-graph-missing-node[data-severity="critical"] {
+  border-color: var(--pixel-text);
+  background-color: rgba(233, 69, 96, 0.14);
+  animation: code-graph-missing-node-pulse-critical 1s ease-in-out infinite;
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, 0.35),
+    0 0 0 4px rgba(233, 69, 96, 0.35),
+    0 0 22px rgba(233, 69, 96, 0.55);
+}
+
+/* 코너 숫자 칩 — referenceCount 가 주어지면 AlertTriangle 대신 "3"/"99+" 같은
+ * 숫자가 들어간다. 숫자가 있는 코너는 배경을 magenta 로 유지해 아이콘 버전과
+ * 시각 일관성을 유지하고, 검정 글자로 반전해 가독성을 확보한다. */
+.code-graph-missing-node__corner-count {
+  font-family: var(--font-game);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  color: #001018;
+}
+
+/* 인터랙티브 wrapper — onActivate 가 주어지면 키보드 포커스가 가능해진다.
+ * :focus-visible 에만 accent 외곽 링을 얹어 마우스 클릭 시 잔상을 남기지 않는다. */
+.code-graph-missing-node[data-interactive="true"] {
+  cursor: pointer;
+}
+
+.code-graph-missing-node[data-interactive="true"]:hover {
+  filter: brightness(1.08);
+}
+
+.code-graph-missing-node[data-interactive="true"]:focus {
+  outline: none;
+}
+
+.code-graph-missing-node[data-interactive="true"]:focus-visible {
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, 0.35),
+    0 0 0 4px var(--pixel-accent),
+    0 0 14px rgba(0, 210, 255, 0.55);
+}
+
+@keyframes code-graph-missing-node-pulse-critical {
+  0%, 100% {
+    box-shadow:
+      0 0 0 2px rgba(0, 0, 0, 0.35),
+      0 0 0 4px rgba(233, 69, 96, 0.35),
+      0 0 14px rgba(233, 69, 96, 0.35);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px rgba(0, 0, 0, 0.35),
+      0 0 0 6px rgba(233, 69, 96, 0.5),
+      0 0 26px rgba(233, 69, 96, 0.75);
+  }
+}
+
+/* 우상단 코너 경고 pip — dashed 테두리를 놓쳤을 때도 경고 심볼로 재인지.
+ * .code-graph-missing-banner::before 의 6px pip 를 10px 아이콘 박스로 확장. */
+.code-graph-missing-node__corner {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: #001018;
+  background-color: var(--pixel-text);
+  border: 1px solid rgba(0, 0, 0, 0.55);
+  box-shadow: 0 0 6px rgba(233, 69, 96, 0.65);
+  pointer-events: none;
+}
+
+.code-graph-missing-node__corner > svg {
+  display: block;
+}
+
+/* 하단 중앙 "참조 유실" 칩 — agent-status-badge missing-file 과 같은 톤.
+ * 노드 바닥에 살짝 겹치게 내려 붙여 공간을 적게 차지한다. */
+.code-graph-missing-node__label {
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  transform: translateX(-50%);
+  padding: 2px 6px;
+  font-family: var(--font-game);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #ffc2cf;
+  background-color: rgba(20, 6, 10, 0.92);
+  border: 1px solid rgba(233, 69, 96, 0.6);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+@keyframes code-graph-missing-node-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 2px rgba(0, 0, 0, 0.35),
+      0 0 10px rgba(233, 69, 96, 0.25);
+  }
+  50% {
+    box-shadow:
+      0 0 0 2px rgba(0, 0, 0, 0.35),
+      0 0 18px rgba(233, 69, 96, 0.55);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .code-graph-missing-node,
+  .code-graph-missing-node[data-severity="critical"] {
+    animation: none;
+  }
+}
+
+/* ── 지시 프롬프트 & 첨부 업로드 UI (2026-04-18 디자이너 정의) ───────────
+ * DirectivePrompt.tsx 전용. 텍스트 영역 → 드롭존 → 첨부 리스트 → (선택)
+ * 제출 푸터 → 에러 토스트 순으로 수직 스택을 이루며, 각 블록은 상호
+ * 독립적이므로 레이아웃 스타일(간격·보더)만 이 섹션에서 책임지고, 색
+ * 토큰은 :root 의 --pixel-* 팔레트를 재사용한다.
+ *
+ * 색 구분 원칙:
+ *   pdf    — 주홍 (e94560 계열). "문서 묶음" / 공식 아티팩트 함의.
+ *   image  — 청록 (00d2ff 계열). 텍스트와 hue 거리 확보.
+ *   text   — 연두 (34d399 계열). "읽기 쉬운 원문" 의 함의.
+ *   other  — 중립 회색. 미리보기 미지원.
+ * 색약 대비를 위해 kind 배지는 아이콘 형태(Paperclip/Image/FileText)가
+ * 색과 중복 코딩되도록 한다.
+ */
+
+/* 로그 패널 컨텍스트 정렬 — App.tsx 하단 패널(.log-panel)이 --pixel-card 바탕 +
+ * 2px --pixel-border 를 쓰므로 프롬프트 컨테이너도 동일한 토큰으로 맞춰 "같은
+ * 섹션" 임을 시각적으로 약속한다. 반투명 배경은 로그 패널 위에 얹힐 때 뒤 이중
+ * 레이어가 흐릿해져 가독을 해치므로 불투명 --pixel-card 를 쓴다. */
+.directive-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background-color: var(--pixel-card);
+  border: 2px solid var(--pixel-border);
+  font-family: var(--font-game);
+  color: var(--pixel-white);
+  position: relative;
+}
+
+.directive-prompt[aria-disabled="true"] {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.directive-prompt__label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+/* 고정폭 폰트는 지시 본문의 "코드/경로/명령" 치환을 공백 단위로 정확히 읽게 한다.
+ * --font-game 자체가 Courier 기반 monospace 지만, 상속 경로에 non-mono 가 끼어드는
+ * 회귀를 차단하기 위해 이 텍스트 영역에 한해 'ui-monospace' fallback 을 명시한다. */
+.directive-prompt__textarea {
+  width: 100%;
+  min-height: 72px;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, 'Courier New', Courier, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--pixel-white);
+  background-color: rgba(10, 16, 32, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  resize: vertical;
+}
+
+.directive-prompt__textarea:focus-visible {
+  outline: none;
+  border-color: var(--pixel-accent);
+  box-shadow: 0 0 0 2px rgba(0, 210, 255, 0.35);
+}
+
+/* 드롭존 — 기본은 점선, 드래그 오버 시 accent 톤 + 실선으로 "놓아도 된다" 를 약속.
+ * 로그 패널 하단 도킹 컨텍스트라 수직 공간이 부족하므로 컴팩트 높이(88~110px) 로
+ * 제약한다. min-height 는 아이콘(28)+문구 2줄+패딩이 안정적으로 앉는 하한이며,
+ * max-height 로 상한을 잠가 첨부 리스트를 밀어내지 않는다. */
+.directive-prompt__dropzone {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  min-height: 88px;
+  max-height: 110px;
+  background-color: rgba(10, 16, 32, 0.55);
+  border: 1.5px dashed rgba(255, 255, 255, 0.28);
+  cursor: pointer;
+  transition: border-color 120ms ease-out, background-color 120ms ease-out;
+}
+
+.directive-prompt__dropzone:hover,
+.directive-prompt__dropzone:focus-visible {
+  outline: none;
+  border-color: rgba(0, 210, 255, 0.55);
+  background-color: rgba(0, 210, 255, 0.06);
+}
+
+.directive-prompt__dropzone[data-drag-over="true"] {
+  border-style: solid;
+  border-color: var(--pixel-accent);
+  background-color: rgba(0, 210, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(0, 210, 255, 0.3);
+}
+
+.directive-prompt__dropzone[data-disabled="true"] {
+  cursor: not-allowed;
+}
+
+.directive-prompt__dropicon {
+  width: 28px;
+  height: 28px;
+  color: var(--pixel-accent);
+  flex-shrink: 0;
+}
+
+.directive-prompt__droptext {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.directive-prompt__droptext strong {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.directive-prompt__droptext span {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.directive-prompt__drophint {
+  margin-top: 2px;
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.directive-prompt__pickbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-family: var(--font-game);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #001018;
+  background-color: var(--pixel-accent);
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+
+.directive-prompt__pickbtn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.directive-prompt__pickbtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.directive-prompt__pickbtn > svg {
+  width: 12px;
+  height: 12px;
+}
+
+.directive-prompt__fileinput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.directive-prompt__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 첨부 행 — 좌측 kind 배지 / 가운데 본문 / 우측 삭제 버튼.
+ * grid 로 잡아 파일명이 길어져도 삭제 버튼이 밀려나지 않는다. */
+.directive-attachment {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: stretch;
+  gap: 0;
+  background-color: rgba(10, 16, 32, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.directive-attachment[data-status="error"] {
+  border-color: rgba(233, 69, 96, 0.55);
+  background-color: rgba(60, 15, 25, 0.55);
+}
+
+.directive-attachment[data-status="uploading"] {
+  border-color: rgba(0, 210, 255, 0.45);
+}
+
+.directive-attachment[data-status="done"] {
+  border-color: rgba(52, 211, 153, 0.38);
+}
+
+/* kind 배지 — 한 줄 말줄임 규칙을 지키기 위해 row 레이아웃으로 바꿔 행 전체를
+ * 32~34px 대에 맞춘다. 아이콘(색) + 라벨(흰색) 이중 코딩: 색약 사용자에게는
+ * 형태(Paperclip/Image/FileText) 가 1차 변별 신호가 된다. */
+.directive-attachment__kind {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 68px;
+  padding: 4px 8px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.9);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.directive-attachment__kind-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* 라벨은 WCAG AA(4.5:1) 를 안정적으로 넘기기 위해 kind 톤과 무관하게 흰색(0.95) 로
+ * 고정한다. kind 별 색은 아이콘과 배경 tint 가 담당해 색/형태/라벨의 3중 코딩이
+ * 유지된다. */
+.directive-attachment__kind-label {
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.directive-attachment__kind--pdf {
+  color: #ffe0e6;
+  background-color: rgba(233, 69, 96, 0.28);
+}
+.directive-attachment__kind--image {
+  color: #c7efff;
+  background-color: rgba(0, 210, 255, 0.2);
+}
+.directive-attachment__kind--text {
+  color: #cef6e2;
+  background-color: rgba(52, 211, 153, 0.2);
+}
+.directive-attachment__kind--other {
+  color: rgba(255, 255, 255, 0.88);
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+/* 행 본문 — 1fr(이름) + auto(메타) 2열. 이름은 말줄임으로 1줄 유지, 메타는
+ * nowrap 으로 묶어 "한 줄 행" 불변식을 전 컴포넌트 단에서 보장한다. */
+.directive-attachment__main {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  min-width: 0;
+  min-height: 32px;
+  font-family: var(--font-game);
+  font-size: 12px;
+  text-align: left;
+  color: var(--pixel-white);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.directive-attachment__main:disabled {
+  cursor: default;
+}
+
+.directive-attachment__main:focus-visible {
+  outline: 2px solid var(--pixel-accent);
+  outline-offset: -2px;
+}
+
+.directive-attachment__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.directive-attachment__meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.72);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.directive-attachment__size {
+  font-variant-numeric: tabular-nums;
+}
+
+.directive-attachment__progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #b6eaff;
+  font-variant-numeric: tabular-nums;
+}
+
+.directive-attachment__spinner {
+  width: 12px;
+  height: 12px;
+  animation: directive-spinner 1.1s linear infinite;
+}
+
+.directive-attachment__error {
+  padding: 1px 6px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #ffd5dd;
+  background-color: rgba(233, 69, 96, 0.28);
+  border: 1px solid rgba(233, 69, 96, 0.55);
+}
+
+/* 진행률 바 — 행 바닥에 얇은 2px 스트립으로 녹여넣어 리스트가 점프하지 않는다. */
+.directive-attachment__bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background-color: var(--pixel-accent);
+  transition: width 180ms ease-out;
+}
+
+.directive-attachment__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  color: rgba(255, 255, 255, 0.6);
+  background: transparent;
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+}
+
+.directive-attachment__remove:hover:not(:disabled) {
+  color: #ffd5dd;
+  background-color: rgba(233, 69, 96, 0.18);
+}
+
+.directive-attachment__remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.directive-attachment__remove > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.directive-prompt__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 4px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.directive-prompt__footer-hint {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.directive-prompt__submit {
+  padding: 8px 16px;
+  font-family: var(--font-game);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #001018;
+  background-color: var(--pixel-accent);
+  border: 1px solid rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+
+.directive-prompt__submit:disabled {
+  cursor: not-allowed;
+  background-color: rgba(255, 255, 255, 0.18);
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* 에러 토스트 — 상대 위치 프롬프트 내부 우하단에 sticky 로 노출.
+ * 전역 토스트 시스템이 없는 현 시점에서는 프롬프트 자체 영역에만 국한해
+ * "이 입력과 직접 연결된 에러" 임을 명확히 한다. */
+.directive-prompt__toast {
+  position: sticky;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #ffd5dd;
+  background-color: rgba(40, 10, 18, 0.92);
+  border: 1px solid rgba(233, 69, 96, 0.6);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  animation: directive-toast-in 160ms ease-out;
+}
+
+.directive-prompt__toast > svg {
+  width: 16px;
+  height: 16px;
+  color: var(--pixel-text);
+  flex-shrink: 0;
+}
+
+.directive-prompt__toast-text {
+  flex: 1;
+}
+
+.directive-prompt__toast-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: rgba(255, 213, 221, 0.8);
+  background: transparent;
+  border: 1px solid rgba(233, 69, 96, 0.5);
+  cursor: pointer;
+}
+
+.directive-prompt__toast-close:hover {
+  background-color: rgba(233, 69, 96, 0.18);
+  color: #ffd5dd;
+}
+
+.directive-prompt__toast-close > svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* ── 첨부 미리보기 모달 ──────────────────────────────────────────────
+ * 헤더(아이콘·이름·크기·닫기) → 본문(이미지/PDF/텍스트/폴백) → 푸터(닫기)
+ * 의 3단 구성. 모달 바깥 클릭 또는 Esc 키로도 닫힌다. 본문 높이는
+ * 뷰포트의 70vh 로 잡아 과도하게 커지지 않도록 제약한다.
+ */
+.directive-preview-modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background-color: rgba(4, 8, 16, 0.78);
+  z-index: 80;
+  animation: directive-modal-fade 140ms ease-out;
+}
+
+.directive-preview-modal__card {
+  display: flex;
+  flex-direction: column;
+  width: min(960px, 100%);
+  max-height: calc(100vh - 48px);
+  background-color: var(--pixel-card);
+  border: 1px solid var(--pixel-border);
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  animation: directive-modal-scale 160ms ease-out;
+}
+
+.directive-preview-modal__header {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.directive-preview-modal__icon {
+  width: 20px;
+  height: 20px;
+  color: var(--pixel-accent);
+}
+
+.directive-preview-modal__title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--pixel-white);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.directive-preview-modal__size {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.55);
+  font-variant-numeric: tabular-nums;
+}
+
+.directive-preview-modal__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: rgba(255, 255, 255, 0.7);
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+}
+
+.directive-preview-modal__close:hover {
+  color: var(--pixel-white);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.directive-preview-modal__close > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.directive-preview-modal__body {
+  flex: 1;
+  min-height: 160px;
+  max-height: 70vh;
+  padding: 16px;
+  overflow: auto;
+  background-color: rgba(10, 16, 32, 0.5);
+}
+
+.directive-preview-modal__body[data-kind="pdf"],
+.directive-preview-modal__body[data-kind="image"] {
+  padding: 0;
+  background-color: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.directive-preview-modal__image {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+}
+
+.directive-preview-modal__pdf {
+  width: 100%;
+  height: 70vh;
+  border: none;
+  background-color: #1a1a2e;
+}
+
+.directive-preview-modal__text {
+  margin: 0;
+  padding: 0;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #bef4dd;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.directive-preview-modal__fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  padding: 24px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+  text-align: center;
+}
+
+.directive-preview-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.directive-preview-modal__dismiss {
+  padding: 6px 14px;
+  font-family: var(--font-game);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--pixel-white);
+  background-color: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  cursor: pointer;
+}
+
+.directive-preview-modal__dismiss:hover {
+  background-color: rgba(255, 255, 255, 0.16);
+}
+
+@keyframes directive-spinner {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes directive-toast-in {
+  from { transform: translateY(6px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes directive-modal-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes directive-modal-scale {
+  from { transform: scale(0.97); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* 사용자 환경에서 애니메이션 비활성화 시 스피너·모달 펄스는 멈추지만,
+ * 진행률 바의 너비 보간은 유지해 "정말 올라가고 있다" 는 사실을 전달한다. */
+.directive-prompt[data-reduced-motion="reduce"] .directive-attachment__spinner {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .directive-attachment__spinner,
+  .directive-prompt__toast,
+  .directive-preview-modal,
+  .directive-preview-modal__card {
+    animation: none;
+  }
+}
+
+/* ── 로그 패널 상단 탭 바 (.logtab-bar / .logtab) ─────────────────────────
+ * App.tsx 하단 로그 패널(.log-panel) 헤더에 얹혀 "전체 / 에이전트 / 시스템"
+ * 처럼 로그 스트림을 스위치하는 컴팩트 탭. 픽셀 테마 3-토큰(--pixel-card /
+ * --pixel-accent / --pixel-border) 을 그대로 쓰고, 높이는 30px (28~32px 범위
+ * 중앙) 로 고정해 로그 본문 높이 계산을 안정화한다.
+ *
+ * 상태 계약:
+ *   - 기본(비활성):   투명 배경 + 2px 투명 하단선(자리 예약). color 는 muted.
+ *   - hover:         하단선이 accent 40% 로 들어오며 "클릭 가능" 을 약속.
+ *                    배경/텍스트는 거의 변하지 않아 활성 탭과 혼동되지 않는다.
+ *   - active:        배경이 진해지고 하단 2px 강조선이 --pixel-accent 로 점등.
+ *                    하단선 + 배경 이중 신호로 색약 사용자도 현재 탭을 식별.
+ *   - focus-visible: 2px dashed accent 아웃라인. 브라우저 기본 focus ring 은
+ *                    픽셀 테마와 충돌해 묻히므로 커스텀으로 덮어쓴다.
+ *
+ * 뱃지(.logtab__badge): 주황 #ffa500 배경 + 검정 텍스트 조합은 black 대비
+ * ~10.5:1 로 WCAG AA(4.5:1) 를 여유롭게 통과. "읽지 않은 수" 같은 숫자 전용이라
+ * tabular-nums 로 자릿수가 뛰지 않게 한다. */
+
+.logtab-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  height: 30px;
+  padding: 0 6px;
+  background-color: var(--pixel-card);
+  border-bottom: 1px solid var(--pixel-border);
+  font-family: var(--font-game);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.logtab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.62);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 120ms ease-out, background-color 120ms ease-out,
+    border-bottom-color 120ms ease-out;
+}
+
+.logtab:hover:not(.logtab--active):not(:disabled) {
+  color: rgba(255, 255, 255, 0.88);
+  border-bottom-color: rgba(0, 210, 255, 0.4);
+}
+
+.logtab:focus-visible {
+  outline: 2px dashed var(--pixel-accent);
+  outline-offset: -2px;
+}
+
+.logtab:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.logtab--active {
+  color: var(--pixel-white);
+  background-color: rgba(10, 16, 32, 0.8);
+  border-bottom-color: var(--pixel-accent);
+}
+
+/* "읽지 않은 수" 같은 카운터. 활성 탭 안에서도 주황이 두드러지도록 검정
+ * 텍스트 + 주황 배경 고정. 배지 자체 테두리(검정 25%)는 진한 배경 위에서도
+ * 경계를 끊어 숫자 가독성을 올린다. */
+.logtab__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 16px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  color: #000000;
+  background-color: #ffa500;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  border-radius: 2px;
+  font-variant-numeric: tabular-nums;
 }

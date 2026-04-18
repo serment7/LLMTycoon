@@ -7,6 +7,7 @@ coverage/
 *.db
 workspaces/
 docs/
+data/
 .claude/settings.local.json
 .env*
 !.env.example

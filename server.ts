@@ -8,9 +8,13 @@ import { writeFileSync, unlinkSync, mkdirSync, readFileSync, readdirSync } from 
 import { tmpdir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { MongoClient, Db } from 'mongodb';
+import multer from 'multer';
 import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings } from './src/types';
+import { AgentWorkerRegistry } from './src/server/agentWorker';
+import { TaskRunner } from './src/server/taskRunner';
+import { processDirectiveFile } from './src/server/fileProcessor';
 import { parseEntry, type LedgerEntry } from './src/utils/handoffLedger';
-import { inferFileType, isExcludedFromCodeGraph } from './src/utils/codeGraphFilter';
+import { inferFileType, isExcludedFromCodeGraph, normalizeCodeGraphPath } from './src/utils/codeGraphFilter';
 import {
   DEFAULT_GIT_AUTOMATION_CONFIG,
   buildRunPlan,
@@ -194,6 +198,16 @@ async function startServer() {
   // 리더 에이전트가 태스크 완료 이벤트마다 이 컬렉션을 조회해 auto-commit/push/PR 여부를 판정.
   const gitAutomationSettingsCol = db.collection<GitAutomationSettings>('git_automation_settings');
   await gitAutomationSettingsCol.createIndex({ projectId: 1 }, { unique: true });
+  // 관리 메뉴(연동·가져온 저장소)는 프로젝트별로 격리한다. 전역 컬렉션을 공유하면
+  // 한 프로젝트가 PR 대상으로 지정한 외부 저장소가 다른 프로젝트 화면에 섞여 나와
+  // "어느 게임 프로젝트에 속한 것인지" 구분이 흐려진다. projectId 필드를 필수 키로
+  // 두고 조회/쓰기는 모두 해당 스코프 안에서만 돌게 만든다.
+  await integrationsCol.createIndex({ projectId: 1 });
+  await managedProjectsCol.createIndex({ projectId: 1 });
+  // 같은 프로젝트 안에서 동일 파일명은 단 하나의 노드만 허용. 에이전트가
+  // add_file 을 두 번 호출해도 두 번째는 중복키 에러로 막고, 기존 노드를 반환해
+  // 그래프에 유령 노드가 쌓이지 않게 한다.
+  await filesCol.createIndex({ projectId: 1, name: 1 }, { unique: true });
 
   console.log(`Connected to MongoDB at ${MONGODB_URI}/${MONGODB_DB}`);
   diagnoseClaudeCli();
@@ -202,7 +216,72 @@ async function startServer() {
   const httpServer = createServer(app);
   const io = new Server(httpServer);
 
+  // 에이전트별 상시 실행 워커 레지스트리. 각 워커는 Claude CLI 프로세스 1개를
+  // 유지하며 stream-json 으로 유저 턴을 큐잉한다. 에이전트 간 컨텍스트는 격리되고
+  // 동일 에이전트에 대한 연속 지시는 같은 세션에서 이어진다.
+  const workerRegistry = new AgentWorkerRegistry();
+  const taskRunner = new TaskRunner({
+    db,
+    io,
+    registry: workerRegistry,
+    port: PORT,
+    resolveWorkspace,
+    runGitAutomation: (projectId, ctx) => runGitAutomation(projectId, ctx),
+    getGameState: () => getGameState(),
+    getTasks: () => getTasks(),
+  });
+  await taskRunner.init();
+
+  // 서버 재기동 시 in-progress 로 남아있던 태스크는 유실된 컨텍스트를 되살릴 수
+  // 없으므로 pending 으로 되돌려 auto-dev 또는 클라이언트 재지시로 재착수되게 둔다.
+  await tasksCol.updateMany(
+    { status: 'in-progress' },
+    { $set: { status: 'pending' } },
+  );
+  await agentsCol.updateMany(
+    { status: 'working' },
+    { $set: { status: 'idle', currentTask: '' } },
+  );
+
   app.use(express.json());
+
+  // 지시 업로드: 메모리 버퍼로 받아 fileProcessor 가 PDF 텍스트/이미지/UTF-8 텍스트
+  // 어느 경로로든 통일된 레코드({fileId,name,type,extractedText,images[]})로 저장한다.
+  // 디스크 임시 파일을 거치지 않으므로 cleanup 누수가 없다.
+  const directiveUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 25 * 1024 * 1024 },
+  });
+
+  app.post('/api/directive/upload', directiveUpload.single('file'), async (req, res) => {
+    const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim() : '';
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    if (!req.file) { res.status(400).json({ error: 'file required' }); return; }
+    const project = await projectsCol.findOne({ id: projectId });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+    try {
+      const record = await processDirectiveFile({
+        projectId,
+        originalName: req.file.originalname,
+        buffer: req.file.buffer,
+        mimeType: req.file.mimetype,
+      });
+      res.json(record);
+    } catch (e: any) {
+      // 서버 측엔 원본 스택을 그대로 남겨 운영자가 파서·디스크 I/O 원인을 추적할
+      // 수 있게 한다. 반면 클라이언트에는 내부 구현 세부를 흘리지 않고, 파일 타입
+      // 기반으로 단일화한 사용자 친화 문구만 돌려준다. PDF 경로는 fileProcessor
+      // 단계에서 이미 폴백하므로 여기 도달했다면 디스크 저장 등 복구 불가 실패다.
+      console.error('[directive/upload] failed:', e?.stack || e?.message || e);
+      const originalName = req.file?.originalname || '';
+      const ext = originalName.toLowerCase().split('.').pop() || '';
+      const isPdf = ext === 'pdf' || req.file?.mimetype === 'application/pdf';
+      const friendly = isPdf
+        ? 'PDF 해석에 실패했습니다. 다른 파일을 시도해 주세요.'
+        : '파일 업로드에 실패했습니다. 다른 파일을 시도해 주세요.';
+      res.status(500).json({ error: friendly });
+    }
+  });
 
   // Helper to get full state
   const getGameState = async (): Promise<GameState> => {
@@ -223,51 +302,18 @@ async function startServer() {
   const getTasks = async () =>
     tasksCol.find({}, { projection: { _id: 0 } }).toArray();
 
-  // Seed initial data if empty
-  const projectCount = await projectsCol.countDocuments();
-  if (projectCount === 0) {
-    const defaultProjectId = uuidv4();
-
-    const initialAgents: Agent[] = [
-      { id: uuidv4(), name: '알파', role: 'Leader', spriteTemplate: 'char1', x: 100, y: 100, status: 'idle' },
-      { id: uuidv4(), name: '베타', role: 'Developer', spriteTemplate: 'char2', x: 200, y: 150, status: 'idle' },
-      { id: uuidv4(), name: '감마', role: 'QA', spriteTemplate: 'char3', x: 300, y: 200, status: 'idle' },
-    ];
-    await agentsCol.insertMany(initialAgents);
-
-    const defaultProject: Project = {
-      id: defaultProjectId,
-      name: 'Core System',
-      description: 'The main engine of LLM Tycoon',
-      workspacePath: './workspaces/core',
-      status: 'active',
-      agents: initialAgents.map(a => a.id),
-    };
-    resolveWorkspace(defaultProject.workspacePath);
-    await projectsCol.insertOne(defaultProject);
-
-    const initialFiles: CodeFile[] = [
-      { id: 'f1', name: 'App.tsx', x: 150, y: 150, projectId: defaultProjectId, type: 'component' },
-      { id: 'f2', name: 'Header.tsx', x: 300, y: 100, projectId: defaultProjectId, type: 'component' },
-      { id: 'f3', name: 'Sidebar.tsx', x: 300, y: 200, projectId: defaultProjectId, type: 'component' },
-      { id: 'f4', name: 'api.ts', x: 500, y: 150, projectId: defaultProjectId, type: 'service' },
-      { id: 'f5', name: 'utils.ts', x: 650, y: 150, projectId: defaultProjectId, type: 'util' },
-    ];
-    await filesCol.insertMany(initialFiles);
-
-    const initialDeps: CodeDependency[] = [
-      { from: 'f1', to: 'f2' },
-      { from: 'f1', to: 'f3' },
-      { from: 'f2', to: 'f4' },
-      { from: 'f3', to: 'f4' },
-      { from: 'f4', to: 'f5' },
-    ];
-    await depsCol.insertMany(initialDeps);
-  }
-
   // API Routes
   app.get('/api/state', async (req, res) => {
     res.json(await getGameState());
+  });
+
+  // 에이전트 상태 전용 엔드포인트. 클라이언트가 새로고침 직후 소켓 연결 전에
+  // currentTask / status / lastActiveTask 를 즉시 복원해 "working 중이던 카드가
+  // 빈 상태로 그려지는 1프레임 플래시" 를 막는다. DB 가 유일 진원이므로 서버
+  // 재기동 후에도 동일 페이로드를 돌려준다.
+  app.get('/api/agents', async (_req, res) => {
+    const agents = await agentsCol.find({}, { projection: { _id: 0 } }).toArray();
+    res.json(agents);
   });
 
   app.get('/api/tasks', async (req, res) => {
@@ -275,16 +321,23 @@ async function startServer() {
   });
 
   app.post('/api/tasks', async (req, res) => {
-    const { projectId, assignedTo, description } = req.body;
-    const task: Task = { id: uuidv4(), projectId, assignedTo, description, status: 'pending' };
+    const { projectId, assignedTo, description, source } = req.body;
+    const task: Task = {
+      id: uuidv4(),
+      projectId,
+      assignedTo,
+      description,
+      status: 'pending',
+      source: source === 'leader' || source === 'auto-dev' ? source : 'user',
+    };
     await tasksCol.insertOne(task);
-
-    // 에이전트 상태는 여기서 바꾸지 않는다.
-    // 실제 Claude 호출 시점(processAgentTask)에서 in-progress 전환과 함께 working으로 변경된다.
-    // 여기서 미리 working으로 바꾸면 타이머가 idle 에이전트를 못 찾아 데드락이 발생한다.
-
     io.emit('tasks:updated', await getTasks());
     res.json(task);
+    // 서버가 직접 워커 큐에 dispatch 한다. 에이전트별 상시 프로세스가
+    // 유지되므로 새 지시는 기존 세션에 이어져 컨텍스트가 누적된다.
+    taskRunner.dispatchTask(task).catch(err =>
+      console.error('[tasks] dispatch failed:', (err as Error).message),
+    );
   });
 
   app.patch('/api/tasks/:id', async (req, res) => {
@@ -306,11 +359,13 @@ async function startServer() {
       io.emit('state:updated', await getGameState());
     }
 
-    // 태스크 완료 시 에이전트를 idle로 복귀
+    // 태스크 완료 시 에이전트를 idle로 복귀.
+    // currentTask 는 비우되 lastActiveTask 에 id 를 적재해 클라이언트가 새로고침
+    // 후에도 "마지막으로 이 에이전트가 다룬 태스크" 를 복원할 수 있게 한다.
     if (status === 'completed' && task.assignedTo) {
       await agentsCol.updateOne(
         { id: task.assignedTo, currentTask: id },
-        { $set: { status: 'idle', currentTask: '', workingOnFileId: '' } },
+        { $set: { status: 'idle', currentTask: '', workingOnFileId: '', lastActiveTask: id } },
       );
       io.emit('state:updated', await getGameState());
       // 리더 자동화: 완료된 태스크가 리더 본인(Leader) 이 아닌 다른 에이전트의
@@ -353,6 +408,12 @@ async function startServer() {
 
   app.delete('/api/projects/:id', async (req, res) => {
     const { id } = req.params;
+    // 프로젝트에 배정돼있던 에이전트 워커를 모두 종료한다. 다른 프로젝트로 재배정되면
+    // ensureWorkerForAgent 가 새 컨텍스트로 다시 spawn 한다.
+    const project = await projectsCol.findOne({ id });
+    if (project?.agents) {
+      for (const agentId of project.agents) taskRunner.disposeAgentWorker(agentId);
+    }
     const files = await filesCol.find({ projectId: id }).toArray();
     const fileIds = files.map(f => f.id);
     await projectsCol.deleteOne({ id });
@@ -380,6 +441,9 @@ async function startServer() {
 
   app.delete('/api/projects/:id/agents/:agentId', async (req, res) => {
     const { id, agentId } = req.params;
+    // 프로젝트에서 해제된 에이전트의 워커는 기존 프로젝트 컨텍스트(시스템 프롬프트·cwd·MCP)
+    // 를 쥐고 있으므로 dispose 해 두고, 다른 프로젝트에 재배정될 때 새 컨텍스트로 spawn 되게 한다.
+    taskRunner.disposeAgentWorker(agentId);
     await projectsCol.updateOne({ id }, { $pull: { agents: agentId } });
     await tasksCol.deleteMany({ projectId: id, assignedTo: agentId });
     io.emit('state:updated', await getGameState());
@@ -411,13 +475,30 @@ async function startServer() {
       res.status(400).json({ error: 'prompt required' });
       return;
     }
-    let ctx: AgentContext | undefined;
+    // 에이전트/프로젝트가 지정된 경우: 상시 워커로 enqueue. 워커가 비어있으면
+    // 즉시 실행되고, 앞선 지시가 처리 중이면 대기했다가 순서대로 처리된다.
     if (agentId && projectId) {
-      const project = await projectsCol.findOne({ id: projectId });
-      ctx = { agentId, projectId, workspacePath: project?.workspacePath };
+      const [agent, project] = await Promise.all([
+        agentsCol.findOne({ id: agentId }, { projection: { _id: 0 } }),
+        projectsCol.findOne({ id: projectId }, { projection: { _id: 0 } }),
+      ]);
+      if (!agent || !project) {
+        res.status(404).json({ error: 'agent or project not found' });
+        return;
+      }
+      try {
+        const worker = await taskRunner.ensureWorkerForAgent(agent as Agent, project as Project);
+        const text = await worker.enqueue(prompt);
+        res.json({ text });
+      } catch (e: any) {
+        console.error('worker enqueue failed:', e?.message);
+        res.status(500).json({ error: e?.message || 'claude failed' });
+      }
+      return;
     }
+    // 컨텍스트 없는 일회성 호출(진단·ping 등)은 기존 1-shot 경로를 유지한다.
     try {
-      const text = await callClaude(prompt, ctx);
+      const text = await callClaude(prompt);
       res.json({ text });
     } catch (e: any) {
       console.error('claude CLI failed:', e?.message);
@@ -425,39 +506,37 @@ async function startServer() {
     }
   });
 
+  // 자동개발 상태 조회/갱신. 서버가 source of truth 를 소유하므로 어느 브라우저에서
+  // 토글해도 즉시 모든 세션에 전파되고(서버 소켓 이벤트), 재접속 후에도 복원된다.
+  app.get('/api/auto-dev', (_req, res) => {
+    res.json(taskRunner.getAutoDev());
+  });
+
+  app.patch('/api/auto-dev', async (req, res) => {
+    const { enabled, projectId } = req.body || {};
+    const next = await taskRunner.setAutoDev({
+      enabled: typeof enabled === 'boolean' ? enabled : undefined,
+      projectId: projectId === null ? undefined : (typeof projectId === 'string' ? projectId : undefined),
+    });
+    res.json(next);
+  });
+
   // --- MCP-backed endpoints ---
+  // 에이전트(또는 MCP 도구)가 스스로 상태를 보고하는 엔드포인트. 워커 아키텍처
+  // 도입 이후 태스크 완료/ git 자동화 트리거는 전적으로 TaskRunner.dispatchTask
+  // 가 소유한다. 이 엔드포인트는 UI 표시용 상태 필드만 갱신해 "이중 완료 처리" 를 막는다.
   app.patch('/api/agents/:id/status', async (req, res) => {
     const { id } = req.params;
     const { status, workingOnFileId } = req.body || {};
     const update: Record<string, unknown> = {};
     if (status !== undefined) update.status = status;
     if (workingOnFileId !== undefined) update.workingOnFileId = workingOnFileId;
-    // idle 전환 시 currentTask도 함께 정리하고, 할당된 태스크를 completed로 전환
     if (status === 'idle') {
+      // 다음 새로고침에도 "직전 작업 컨텍스트" 를 잃지 않도록 lastActiveTask 에 id 를 남긴다.
       const agent = await agentsCol.findOne({ id });
       const taskId = agent?.currentTask;
       update.currentTask = '';
-
-      if (taskId) {
-        // 해당 태스크를 completed로 전환 → git-automation 트리거
-        const task = await tasksCol.findOne({ id: taskId });
-        if (task && task.status !== 'completed') {
-          await tasksCol.updateOne({ id: taskId }, { $set: { status: 'completed' } });
-          io.emit('tasks:updated', await getTasks());
-
-          // git-automation 실행
-          if (task.assignedTo) {
-            const actor = await agentsCol.findOne({ id: task.assignedTo });
-            if (actor && actor.role !== 'Leader') {
-              runGitAutomation(task.projectId, {
-                type: 'chore',
-                summary: task.description?.slice(0, 64) || 'auto update',
-                agent: actor.name,
-              }).catch(err => console.error('[git-automation] auto-run failed:', err?.message));
-            }
-          }
-        }
-      }
+      if (taskId) update.lastActiveTask = taskId;
     }
     if (Object.keys(update).length === 0) {
       res.status(400).json({ error: 'nothing to update' });
@@ -481,19 +560,51 @@ async function startServer() {
       res.status(400).json({ error: 'name and projectId required' });
       return;
     }
-    if (isExcludedFromCodeGraph(String(name))) {
+    const normalizedName = normalizeCodeGraphPath(String(name));
+    if (!normalizedName) {
+      res.status(400).json({ error: 'name required' });
+      return;
+    }
+    if (isExcludedFromCodeGraph(normalizedName)) {
       res.status(400).json({ error: `path excluded from code graph: ${name}` });
+      return;
+    }
+    const projectIdStr = String(projectId);
+    // 중복 체크: 같은 프로젝트에 동일 정규화 경로가 이미 있으면 새 id 를 만들지 않고
+    // 기존 노드를 그대로 돌려준다. 그래프가 유령 노드로 분열되지 않도록 보장.
+    const existing = await filesCol.findOne(
+      { projectId: projectIdStr, name: normalizedName },
+      { projection: { _id: 0 } },
+    );
+    if (existing) {
+      res.json(existing);
       return;
     }
     const file: CodeFile = {
       id: uuidv4(),
-      name: String(name),
+      name: normalizedName,
       x: 0,
       y: 0,
-      projectId: String(projectId),
-      type: (type as CodeFile['type']) || inferFileType(String(name)),
+      projectId: projectIdStr,
+      type: (type as CodeFile['type']) || inferFileType(normalizedName),
     };
-    await filesCol.insertOne(file);
+    try {
+      await filesCol.insertOne(file);
+    } catch (e: any) {
+      // 동시 삽입 경합으로 unique index 에 걸렸을 때의 폴백. 다른 호출이 먼저
+      // 만든 노드를 찾아 돌려주면 호출자 입장에서는 add_file 이 "성공" 한 것과
+      // 구분되지 않는다.
+      if (e && (e.code === 11000 || /duplicate key/i.test(e?.message || ''))) {
+        const winner = await filesCol.findOne(
+          { projectId: projectIdStr, name: normalizedName },
+          { projection: { _id: 0 } },
+        );
+        if (winner) { res.json(winner); return; }
+      }
+      console.error('[files] insert failed:', e?.message);
+      res.status(500).json({ error: e?.message || 'insert failed' });
+      return;
+    }
     io.emit('state:updated', await getGameState());
     res.json(file);
   });
@@ -545,8 +656,13 @@ async function startServer() {
   // --- Source integrations (GitHub / GitLab) ---
   const redactIntegration = (i: SourceIntegration) => ({ ...i, accessToken: '' });
 
-  app.get('/api/integrations', async (_req, res) => {
-    const items = await integrationsCol.find({}, { projection: { _id: 0 } }).toArray();
+  // 프로젝트 스코프가 지정되지 않은 호출은 400 으로 거절한다. 클라이언트가
+  // "선택된 프로젝트 없음" 상태에서 fetch 를 아예 건너뛰도록 유도하는 쪽이
+  // 빈 배열로 조용히 응답하는 것보다 회귀 포착에 더 유리하다.
+  app.get('/api/integrations', async (req, res) => {
+    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId.trim() : '';
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    const items = await integrationsCol.find({ projectId }, { projection: { _id: 0 } }).toArray();
     res.json(items.map(i => redactIntegration(i as SourceIntegration)));
   });
 
@@ -558,13 +674,18 @@ async function startServer() {
   };
 
   app.post('/api/integrations', async (req, res) => {
-    const { provider, label, accessToken, host } = req.body || {};
+    const { provider, label, accessToken, host, projectId } = req.body || {};
+    if (!projectId || typeof projectId !== 'string') {
+      res.status(400).json({ error: 'projectId required' });
+      return;
+    }
     if (!provider || !accessToken || (provider !== 'github' && provider !== 'gitlab')) {
       res.status(400).json({ error: 'provider (github|gitlab) and accessToken required' });
       return;
     }
     const integration: SourceIntegration = {
       id: uuidv4(),
+      projectId,
       provider: provider as SourceProvider,
       label: String(label || provider),
       accessToken: String(accessToken),
@@ -598,6 +719,7 @@ async function startServer() {
       const repos = await r.json() as any[];
       return repos.map(repo => ({
         id: uuidv4(),
+        projectId: integration.projectId,
         provider: 'github',
         integrationId: integration.id,
         remoteId: String(repo.id),
@@ -619,6 +741,7 @@ async function startServer() {
     const repos = await r.json() as any[];
     return repos.map(repo => ({
       id: uuidv4(),
+      projectId: integration.projectId,
       provider: 'gitlab',
       integrationId: integration.id,
       remoteId: String(repo.id),
@@ -640,8 +763,15 @@ async function startServer() {
       let imported = 0;
       for (const repo of repos) {
         const { id: newId, ...rest } = repo;
+        // projectId 도 동일성 키에 포함시켜, 같은 remote 저장소가 다른 게임 프로젝트에서
+        // 동시에 관리될 때 서로 덮어쓰지 않고 각자 슬롯에 독립적으로 저장되게 한다.
         const result = await managedProjectsCol.updateOne(
-          { provider: repo.provider, remoteId: repo.remoteId, integrationId: repo.integrationId },
+          {
+            projectId: repo.projectId,
+            provider: repo.provider,
+            remoteId: repo.remoteId,
+            integrationId: repo.integrationId,
+          },
           { $set: rest, $setOnInsert: { id: newId } },
           { upsert: true },
         );
@@ -654,8 +784,10 @@ async function startServer() {
     }
   });
 
-  app.get('/api/managed-projects', async (_req, res) => {
-    const items = await managedProjectsCol.find({}, { projection: { _id: 0 } }).toArray();
+  app.get('/api/managed-projects', async (req, res) => {
+    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId.trim() : '';
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    const items = await managedProjectsCol.find({ projectId }, { projection: { _id: 0 } }).toArray();
     res.json(items);
   });
 
@@ -804,9 +936,17 @@ async function startServer() {
   // 실패 중인 LLM 호출은 서버에서 취소할 수단이 없으므로, "스냅샷" 차원에서
   // 상태·작업 큐만 리셋하는 것이 실제로 의미 있는 최대 범위다.
   app.post('/api/emergency-stop', async (_req, res) => {
+    // 자동개발 루프도 함께 꺼야 방금 pending 복구된 태스크가 즉시 다시 dispatch
+    // 되는 상황을 막을 수 있다. 사용자는 필요 시 토글로 재개 가능.
+    await taskRunner.setAutoDev({ enabled: false });
+    // 모든 에이전트 워커(= Claude 자식 프로세스)를 즉시 종료한다. 진행 중이던
+    // LLM 호출은 서버에서 확실히 끊을 방법이 이 외에는 없다.
+    for (const agentId of workerRegistry.listAgentIds()) {
+      workerRegistry.dispose(agentId);
+    }
     const agentResult = await agentsCol.updateMany(
       {},
-      { $set: { status: 'idle', workingOnFileId: '' } },
+      { $set: { status: 'idle', workingOnFileId: '', currentTask: '' } },
     );
     const taskResult = await tasksCol.updateMany(
       { status: { $ne: 'completed' } },
@@ -823,6 +963,9 @@ async function startServer() {
 
   app.delete('/api/agents/:id', async (req, res) => {
     const { id } = req.params;
+    // 에이전트 해고 시 해당 워커의 Claude 프로세스를 즉시 종료한다. 큐에 남은
+    // 지시는 모두 실패로 응답되어 dispatch 체인이 조용히 끊긴다.
+    taskRunner.disposeAgentWorker(id);
     await agentsCol.deleteOne({ id });
     await tasksCol.deleteMany({ assignedTo: id });
     await projectsCol.updateMany({}, { $pull: { agents: id } });

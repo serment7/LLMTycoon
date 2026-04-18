@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2, Download, Github, GitBranch, RefreshCw, FolderGit2, Link2Off, Server, BarChart3, Search, AlertTriangle, GitPullRequest, Check, Clock, FileDown, Sparkles, ClipboardCopy, Pin, Pencil } from 'lucide-react';
 import type { SourceIntegration, ManagedProject, SourceProvider, UserPreferences, GitAutomationPreference } from '../types';
 import { USER_PREFERENCES_KEY } from '../types';
@@ -136,6 +136,9 @@ export function saveGitAutomationSettings(next: GitAutomationSettings, projectId
 
 interface Props {
   onLog: (text: string, from?: string) => void;
+  // 앱 전역의 현재 프로젝트. null/undefined 이면 본 컴포넌트는 아예 렌더되지 않는다.
+  // 이 값이 바뀌면 내부 selectedProjectId 와 캐시도 해당 프로젝트의 슬롯으로 스위치된다.
+  currentProjectId?: string | null;
 }
 
 type SortKey = 'name' | 'provider' | 'recent';
@@ -470,7 +473,16 @@ export function describeProjectScope(projectLabel: EditingProjectLabel): string 
 // Tailwind 변수로 정의된 accent 색상과 동일한 톤을 사용해 테마 변경에도 자동 대응한다.
 const focusRing = 'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pixel-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-black';
 
-export function ProjectManagement({ onLog }: Props) {
+// 상위에서 현재 프로젝트가 지정되지 않았으면 관리 메뉴 자체를 렌더하지 않는다.
+// 과거엔 null 상태에서도 빈 리스트/로딩 UI가 잠시 노출돼 사용자가 "무엇이 선택됐는지"
+// 혼동하는 회귀가 있었다. 훅이 걸리기 전(컴포넌트 경계)에서 분기해 Rules of Hooks 를
+// 지키면서도 불필요한 네트워크/localStorage 접근을 차단한다.
+export function ProjectManagement({ onLog, currentProjectId }: Props) {
+  if (!currentProjectId) return null;
+  return <ProjectManagementInner onLog={onLog} currentProjectId={currentProjectId} />;
+}
+
+function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentProjectId: string }) {
   // 편집 중 헤더의 라이브 닷 펄스를 prefers-reduced-motion 사용자에게 차단한다.
   const reducedMotion = useReducedMotion();
   const [integrations, setIntegrations] = useState<SourceIntegration[]>([]);
@@ -489,7 +501,12 @@ export function ProjectManagement({ onLog }: Props) {
   const [pinnedPrTargetProjectId, setPinnedPrTargetProjectId] = useState<string | null>(
     () => loadUserPreferences().pinnedPrTargetProjectId ?? null,
   );
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(() => pinnedPrTargetProjectId);
+  // 앱 전역이 알려주는 currentProjectId 를 기본 선택으로 삼는다. 핀 고정 값은 currentProjectId
+  // 가 비어 있는 구버전 경로에서만 폴백으로 작동한다(본 컴포넌트는 이제 currentProjectId 없이는
+  // 마운트되지 않지만, 초기 mount 타이밍에 pinned 값이 남아 있으면 먼저 보이는 것도 허용).
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    () => currentProjectId ?? pinnedPrTargetProjectId,
+  );
   // 고정 선택 모드: true면 라디오는 잠겨 있고 "변경" 버튼으로만 해제 가능.
   // 초기 진입 시 이미 핀이 있다면 잠긴 상태에서 시작해 오조작을 막는다.
   const [isPrTargetLocked, setIsPrTargetLocked] = useState<boolean>(() => pinnedPrTargetProjectId !== null);
@@ -526,9 +543,13 @@ export function ProjectManagement({ onLog }: Props) {
     setRefreshing(true);
     setLoadError(null);
     try {
+      // 관리 메뉴 데이터는 서버에서 projectId 스코프로만 반환된다. currentProjectId
+      // 가 비어 있으면 상위에서 이미 return null 로 컴포넌트가 마운트되지 않으므로
+      // 여기서는 쿼리 파라미터로 붙이기만 하면 된다.
+      const qs = `?projectId=${encodeURIComponent(currentProjectId)}`;
       const [iRes, mRes] = await Promise.all([
-        fetch('/api/integrations', { signal: ctrl.signal }),
-        fetch('/api/managed-projects', { signal: ctrl.signal }),
+        fetch(`/api/integrations${qs}`, { signal: ctrl.signal }),
+        fetch(`/api/managed-projects${qs}`, { signal: ctrl.signal }),
       ]);
       const errors: string[] = [];
       if (iRes.ok) {
@@ -612,6 +633,14 @@ export function ProjectManagement({ onLog }: Props) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // 앱 전역 currentProjectId 가 바뀌면 내부 선택 상태도 해당 프로젝트로 즉시 전환한다.
+  // useEffect 로 동기화하면 prop 변경 프레임에서 paint 된 뒤 한 틱 뒤에야 selectedProjectId
+  // 가 따라오면서 "이전 프로젝트 컨텍스트의 PR 대상 표기"가 1프레임 노출되는 플래시가
+  // 발생했다. useLayoutEffect 로 paint 직전에 동기 보정해 깜빡임을 제거한다.
+  useLayoutEffect(() => {
+    setSelectedProjectId(prev => (prev === currentProjectId ? prev : currentProjectId));
+  }, [currentProjectId]);
+
   // 프로젝트 진입 시 해당 프로젝트의 저장본을 한 번만 로드한다. 이미 캐시에 있는
   // 프로젝트는 재로드하지 않아, 다른 프로젝트로 잠시 이동했다가 돌아와도 아직 저장하지
   // 않은 편집본을 잃지 않는다. structuredClone 으로 localStorage 파싱본과 state 사이를
@@ -671,7 +700,7 @@ export function ProjectManagement({ onLog }: Props) {
       const res = await fetch('/api/integrations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider, label, accessToken, host: host || undefined }),
+        body: JSON.stringify({ projectId: currentProjectId, provider, label, accessToken, host: host || undefined }),
       });
       if (res.ok) {
         onLog(`${provider.toUpperCase()} 연동 추가: ${label}`);

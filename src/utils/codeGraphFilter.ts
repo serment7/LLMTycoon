@@ -22,6 +22,13 @@ function normalize(name: string): string {
   return String(name).replace(/^[./\\]+/, '').replace(/\\/g, '/');
 }
 
+// 코드그래프 저장용 정규화. 저장 전에 일관된 포맷으로 다듬어야
+// `./Foo.tsx` · `Foo.tsx` · `src\\Foo.tsx` 가 같은 노드로 모이고, 중복 체크가
+// 의미있게 동작한다. MCP add_file 이 전달하는 raw 이름을 서버가 다시 정규화.
+export function normalizeCodeGraphPath(name: string): string {
+  return normalize(name);
+}
+
 function matchesPrefix(name: string, prefixes: readonly string[]): boolean {
   const normalized = normalize(name);
   return prefixes.some((prefix) => {
