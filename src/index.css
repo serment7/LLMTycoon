@@ -260,6 +260,42 @@
   --git-alert-not-triggered-bg: rgba(250, 204, 21, 0.12);
   --git-alert-not-triggered-fg: #fde68a;
   --git-alert-not-triggered-icon: #facc15;
+
+  /* ── GraphResetButton · '그래프 초기화' 버튼 디자인 토큰 (2026-04-19) ────────
+   * 대상: src/App.tsx 좌측 사이드바 하단 툴바의 '에이전트 고용'(accent=cyan)과
+   * '긴급중단'(red=#c23b4a) 사이에 위치하는 신규 버튼. 시안 문서:
+   * tests/graph-reset-button-mockup.md · 미리보기: tests/graph-reset-button-mockup.svg
+   *
+   * 설계 의도:
+   *   1) 형제 2개(긍정/위험)의 고채도 사이에서 **저채도 중간 명도** 의 슬레이트-보라
+   *      배경을 써서 "쉬어 가는 자리" 를 만든다. 완전 중립(흰/회) 은 두 형제 사이에
+   *      묻혀 비활성처럼 보이고, 빨강 계열은 '긴급중단' 과 의미 충돌이 난다.
+   *   2) 강조선·글자의 amber 는 기존 "미저장 · 경고" 맥락(--shared-goal-border-editing,
+   *      --git-alert-not-triggered-fg) 과 이미 짝을 이루는 색을 재사용 —
+   *      "되돌림/경고이되 파괴적이지는 않음" 이라는 이 버튼의 의미와 일치.
+   *   3) 하단 강조선은 형제(4px) 대비 2px 로 한 단계 낮춰 시각적 위계를 두께로도
+   *      표현. "중간 위계" 라는 의미를 색·굵기 모두로 드러낸다.
+   *
+   * 대비(AA 본문 기준 4.5:1):
+   *   default  (#3a3150 ↔ #fde68a) = 6.4:1
+   *   hover    (#4a3e6a ↔ #ffffff) = 9.1:1
+   *   disabled (slate 40%  ↔ white 35%) = 3.0:1 (AA large · 의도적 낮춤)
+   *
+   * 색각 이상 대응: amber 단색에 의존하지 않도록 아이콘 ↺ (RotateCcw) 와
+   * "초기화" 한국어 라벨을 항상 함께 노출한다.
+   */
+  --graph-reset-bg: #3a3150;
+  --graph-reset-bg-hover: #4a3e6a;
+  --graph-reset-bg-active: #2a2540;
+  --graph-reset-bg-disabled: rgba(58, 49, 80, 0.4);
+  --graph-reset-border: #e0a200;
+  --graph-reset-border-hover: #fbbf24;
+  --graph-reset-border-active: #c48700;
+  --graph-reset-fg: #fde68a;
+  --graph-reset-fg-hover: #ffffff;
+  --graph-reset-fg-disabled: rgba(255, 255, 255, 0.35);
+  --graph-reset-icon: #fbbf24;
+  --graph-reset-halo: rgba(251, 191, 36, 0.18);
 }
 
 * {
