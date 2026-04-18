@@ -24,7 +24,6 @@ import {
   type LeaderMessageKind,
 } from '../utils/leaderMessage';
 import type { GitAutomationRunResult } from '../utils/gitAutomation';
-import { buildGitAutomationLogEntries } from '../utils/gitAutomation';
 
 // Git 자동화 트리거 경로 전용 디버그 스위치. 리더 경유 단일 브랜치 경로
 // (handleImprovementReport → runGitAutomation) 에서 어느 단계가 누락됐는지
@@ -159,12 +158,9 @@ export class TaskRunner {
       workspacePath,
       port: this.port,
       systemPrompt,
-      // 에이전트 턴이 성공 종료되면 워커가 이 핸들러를 호출한다. 리더가 아닌
-      // 실무 에이전트의 완료만 Git 자동화 파이프라인으로 흘려 리더의 "분배 결과"
-      // 와 구분한다. dispatchTask 내부의 인라인 트리거를 이 훅으로 통일했다.
-      onTaskComplete: (info) => this.handleWorkerTaskComplete(agent, project, info),
-      // 워커가 자체 개선점을 탐지해 리포트를 만들면 리더 큐로 재발행한다.
-      // reportImprovementToLeader → handleImprovementReport 파이프라인의 진입점.
+      // 리더 단일 브랜치 경로로 통합된 뒤, 에이전트 단위 완료 훅은 제거됐다.
+      // 팀원 턴이 성공 종료되면 워커는 오직 개선 보고만 리더 큐로 흘려 보내고,
+      // Git 자동화(브랜치/커밋/푸시/PR)는 전적으로 리더 태스크 흐름이 책임진다.
       onImprovementReport: (report) => {
         this.handleImprovementReport(agent, project, report).catch(err =>
           console.error(
@@ -204,11 +200,10 @@ export class TaskRunner {
     );
     if (!leader) return;
     // 리더가 팀원의 완료 이벤트를 수신하는 순간 Git 자동화 파이프라인을 직접 실행한다.
-    // 기존에는 이 경로가 비어 있어, 팀원 본인의 handleWorkerTaskComplete 훅이 한국어
-    // 게이트 재시도·워커 재사용 타이밍·훅 unset 등의 이유로 건너뛰면 커밋/푸시/PR
-    // 이 전부 침묵했다(tests/auto-commit-no-fire-repro.md A1 구간과 연결된 공백).
-    // executeGitAutomation 이 skipped/disabled/firedTaskIds 디바운스를 내장하므로,
-    // 팀원 훅과 중복 호출되더라도 실제 git 명령은 의미 있게 1회로 수렴한다.
+    // 리더 단일 브랜치 경로로 통합된 이후, 이 호출이 전체 프로젝트의 브랜치 생성·
+    // 커밋·푸시·PR 을 책임지는 유일한 지점이다. 에이전트 단위 트리거(구
+    // handleWorkerTaskComplete 와 AgentWorker.onTaskComplete) 는 제거됐으며,
+    // 팀원의 모든 기여는 리더 태스크 흐름을 통해 하나의 브랜치로 통합 커밋된다.
     const gitContext = buildLeaderGitAutomationContext(report, agent.name);
     if (DEBUG_GIT_AUTO) {
       console.log(
@@ -241,129 +236,6 @@ export class TaskRunner {
         (err as Error)?.message,
       ),
     );
-  }
-
-  private async handleWorkerTaskComplete(agent: Agent, project: Project, info: TaskCompleteInfo) {
-    // 긴급 수정 #a7b258fb: 호출 자체가 삼켜지는지 확인이 어려웠던 과거 회귀를 막기
-    // 위해 진입·조기 return 각 분기마다 DEBUG 가드 없이 한 줄씩 최소 로그를 남긴다.
-    // 로그 노이즈보다 "커밋이 왜 안 나왔는가" 를 즉시 추적할 수 있는 쪽이 이득이다.
-    console.log(
-      `[git-auto] hook enter agent=${agent.id} role=${agent.role} project=${project.id} task=${info.taskId ?? 'n/a'}`,
-    );
-    if (agent.role === 'Leader') {
-      console.log(`[git-auto] hook skip: leader role (agent=${agent.id}, task=${info.taskId ?? 'n/a'})`);
-      return;
-    }
-    if (!info.taskId) {
-      console.log(`[git-auto] hook skip: no taskId (agent=${agent.id})`);
-      return;
-    }
-    // 한국어 게이트 재시도 턴에서도 동일 taskId 로 여러 번 호출될 수 있다.
-    // enqueueWithKoreanGate 가 재요청을 같은 taskId 로 밀어 넣기 때문. 마지막
-    // 성공 턴 기준 1회만 트리거되어도 자동화는 의미 있게 돌아가므로 중복 호출은
-    // 낭비라 taskId 별로 1회로 디바운스한다. 삼켜지는 호출을 오해하지 않도록
-    // 디바운스 히트는 항상 기록한다.
-    if (this.firedTaskIds.has(info.taskId)) {
-      console.log(`[git-auto] hook skip: already fired task=${info.taskId} (debounced)`);
-      return;
-    }
-    this.firedTaskIds.add(info.taskId);
-    // 메모리 폭주 방지: 최근 256건만 유지한다. 오래된 항목은 FIFO 로 밀어낸다.
-    if (this.firedTaskIds.size > 256) {
-      const first = this.firedTaskIds.values().next().value;
-      if (first) this.firedTaskIds.delete(first);
-    }
-    try {
-      const task = await this.tasksCol.findOne({ id: info.taskId }, { projection: { _id: 0 } });
-      const summary = task?.description?.slice(0, 64) || info.text?.slice(0, 64) || 'auto update';
-      const result = await this.runGitAutomation(project.id, {
-        type: 'chore',
-        summary,
-        agent: agent.name,
-        // 긴급 수정 #a7b258fb: 태스크 완료 훅은 항상 커밋+푸시가 한 번에 원격까지
-        // 반영되도록 push 가드를 강제 우회한다. flowLevel=commitOnly 프로젝트에서도
-        // 태스크 완료 시 push 까지 진행 — 저장된 토글 OFF(enabled=false)는 여전히
-        // 우선시되므로 설정 자체를 끈 경우의 "조용한 비활성" 의도는 유지된다.
-        forcePush: true,
-      });
-      console.log(
-        `[git-auto] runGitAutomation done task=${info.taskId} ok=${result.ok} skipped=${result.skipped ?? 'none'} stages=${result.results.length} branch=${result.branch ?? 'n/a'}`,
-      );
-      // 성공·실패·스킵 어느 경로든 동일 빌더로 구조화 로그를 만들어 소켓으로 흘려준다.
-      // AgentStatusPanel 은 이 엔트리 배열의 failed 항목에서 errorMessage 를 직접 읽어
-      // 사용자에게 실패 원인을 노출한다. disabled 스킵은 UI 노이즈가 크므로 방출하지
-      // 않고 조용히 넘긴다(기존 동작과 동일).
-      if (!(result.skipped === 'disabled')) {
-        const entries = buildGitAutomationLogEntries(result, {
-          taskId: info.taskId,
-          agent: agent.name,
-        });
-        if (entries.length > 0) {
-          this.io.emit('git-automation:log', {
-            projectId: project.id,
-            taskId: info.taskId,
-            agentId: agent.id,
-            entries,
-          });
-        }
-      }
-      if (result.ok) return;
-      if (result.skipped) {
-        if (result.skipped !== 'disabled') {
-          const worker = this.registry.get(agent.id);
-          worker?.logFailure(
-            `task=${info.taskId} skipped=${result.skipped}${result.error ? ` — ${result.error}` : ''}`,
-          );
-        }
-        return;
-      }
-      const failed = result.results.find(r => !r.ok);
-      const failSummary = failed
-        ? `[${failed.label}] exit=${failed.code ?? '?'} ${failed.stderr ? `— ${failed.stderr}` : ''}`
-        : (result.error || 'unknown failure');
-      const worker = this.registry.get(agent.id);
-      worker?.logFailure(`task=${info.taskId} branch=${result.branch ?? '?'} ${failSummary}`);
-      this.io.emit('git-automation:failed', {
-        projectId: project.id,
-        taskId: info.taskId,
-        agentId: agent.id,
-        branch: result.branch,
-        failedStep: failed?.label,
-        stderr: failed?.stderr || result.error,
-      });
-    } catch (err) {
-      // executeGitAutomation 은 자체 try/catch 를 가지지만, 그보다 위쪽(tasksCol
-      // 조회·훅 자체)에서 throw 가 터지면 여기가 마지막 방어선이다. 워커 로그와
-      // 소켓 이벤트 양쪽에 같은 원인을 남겨 UI/운영자 모두 실패를 감지한다.
-      const message = (err as Error)?.message || 'unknown error';
-      console.error(`[git-automation] worker-hook run failed task=${info.taskId}: ${message}`);
-      const worker = this.registry.get(agent.id);
-      worker?.logFailure(`task=${info.taskId} throw: ${message}`);
-      this.io.emit('git-automation:failed', {
-        projectId: project.id,
-        taskId: info.taskId,
-        agentId: agent.id,
-        failedStep: 'hook',
-        stderr: message,
-      });
-      // 훅 자체 throw 는 실행 결과 객체조차 없으므로, AgentStatusPanel 이 실패 원인을
-      // 조용히 잃지 않도록 최소한의 구조화 엔트리를 직접 조립해 흘려준다. stage 는
-      // commit 으로 귀속 — 실제로는 파이프라인이 한 발짝도 돌지 못한 상황이지만,
-      // 사용자 입장에서는 "첫 단계부터 실패" 로 읽는 것이 가장 자연스럽다.
-      this.io.emit('git-automation:log', {
-        projectId: project.id,
-        taskId: info.taskId,
-        agentId: agent.id,
-        entries: [{
-          taskId: info.taskId,
-          agent: agent.name,
-          stage: 'commit',
-          outcome: 'failed',
-          at: Date.now(),
-          errorMessage: `[hook] ${message}`.slice(0, 400),
-        }],
-      });
-    }
   }
 
   getAutoDev(): AutoDevSettings { return { ...this.autoDev }; }
@@ -579,22 +451,9 @@ export class TaskRunner {
       try { this.onAgentStateChanged?.(project.id); } catch (e) {
         console.error('[runner] onAgentStateChanged failed:', (e as Error).message);
       }
-      // Git 자동화 안전망: 정상 경로는 AgentWorker.onTaskComplete 훅이 처리한다.
-      // 다만 워커 프로세스가 result 이벤트와 훅 호출 사이에 죽거나, ensure() 재사용
-      // 타이밍에 핸들러가 교체되는 케이스에서 훅이 누락될 수 있어, DB 가 completed
-      // 로 넘어간 직후 동일 경로를 한 번 더 호출한다. 중복 실행은
-      // handleWorkerTaskComplete 내부의 firedTaskIds 디바운스가 흡수한다.
-      console.log(
-        `[git-auto] dispatchTask safety-net hook task=${task.id} agent=${agent.id} project=${project.id}`,
-      );
-      this.handleWorkerTaskComplete(agent, project, {
-        agentId: agent.id,
-        projectId: project.id,
-        taskId: task.id,
-        text: text || '',
-      }).catch(err =>
-        console.error('[dispatch] post-complete git-automation fallback failed:', (err as Error).message),
-      );
+      // Git 자동화 트리거는 리더 태스크 흐름(handleImprovementReport →
+      // runGitAutomation)이 단일 경로로 담당한다. 에이전트 단위 안전망은 제거 —
+      // 리더 단일 브랜치로 변경 집합을 통합 커밋하는 계약을 유지한다.
     } catch (e) {
       console.error(`[dispatch] task ${task.id} failed:`, (e as Error).message);
       // 실패 시 pending 복구로 다음 틱에 재시도 가능하게 둔다. 단 task.source 가

@@ -1,3 +1,14 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Git 자동화 패널. 이 패널은 **리더 에이전트가 트리거하는 단일 브랜치 파이프라인**
+ * 상태만 노출한다 — 에이전트별 브랜치 목록/선택 UI는 제공하지 않는다.
+ * 리더 단일 브랜치 정책: 2026-04-18 리팩터. 실제 브랜치 이름은 서버가
+ * `branchPattern` 템플릿으로 단일 문자열을 생성하고, 패널은 그 결과 하나만 읽는다.
+ * 배경: 동료 에이전트별로 나뉜 브랜치 축은 UI 폭을 과도하게 점유하고,
+ * 리더-중심 트리거 모델(server.ts `executeGitAutomation`)과도 어긋났다.
+ */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GitCommit, GitBranch, GitPullRequest, RotateCcw, Save, AlertTriangle, Info, Power, CheckCircle2, Clock3, Check, Square, Loader2, XCircle, Upload, Hash, X } from 'lucide-react';
 import { useReducedMotion } from '../utils/useReducedMotion';
@@ -83,6 +94,8 @@ const FLOW_OPTIONS: FlowOption[] = [
 
 // 디자이너: 템플릿 변수는 "알고 있으면 편하지만 매번 검색하게 되는" 종류의 지식.
 // 각 필드 아래에 인라인 칩으로 노출해, 입력 중에도 바로 눈에 들어오게 한다.
+// 리더 단일 브랜치 정책: `{agent}` 토큰은 UI 에서 의도적으로 노출하지 않는다.
+// 브랜치가 리더 트리거마다 1개로 고정되므로, 템플릿에 에이전트 이름이 들어갈 이유가 없다.
 const TEMPLATE_VARS = [
   { name: '{branch}', hint: '자동 생성된 브랜치 식별자(제목 기반)' },
   { name: '{type}',   hint: '변경 유형 (feat/fix/docs/chore 등)' },

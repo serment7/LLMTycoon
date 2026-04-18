@@ -5,6 +5,12 @@
  * Git 자동화 파이프라인(커밋·푸시·PR) 단계의 현재 상태를 4가지(대기/실행중/성공/
  * 실패) 시각으로 그리는 재사용 뱃지.
  *
+ * 리더 단일 브랜치 정책(2026-04-18): 이 뱃지는 리더 에이전트가 트리거한
+ * **단일 브랜치 파이프라인**의 단계 상태만 표현한다. 에이전트별로 여러 브랜치 축을
+ * 나눠 그리지 않는다. 호출부가 넘기는 `recent.branch` 값은 항상 리더 기준의 한 줄이며,
+ * 호스트(AgentContextBubble/AgentStatusPanel)가 에이전트별로 중복 렌더하지 않도록
+ * "가장 최근 리더 트리거 1건" 만 고른 뒤 이 뱃지에 주입하는 계약이다.
+ *
  * 배경: `AgentStatusPanel` 안에 동일 마크업이 인라인으로 묻혀 있어 `AgentContextBubble`
  * 처럼 공간이 다른 호스트에서 재사용할 수 없었다. 뱃지 자체를 독립 컴포넌트로
  * 분리하고, types.ts 의 `GitAutomationLogEntry` 를 단일 입력 채널로 삼아
@@ -73,6 +79,8 @@ export function getGitAutomationBadgeGlyph(state: GitAutomationBadgeState): stri
 
 // 엔트리 배열에서 stage 별로 at(epoch ms) 가 가장 큰 최신 1건만 뽑는다.
 // AgentContextBubble 처럼 "요약만" 필요한 호스트가 반복 탐색하지 않도록 공용화.
+// 리더 단일 브랜치 정책: entries 가 여러 에이전트의 로그를 섞어 담고 있어도
+// stage 별로 "가장 최근 1건" 만 남기므로, 반환값은 항상 단일 브랜치 관점의 요약이다.
 export function pickLatestByStage(
   entries: ReadonlyArray<GitAutomationLogEntry>,
 ): Record<GitAutomationBadgeStage, GitAutomationLogEntry | undefined> {
