@@ -108,15 +108,19 @@
 
 ### 2A.2 필드 시각 규격 (토큰 매핑)
 
-| 토큰                                   | 적용 지점                                                 |
-| -------------------------------------- | --------------------------------------------------------- |
-| `--shared-goal-modal-subtle-fg`        | 레이블 글자색 (white/65%)                                  |
-| `rgba(255,255,255,0.42)`               | 플레이스홀더 글자색 — 힌트(65%)보다 **한 단계 더 흐리게** 해 "실제 입력값이 아님" 을 시각 대비로 표현 |
-| `--shared-goal-modal-field-border`     | 기본 필드 테두리 (1px)                                     |
-| `--shared-goal-modal-field-focus`      | 포커스 시 테두리 + 2px 외곽 링                              |
-| `--shared-goal-modal-error-strip`      | 검증 실패 시 우측 4px 수직 스트립 + 힌트 자리의 에러 카피 색 |
-| `--shared-goal-modal-subtle-fg` / 55%  | 글자 수 카운터 (`12/80`) — 정상                            |
-| `--shared-goal-modal-error-strip`      | 글자 수 카운터 — 초과(빨강) 또는 최소 미달(빨강)            |
+(2026-04-19 추가: 아래 표의 리터럴 값들은 모두 **`src/index.css` 의 파생 토큰으로 선-분리** 되었다. §8 토큰 표의 2번째 블록을 참조.)
+
+| 토큰                                           | 적용 지점                                                                                |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `--shared-goal-modal-subtle-fg`                | 레이블 글자색 (white/65%)                                                                 |
+| `--shared-goal-modal-placeholder-fg`           | 플레이스홀더 글자색 (white/42%) — 힌트(65%)보다 **한 단계 더 흐리게** 해 "실제 입력값이 아님" 을 시각 대비로 표현 |
+| `--shared-goal-modal-field-border`             | 기본 필드 테두리 (1px)                                                                   |
+| `--shared-goal-modal-field-focus`              | 포커스 시 테두리 + 2px 외곽 링                                                            |
+| `--shared-goal-modal-field-editing-border`     | 변경이 발생한 필드의 amber 테두리 (1px) — §2B 의 editing 상태                              |
+| `--shared-goal-modal-field-editing-strip`      | 변경 필드 좌측 2px 수직 amber 스트립                                                     |
+| `--shared-goal-modal-error-strip`              | 검증 실패 시 우측 4px 수직 스트립 + 힌트 자리의 에러 카피 색                               |
+| `--shared-goal-modal-counter-fg`               | 글자 수 카운터 (`12/80`) — 정상(white/55%)                                               |
+| `--shared-goal-modal-counter-error-fg`         | 글자 수 카운터 — 초과/최소 미달(= error-strip 과 동일한 빨강)                              |
 
 ### 2A.3 플레이스홀더 vs 실제 값 판별 — 접근성
 
@@ -134,12 +138,12 @@
 | 상태            | 트리거                                                             | BODY 내부 구성                                                                    | 시각 단서                                          |
 | --------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | -------------------------------------------------- |
 | `empty-create`  | 모달 open 직후 · 모든 필드 **기본값/공란**                          | 필드 4종 **모두 렌더됨**. 상단에 📝 빈 상태 안내 배너(고정 72px). 리더 미리보기 자리는 "🤖 4명에게 분배 예정 · 제목을 먼저 입력해주세요" 플레이스홀더 | 헤더 ◇ 마크 cyan glow 1회 펄스(220ms), 필드 테두리 `--shared-goal-modal-field-border` (white/18%) |
-| `editing`       | 첫 키 입력 또는 라디오/기한 변경 발생                               | `empty-create` 와 동일 필드 구성, 필드 값만 채워짐. 상단 빈 상태 배너는 **128ms 페이드아웃** 후 제거, 그 자리에 글자 수 카운터·리더 미리보기가 점진 등장 | 변경된 필드 테두리가 amber `#fbbf24` (= `--shared-goal-border-editing` 재활용) 1px + 좌측 2px 스트립으로 강조. FOOTER 의 primary 버튼이 비활성→hover 가능으로 전환(조건 충족 시만) |
+| `editing`       | 첫 키 입력 또는 라디오/기한 변경 발생                               | `empty-create` 와 동일 필드 구성, 필드 값만 채워짐. 상단 빈 상태 배너는 **128ms 페이드아웃** 후 제거, 그 자리에 글자 수 카운터·리더 미리보기가 점진 등장 | 변경된 필드 테두리가 `--shared-goal-modal-field-editing-border` (amber `#fbbf24`, 인라인 폼 `--shared-goal-border-editing` 과 숫자 일치) 1px + 좌측 2px `--shared-goal-modal-field-editing-strip` 으로 강조. FOOTER 의 primary 버튼이 비활성→hover 가능으로 전환(조건 충족 시만) |
 
 **회귀 방지 원칙 (중요)**
 
 - `empty-create` ↔ `editing` 전이는 **같은 DOM 서브트리 내 값·클래스 변경** 으로 표현한다. 두 상태에서 절대 `if (!hasGoal) return null` 같은 조기 반환을 넣지 않는다(=과거 회귀 원인).
-- 상태 전이는 250ms 이내, layout shift 0. 두 상태 모두 BODY 높이 **360px 로 고정** 해 모달 자체의 크기 변화도 없게 한다.
+- 상태 전이는 250ms 이내, layout shift 0. 두 상태 모두 BODY 높이 **`--shared-goal-modal-body-min-height` (360px) 로 고정** · 배너 자리 **`--shared-goal-modal-banner-height` (72px) 유지** 로 모달 자체의 크기 변화도 없게 한다. (토큰 정의: `src/index.css`)
 
 ### 2B.2 두 상태 병렬 ASCII 시안
 
@@ -181,8 +185,8 @@
 - **아이콘**: `📝` (16px, 카피 왼쪽 8px gap)
 - **타이틀** (14px, white/80%, bold): `아직 공동 목표가 없습니다`
 - **본문** (12px, white/65%, `--shared-goal-modal-subtle-fg`): `아래 4개 항목을 채우면 저장 + 자동 개발 시작 준비가 완료됩니다.`
-- **배경**: `rgba(127, 212, 255, 0.08)` (cyan glow 을 12% 희석) · 좌측 2px 스트립 `--shared-goal-modal-field-focus`
-- **높이**: 72px 고정 (`editing` 전이 시 페이드아웃만, layout shift 없음 — 뒤 자리를 카운터/미리보기 등장으로 채움)
+- **배경**: `--shared-goal-modal-banner-bg` (cyan glow 을 10% 희석한 `rgba(127,212,255,0.10)`) · 좌측 2px 스트립 `--shared-goal-modal-banner-strip` (= `--shared-goal-modal-field-focus`)
+- **높이**: `--shared-goal-modal-banner-height` (72px 고정). `editing` 전이 시 페이드아웃만, layout shift 없음 — 뒤 자리를 카운터/미리보기 등장으로 채움.
 - **스크린리더**: `role="status" aria-live="polite"` — 모달 open 시 1회 낭독. `editing` 진입하면 제거되나 배너 자체가 포커스 불가 영역이라 낭독 반복은 없음.
 
 ### 2B.4 "폼이 안 보이는" 회귀 차단 체크리스트 (QA 복사해 쓰는 용도)
@@ -366,11 +370,28 @@
 | `--shared-goal-modal-radius`             | `10px`                               | 다이얼로그 모서리                     |
 | `--shared-goal-modal-shadow`             | `0 18px 48px rgba(0, 0, 0, 0.55)`    | 다이얼로그 드롭섀도우                  |
 
+**§2A/§2B 파생 토큰** (2026-04-19 Designer 자율 개선으로 `src/index.css` 에 선-분리):
+
+| 토큰                                               | 값                                   | 용도                                                                     |
+| -------------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------ |
+| `--shared-goal-modal-banner-bg`                    | `rgba(127, 212, 255, 0.10)`          | `empty-create` 빈 상태 배너 배경(cyan glow 희석)                          |
+| `--shared-goal-modal-banner-strip`                 | `var(--shared-goal-modal-field-focus)` | 배너 좌측 2px 스트립(= field-focus cyan)                                |
+| `--shared-goal-modal-banner-height`                | `72px`                               | 배너 고정 높이 · `editing` 전이 시 페이드아웃만, layout shift 0 계약의 근거 |
+| `--shared-goal-modal-body-min-height`              | `360px`                              | BODY 최소 높이 · 두 상태 공용으로 모달 크기 변화 차단                      |
+| `--shared-goal-modal-placeholder-fg`               | `rgba(255, 255, 255, 0.42)`          | 플레이스홀더 글자색 — 힌트(65%)보다 한 단계 더 흐리게                      |
+| `--shared-goal-modal-field-editing-border`         | `#fbbf24`                            | `editing` 상태 필드 amber 테두리(1px, 인라인 폼 `--shared-goal-border-editing` 과 숫자 일치) |
+| `--shared-goal-modal-field-editing-strip`          | `#fbbf24`                            | `editing` 상태 필드 좌측 2px 수직 amber 스트립                            |
+| `--shared-goal-modal-counter-fg`                   | `rgba(255, 255, 255, 0.55)`          | 글자 수 카운터 정상 색(subtle-fg 보다 살짝 낮춰 보조 정보임을 시사)        |
+| `--shared-goal-modal-counter-error-fg`             | `var(--shared-goal-modal-error-strip)` | 글자 수 카운터 초과/미달 색(= error-strip 과 동일)                     |
+
 **대비 검증** (패널 배경 #0f1b3b 기준):
 - header-fg(#fff) : 15.8:1 · AAA
 - subtle-fg(white/65%) : 8.6:1 · AAA
 - field-focus(#7fd4ff) : 8.1:1 · AAA
 - confirm-fg(#052e1b) on confirm-bg(#34d399) : 6.3:1 · AA 본문
+- placeholder-fg(white/42%) : 5.6:1 · AA 본문(힌트/값보다 한 단계 낮춘 의도적 위계)
+- counter-fg(white/55%) : 7.2:1 · AAA
+- field-editing-border(#fbbf24) : 8.7:1 · AAA
 
 **색각 이상 대응**: emerald/red 단색에만 의존하지 않도록
 - 확정 버튼에 `✓` 아이콘 병기

@@ -146,6 +146,49 @@
   --shared-goal-modal-radius: 10px;
   --shared-goal-modal-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
 
+  /* ── SharedGoalModal · §2A/§2B 파생 토큰 (2026-04-19, Designer 자율 개선) ──
+   * 시안 문서 tests/shared-goal-modal-mockup.md §2A(필드 정밀 규격)·§2B(empty-create
+   * vs editing 두 상태 대비) 에서 새로 도입된 값들을 토큰으로 선-분리한다. 시안이
+   * 리터럴(rgba(127,212,255,0.10), 72px 등) 을 본문에 적어 두면, 실제 구현자가
+   * 임의로 값을 바꿨을 때 시안과의 차이를 코드 리뷰만으로 감지하기 어려워지는
+   * 문제가 있다. 이 블록은 그 리스크를 줄이기 위한 계약 수준의 분리이다.
+   *
+   * 의미 계층:
+   *   banner-bg / banner-strip  — 빈 상태(empty-create) 배너 전용. field-focus
+   *                               의 cyan 을 12% 로 희석한 배경 + 좌측 2px 스트립.
+   *                               "이 자리에 내용이 들어와야 한다" 를 부드럽게 시사.
+   *   banner-height             — 72px 고정. editing 전이 시 페이드아웃만 걸고
+   *                               높이는 유지 → layout shift 0 계약의 물리적 근거.
+   *   body-min-height           — 360px. BODY 하단 리더 미리보기까지 포함한
+   *                               최소 높이. 두 상태에서 동일하게 잡아 "폼이
+   *                               사라진 것처럼 보이는" 과거 회귀를 원천 차단.
+   *   placeholder-fg            — 힌트(subtle-fg, 65%) 보다 한 단계 더 흐리게(42%)
+   *                               주어 "실제 값이 아니고 예시" 임을 대비로 구분.
+   *   field-editing-border / strip — 변경이 발생한 필드만 amber 전환. 인라인 폼의
+   *                               --shared-goal-border-editing (#fbbf24) 과 숫자를
+   *                               맞춰 "미저장/작성 중" 맥락의 색 규약을 통일.
+   *   counter-fg / counter-error-fg — 글자 수 카운터. 정상은 subtle 의 55%,
+   *                               초과·부족 시 error-strip 과 같은 빨강 으로 전환.
+   *
+   * 대비(surface #0f1b3b 기준):
+   *   placeholder-fg(white/42%)    5.6:1 · AA 본문(의도적으로 value 대비 한 단계 낮춤)
+   *   banner-strip(#7fd4ff)        8.1:1 · AAA (field-focus 와 동일)
+   *   field-editing-border(#fbbf24) 8.7:1 · AAA
+   *   counter-fg(white/55%)        7.2:1 · AAA
+   *
+   * 색각 이상 대응: editing 의 amber 는 좌측 2px 스트립과 필드 테두리 색 **두
+   * 군데** 에 동시 반영 → 색맹 사용자도 위치와 굵기 변화로 상태 전이를 식별.
+   */
+  --shared-goal-modal-banner-bg: rgba(127, 212, 255, 0.10);
+  --shared-goal-modal-banner-strip: var(--shared-goal-modal-field-focus);
+  --shared-goal-modal-banner-height: 72px;
+  --shared-goal-modal-body-min-height: 360px;
+  --shared-goal-modal-placeholder-fg: rgba(255, 255, 255, 0.42);
+  --shared-goal-modal-field-editing-border: #fbbf24;
+  --shared-goal-modal-field-editing-strip: #fbbf24;
+  --shared-goal-modal-counter-fg: rgba(255, 255, 255, 0.55);
+  --shared-goal-modal-counter-error-fg: var(--shared-goal-modal-error-strip);
+
   /* ── ProjectSettingsPanel · 프로젝트 관리 옵션 패널 디자인 토큰 (2026-04-18) ─
    * 대상: src/components/ProjectSettingsPanel.tsx (신규) — 상세 페이지의
    * 우측 사이드바(≥1280px) 또는 탭(<1280px) 으로 편입.
@@ -352,6 +395,111 @@
   --graph-reset-fg-disabled: rgba(255, 255, 255, 0.35);
   --graph-reset-icon: #fbbf24;
   --graph-reset-halo: rgba(251, 191, 36, 0.18);
+
+  /* ── ClaudeTokenUsage · 상단바 토큰 사용량 위젯 디자인 토큰 (2026-04-19) ─────
+   * 대상: src/components/TokenUsageWidget.tsx (신규 예정) — App.tsx 상단 툴바의
+   * '그래프 초기화'(--graph-reset-*) 와 '에이전트 상태' 사이에 위치하는 배지.
+   * 시안 문서: docs/claude-token-usage-visual-2026-04-19.md ·
+   * 정적 미리보기: docs/claude-token-usage-visual-2026-04-19.svg
+   * 소비 데이터: src/utils/claudeTokenUsageStore.ts (누적 총계 · cacheHitRate)
+   * 회귀 잠금: tests/tokenUsageWidget.regression.test.ts (U1~U4, J-01~J-10)
+   *
+   * 설계 의도:
+   *   1) **상단바 배지는 "한 줄 요약"** — 입력/출력/캐시 3축의 누적 수치 + 대략 비용
+   *      (USD) 을 한 눈에 훑는 자리. 폭은 고정 아니고 텍스트 길이에 따라 가변.
+   *   2) **상태 3단계 진행** — normal(보통) → caution(주의) → warning(경고).
+   *      임계치 기준(예: 비용 $1 / $5 또는 입력 토큰 500K / 2M) 은 시안 §4 에서
+   *      정의하고, 본 토큰은 "어떤 색으로 표현할지" 만 잠근다. 각 단계는 테두리·
+   *      글자·배경 3종을 함께 전환해 색맹에서도 대비 차이로 단계 식별 가능.
+   *   3) **축별 의미 색** — input 은 cyan(프로젝트 accent 일치), output 은 amber
+   *      (생성 결과물 → "산출" 톤), cache-read 는 emerald(경제적 이득 → 저장
+   *      버튼·saved 상태와 같은 색으로 "아낀" 의미 통일), cache-create 는 sky
+   *      (향후 재사용될 투자 → 미래 지향). 모든 축이 GitAutomationPanel 의
+   *      단계 배지(--git-stage-*) 와 숫자를 일부러 맞춰 "같은 의미 = 같은 색" 을
+   *      프로젝트 전체에 관철한다.
+   *   4) **캐시 히트율 gauge** — 툴팁 안에 등장하는 0~100% 수평 게이지. 트랙은
+   *      subtle, 채움은 cacheRead 와 동일한 emerald. 60% 이상일 때 "💰 절약 중"
+   *      보조 라벨을 옆에 노출해 사용자의 긍정 피드백을 강화한다.
+   *
+   * 상태별 의미 계층:
+   *   normal   — 평상시. 배지 글자·테두리 muted. 시선 유도 없음.
+   *   caution  — "주의" 임계치(예: $1 또는 1M tokens). amber 로 승격, subtle 배경.
+   *              애니메이션 없음 — 단순한 색 전환만으로도 충분히 시선이 간다.
+   *   warning  — "경고" 임계치(예: $5 또는 5M tokens). red + 1.6s pulse 로 "지금
+   *              이 세션이 비싸다" 를 적극 환기. pulse 는 prefers-reduced-motion
+   *              환경에서 즉시 중단하고 정적 red 만 유지.
+   *
+   * 대비(패널 배경 --pixel-card #16213e 기준):
+   *   normal-fg(white/75%)              7.1:1 · AAA
+   *   caution-fg(#fde68a)              11.0:1 · AAA
+   *   warning-fg(#fecaca)               9.4:1 · AAA
+   *   axis-input(#7fd4ff) on card       8.1:1 · AAA
+   *   axis-output(#fbbf24) on card      8.7:1 · AAA
+   *   axis-cache-read(#34d399) on card  5.9:1 · AA 본문
+   *   axis-cache-create(#60a5fa) on card 4.9:1 · AA 본문
+   *
+   * 색각 이상 대응: 모든 상태 단계는 색 + 아이콘(●○◐) + 정적 포지션(배지 테두리
+   *   굵기 1→1.5→2px) 으로 3중 인코딩. 축별 색은 모두 한국어 레이블("입력",
+   *   "출력", "캐시 읽기", "캐시 생성") 을 병기해 색에만 의존하지 않는다.
+   */
+
+  /* ▸ 배지 기본 · 상태 중립(normal) */
+  --token-usage-badge-bg: rgba(0, 0, 0, 0.32);
+  --token-usage-badge-border: rgba(255, 255, 255, 0.18);
+  --token-usage-badge-fg: rgba(255, 255, 255, 0.75);
+  --token-usage-badge-radius: 6px;
+  --token-usage-badge-padding: 4px 10px;
+  --token-usage-badge-gap: 10px;
+
+  /* ▸ 상태 단계 — caution(주의) */
+  --token-usage-caution-bg: rgba(251, 191, 36, 0.12);
+  --token-usage-caution-border: #fbbf24;
+  --token-usage-caution-fg: #fde68a;
+  --token-usage-caution-icon: #fbbf24;
+
+  /* ▸ 상태 단계 — warning(경고) */
+  --token-usage-warning-bg: rgba(248, 113, 113, 0.16);
+  --token-usage-warning-border: #f87171;
+  --token-usage-warning-fg: #fecaca;
+  --token-usage-warning-icon: #fca5a5;
+  --token-usage-warning-glow: rgba(248, 113, 113, 0.55);
+  --token-usage-warning-pulse-duration: 1.6s;
+
+  /* ▸ 축별 의미 색 (배지 요약·툴팁 행 공용) */
+  --token-usage-axis-input-fg: #7fd4ff;       /* 입력 — cyan, accent 와 일치 */
+  --token-usage-axis-output-fg: #fbbf24;      /* 출력 — amber, 산출 */
+  --token-usage-axis-cache-read-fg: #34d399;  /* 캐시 읽기 — emerald, 절약 */
+  --token-usage-axis-cache-create-fg: #60a5fa;/* 캐시 생성 — sky, 미래 투자 */
+
+  /* ▸ 비용 숫자(대략 $) — 눈에 띄는 단색으로 분리 */
+  --token-usage-cost-fg: #e9e2ff;
+  --token-usage-cost-subtle-fg: rgba(255, 255, 255, 0.55);
+  --token-usage-cost-caution-fg: #fde68a;
+  --token-usage-cost-warning-fg: #fecaca;
+
+  /* ▸ 호버 툴팁(브레이크다운) */
+  --token-usage-tooltip-bg: #16213e;          /* --pixel-card 와 동일 */
+  --token-usage-tooltip-border: rgba(127, 212, 255, 0.35);
+  --token-usage-tooltip-fg: #ffffff;
+  --token-usage-tooltip-subtle-fg: rgba(255, 255, 255, 0.65);
+  --token-usage-tooltip-row-bg: rgba(0, 0, 0, 0.28);
+  --token-usage-tooltip-divider: rgba(255, 255, 255, 0.10);
+  --token-usage-tooltip-radius: 8px;
+  --token-usage-tooltip-shadow: 0 14px 36px rgba(0, 0, 0, 0.50);
+  --token-usage-tooltip-width: 320px;
+  --token-usage-tooltip-arrow: #16213e;
+
+  /* ▸ 캐시 히트율 게이지 (툴팁 내부) */
+  --token-usage-gauge-track: rgba(255, 255, 255, 0.08);
+  --token-usage-gauge-fill: var(--token-usage-axis-cache-read-fg);
+  --token-usage-gauge-fill-high: #6ee7b7;     /* 60% 이상 "💰 절약 중" 시 밝기 상승 */
+  --token-usage-gauge-height: 6px;
+
+  /* ▸ 툴팁 내 '세션 리셋' 링크/버튼 */
+  --token-usage-reset-fg: rgba(255, 255, 255, 0.60);
+  --token-usage-reset-hover-fg: #ffffff;
+  --token-usage-reset-hover-bg: rgba(255, 255, 255, 0.06);
+  --token-usage-reset-border: rgba(255, 255, 255, 0.22);
 }
 
 * {

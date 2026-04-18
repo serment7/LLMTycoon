@@ -10,7 +10,9 @@ import { tmpdir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { MongoClient, Db } from 'mongodb';
 import multer from 'multer';
-import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings, GitAutomationBranchStrategy, GIT_AUTOMATION_BRANCH_STRATEGY_VALUES, GitCredential, GitCredentialRedacted, SharedGoal, SharedGoalPriority, SharedGoalStatus, ProjectOptionsUpdate, PROJECT_OPTION_DEFAULTS } from './src/types';
+import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings, GitAutomationBranchStrategy, GIT_AUTOMATION_BRANCH_STRATEGY_VALUES, GitCredential, GitCredentialRedacted, SharedGoal, SharedGoalPriority, SharedGoalStatus, ProjectOptionsUpdate, PROJECT_OPTION_DEFAULTS, ClaudeTokenUsage, ClaudeTokenUsageTotals } from './src/types';
+import { EMPTY_TOTALS as EMPTY_CLAUDE_USAGE_TOTALS, mergeUsage as mergeClaudeUsageTotals } from './src/utils/claudeTokenUsageStore';
+import { parseClaudeUsageFromStdout } from './src/utils/claudeTokenUsageParse';
 import { AgentWorkerRegistry } from './src/server/agentWorker';
 import { TaskRunner } from './src/server/taskRunner';
 import { processDirectiveFile } from './src/server/fileProcessor';
@@ -114,6 +116,20 @@ const claudeQueue: Array<() => void> = [];
 let claudeRunning = 0;
 const CLAUDE_CONCURRENCY = 10;
 
+// 프로세스 수명 동안의 Claude 토큰 사용량 누적. 서버 재기동 시 0 으로 초기화되고,
+// 클라이언트는 최초 `GET /api/claude/token-usage` + socket `claude-usage:updated`
+// push 로 동기화한다. 직접 쓰지 말고 `recordClaudeUsage` 를 통해 갱신할 것.
+let claudeUsageTotals: ClaudeTokenUsageTotals = { ...EMPTY_CLAUDE_USAGE_TOTALS, byModel: {} };
+// socket.io 인스턴스는 startServer 내부에서 생성되므로, 그 시점에 주입한다.
+// startServer 진입 전에 recordClaudeUsage 가 호출될 일은 없다(CLI 호출은 서버 준비 후).
+let claudeUsageBroadcaster: ((totals: ClaudeTokenUsageTotals, delta: ClaudeTokenUsage) => void) | null = null;
+
+function recordClaudeUsage(usage: ClaudeTokenUsage) {
+  const stamped: ClaudeTokenUsage = { ...usage, at: usage.at ?? new Date().toISOString() };
+  claudeUsageTotals = mergeClaudeUsageTotals(claudeUsageTotals, stamped);
+  if (claudeUsageBroadcaster) claudeUsageBroadcaster(claudeUsageTotals, stamped);
+}
+
 function drainClaudeQueue() {
   while (claudeRunning < CLAUDE_CONCURRENCY && claudeQueue.length > 0) {
     claudeRunning++;
@@ -167,6 +183,14 @@ function callClaude(prompt: string, ctx?: AgentContext): Promise<string> {
       child.on('close', code => {
         cleanup();
         if (code === 0) {
+          // best-effort usage 수집: CLI 가 JSON/stream-json 모드로 호출됐을 때
+          // stdout 에 usage 블록이 섞여 들어오면 상단바 위젯에 반영한다. plain text
+          // 모드에서는 조용히 null 을 반환해 아무 일도 일어나지 않는다. 파싱은
+          // try/catch 로 보호해 메인 경로의 resolve 를 절대 막지 않는다.
+          try {
+            const usage = parseClaudeUsageFromStdout(stdout);
+            if (usage) recordClaudeUsage(usage);
+          } catch { /* 수집 실패는 기능 동작에 영향 없음 */ }
           resolve(stdout.trim());
           return;
         }

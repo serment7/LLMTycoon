@@ -311,6 +311,49 @@ export interface SharedGoal {
   createdAt: string;
 }
 
+// Claude(앤트로픽) API/CLI 한 번 호출당 보고되는 토큰 사용량. Anthropic SDK 의
+// response.usage 필드 shape 을 그대로 수용하도록 네 필드를 스네이크 케이스로 유지
+// (input_tokens / output_tokens / cache_read_input_tokens / cache_creation_input_tokens).
+// 본 프로젝트는 실제로 Claude CLI 를 spawn 하므로, 서버가 CLI stdout 의 --output-format
+// json 결과에서 해당 블록을 파싱해 채운다(server.ts::parseClaudeUsageFromStdout).
+// model 필드는 단가 계산에 필요하며, 미지 모델이면 보수적으로 Sonnet 단가를 적용한다.
+export interface ClaudeTokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  // 호출에 사용된 모델 식별자. 예: 'claude-opus-4-7', 'claude-sonnet-4-6'. 미상 시 빈 문자열.
+  model?: string;
+  // ISO 타임스탬프. 미설정 시 수집 시점이 들어간다.
+  at?: string;
+}
+
+// tokenUsageStore 가 유지하는 누적 총계. 한 UI 세션(=브라우저 탭) 이 시작된 이후의
+// 값을 단일 출처로 보관하며, 서버 재기동 시 in-memory 총계가 0 으로 리셋되는 것과
+// 동기화되도록 UI 도 `claude-usage:reset` 이벤트를 수신하면 0 으로 되돌린다.
+export interface ClaudeTokenUsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  // 호출 횟수. 한 번도 누적되지 않은 상태면 0, 이 값이 0 인 동안 비용·히트율은 의미 없음.
+  callCount: number;
+  // 누적 대략 비용(USD). Anthropic 공식 가격표가 변경되면 claudeTokenPricing.ts 의
+  // 단가 테이블만 갱신하면 된다. 본 값은 표시 전용 참고값이며 결제 정산 근거가 아니다.
+  estimatedCostUsd: number;
+  // 모델별 누적. breakdown 툴팁에서 "어느 모델이 얼마나 먹었는지" 를 보여주는 데 쓴다.
+  byModel: Record<string, {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+    callCount: number;
+    estimatedCostUsd: number;
+  }>;
+  // 마지막 갱신 시각 ISO. 표시용.
+  updatedAt: string;
+}
+
 export interface ManagedProject {
   id: string;
   // 관리 메뉴 데이터는 게임 프로젝트별로 격리된다. 동일한 remote 저장소라도 다른

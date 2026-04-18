@@ -20,6 +20,7 @@ import {
 import { Agent, Project, GameState, AgentRole, CodeFile, CodeDependency, Task, GitAutomationSettings } from './types';
 import { FileTooltip } from './components/FileTooltip';
 import { ProjectManagement } from './components/ProjectManagement';
+import { SharedGoalModal } from './components/SharedGoalModal';
 import { AgentStatusPanel, type GitAutomationDigest, type GitAutomationStageKey, type GitAutomationStageState } from './components/AgentStatusPanel';
 import { AgentContextBubble, AgentLogLine } from './components/AgentContextBubble';
 import { CollabTimeline } from './components/CollabTimeline';
@@ -2115,35 +2116,17 @@ export default function App() {
             </div>
           </Modal>
         )}
-        {sharedGoalPromptOpen && (
-          <Modal title="공동 목표를 먼저 입력해주세요" onClose={() => setSharedGoalPromptOpen(false)}>
-            <div className="space-y-4">
-              <p className="text-sm text-white/80">
-                자동 개발을 시작하려면 이 프로젝트의 <span className="text-[var(--pixel-accent)] font-bold">공동 목표</span>가 먼저 저장되어 있어야 합니다.
-              </p>
-              <p className="text-[11px] text-white/60">
-                "프로젝트 관리" 탭의 공동 목표 입력 폼에서 제목·우선순위·기한을 작성하고 저장한 뒤 다시 자동 개발 토글을 켜주세요.
-              </p>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => {
-                    setActiveTab('project-management');
-                    setSharedGoalPromptOpen(false);
-                  }}
-                  className="flex-1 bg-[var(--pixel-accent)] text-black py-3 font-bold uppercase border-b-4 border-[var(--pixel-border)]"
-                >
-                  공동 목표 입력으로 이동
-                </button>
-                <button
-                  onClick={() => setSharedGoalPromptOpen(false)}
-                  className="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-3 font-bold uppercase border-b-4 border-gray-800"
-                >
-                  닫기
-                </button>
-              </div>
-            </div>
-          </Modal>
-        )}
+        <SharedGoalModal
+          open={sharedGoalPromptOpen}
+          projectId={selectedProjectId}
+          onClose={() => setSharedGoalPromptOpen(false)}
+          onEnabled={() => {
+            // 모달 내부에서 PATCH /api/auto-dev { enabled:true } 가 성공한 직후 호출된다.
+            // 낙관 갱신: 소켓 이벤트 도착 전에도 토글 UI 를 즉시 ON 으로 맞춘다.
+            setAutoDevEnabled(true);
+          }}
+          onLog={(text) => addLog(text)}
+        />
         {confirmFire && (
           <Modal title="직원 해고 확인" onClose={() => setConfirmFire(null)}>
             <div className="space-y-4">
