@@ -79,6 +79,56 @@ test('projectOptionsView 는 저장된 값을 우선한다', () => {
   assert.deepEqual(view.settingsJson, { flowLevel: 'commitPushPR' });
 });
 
+test('branchStrategy 는 per-session|per-task|per-commit|fixed-branch 만 허용', () => {
+  assert.throws(() => updateProjectOptionsSchema({ branchStrategy: 'invalid' }), ProjectOptionsValidationError);
+  assert.throws(() => updateProjectOptionsSchema({ branchStrategy: 42 }), ProjectOptionsValidationError);
+  const ok = updateProjectOptionsSchema({ branchStrategy: 'fixed-branch' });
+  assert.equal(ok.$set.branchStrategy, 'fixed-branch');
+});
+
+test('fixedBranchName 은 비어있지 않은 문자열 강제, trim 적용', () => {
+  assert.throws(() => updateProjectOptionsSchema({ fixedBranchName: '' }), ProjectOptionsValidationError);
+  assert.throws(() => updateProjectOptionsSchema({ fixedBranchName: 123 }), ProjectOptionsValidationError);
+  const ok = updateProjectOptionsSchema({ fixedBranchName: '  auto/main  ' });
+  assert.equal(ok.$set.fixedBranchName, 'auto/main');
+});
+
+test('branchNamePattern 은 비어있지 않은 문자열 강제, trim 적용', () => {
+  assert.throws(() => updateProjectOptionsSchema({ branchNamePattern: '   ' }), ProjectOptionsValidationError);
+  const ok = updateProjectOptionsSchema({ branchNamePattern: 'auto/{slug}' });
+  assert.equal(ok.$set.branchNamePattern, 'auto/{slug}');
+});
+
+test('autoMergeToMain 은 boolean 만 허용', () => {
+  assert.throws(() => updateProjectOptionsSchema({ autoMergeToMain: 1 }), ProjectOptionsValidationError);
+  const ok = updateProjectOptionsSchema({ autoMergeToMain: true });
+  assert.equal(ok.$set.autoMergeToMain, true);
+});
+
+test('projectOptionsView 는 브랜치 관련 필드 기본값을 채운다', () => {
+  const view = projectOptionsView({});
+  assert.equal(view.branchStrategy, 'per-session');
+  assert.equal(view.fixedBranchName, 'auto/dev');
+  assert.equal(view.branchNamePattern, 'auto/{date}-{shortId}');
+  assert.equal(view.autoMergeToMain, false);
+  assert.equal(view.currentAutoBranch, undefined);
+});
+
+test('projectOptionsView 는 저장된 브랜치 값을 우선한다', () => {
+  const view = projectOptionsView({
+    branchStrategy: 'fixed-branch',
+    fixedBranchName: 'release/stable',
+    branchNamePattern: 'ft/{slug}',
+    autoMergeToMain: true,
+    currentAutoBranch: 'auto/2026-04-18-deadbee',
+  });
+  assert.equal(view.branchStrategy, 'fixed-branch');
+  assert.equal(view.fixedBranchName, 'release/stable');
+  assert.equal(view.branchNamePattern, 'ft/{slug}');
+  assert.equal(view.autoMergeToMain, true);
+  assert.equal(view.currentAutoBranch, 'auto/2026-04-18-deadbee');
+});
+
 test('body 가 객체가 아니면 즉시 거부', () => {
   assert.throws(() => updateProjectOptionsSchema(null), ProjectOptionsValidationError);
   assert.throws(() => updateProjectOptionsSchema([]), ProjectOptionsValidationError);

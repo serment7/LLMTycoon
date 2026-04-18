@@ -203,7 +203,33 @@ export interface GitAutomationPanelProps {
   // 사용자가 "저장 버튼이 진짜 먹혔나" 의심하지 않게 한다. 설정이 다시 dirty 가 되면
   // 자동으로 가려진다.
   appliedAt?: string | null;
+  // 브랜치 중복 생성 회귀(#91aeaf7a) 대응: 지금 서버가 재사용 중인 활성 브랜치명과
+  // 해당 프로젝트의 브랜치 운영 전략을 패널 상단에 노출해, 사용자가 "이번 커밋이
+  // 어느 브랜치에 쌓이고 있는가" 를 설정 화면에서 바로 확인하게 한다.
+  activeBranch?: string | null;
+  branchStrategy?: BranchStrategy | null;
 }
+
+// 브랜치 전략 → UI 라벨/설명 매핑. 전략이 추가되더라도 UI 문구를 여기 한 곳에서만
+// 관리하면 패널/툴팁/aria-label 이 함께 움직인다.
+const BRANCH_STRATEGY_LABEL: Record<BranchStrategy, { label: string; hint: string }> = {
+  'per-session': {
+    label: '세션 브랜치',
+    hint: '한 자동 개발 세션 동안 동일 브랜치를 재사용합니다 (권장).',
+  },
+  'fixed-branch': {
+    label: '고정 브랜치',
+    hint: '프로젝트에 고정된 브랜치명을 매번 사용합니다.',
+  },
+  'per-task': {
+    label: '태스크별 브랜치',
+    hint: '리더 태스크 1건당 새 브랜치를 만듭니다.',
+  },
+  'per-commit': {
+    label: '커밋별 브랜치',
+    hint: '커밋마다 새 브랜치가 생성됩니다 — 브랜치가 쏟아져 나올 수 있어 비권장.',
+  },
+};
 
 const SAMPLE_DEFAULT: Record<'branch' | 'type' | 'ticket', string> = {
   branch: 'git-automation-panel',
@@ -256,6 +282,7 @@ export function GitAutomationPanel({
   initial, onSave, onLog, sample, lastRunAt, lastRunFlow,
   commitStatus = 'idle', pushStatus = 'idle',
   lastCommitHash, lastPushAt, lastError, onDismissError, appliedAt,
+  activeBranch, branchStrategy,
 }: GitAutomationPanelProps) {
   // 활성 토글의 글로우 펄스를 prefers-reduced-motion 사용자에게 끈다 — 색은 유지.
   const reducedMotion = useReducedMotion();
@@ -683,6 +710,43 @@ export function GitAutomationPanel({
           ))}
         </div>
       </div>
+
+      {(activeBranch || branchStrategy) && (() => {
+        // 디자이너: 브랜치 중복 생성 회귀(#91aeaf7a) 대응. 템플릿 미리보기와 별개로
+        // "지금 어떤 브랜치에 커밋이 쌓이고 있는가" + "그 브랜치가 어떤 전략으로 결정됐는가"
+        // 를 상단에 한 줄로 고정 노출한다. 활성 브랜치가 없으면(미결정) 이탤릭으로
+        // "아직 브랜치가 결정되지 않음" 을 표시해 세션 시작 전 상태와 구분한다.
+        const strategyInfo = branchStrategy ? BRANCH_STRATEGY_LABEL[branchStrategy] : null;
+        return (
+          <div
+            role="status"
+            aria-live="polite"
+            aria-label="현재 활성 브랜치 및 운영 전략"
+            className="bg-black/40 border-2 border-[var(--pixel-border)] p-3 flex items-center gap-3 flex-wrap"
+          >
+            <span className="inline-flex items-center justify-center w-7 h-7 border-2 border-[var(--pixel-accent)] bg-black/40 text-[var(--pixel-accent)]">
+              <GitBranch size={14} />
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="text-[9px] uppercase tracking-wider text-white/50">활성 브랜치</div>
+              <div
+                className={`text-[13px] font-mono tabular-nums truncate ${activeBranch ? 'text-white' : 'text-white/40 italic'}`}
+                title={activeBranch || '아직 이번 세션에서 브랜치가 결정되지 않았습니다'}
+              >
+                {activeBranch || '아직 결정되지 않음'}
+              </div>
+            </div>
+            {strategyInfo && (
+              <span
+                className="px-2 py-0.5 text-[10px] font-bold uppercase border-2 border-[var(--pixel-accent)] bg-black/40 text-[var(--pixel-accent)] tabular-nums"
+                title={strategyInfo.hint}
+              >
+                {strategyInfo.label}
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       <div
         role="status"
