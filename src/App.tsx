@@ -1033,6 +1033,32 @@ export default function App() {
     }
   };
 
+  // 그래프 초기화: 현재 프로젝트의 코드그래프(파일 노드·의존성 엣지)를 비운다.
+  //  - 선택된 프로젝트가 있으면 해당 프로젝트만, 없으면 전체 그래프를 리셋한다.
+  //  - 실수 클릭 방지를 위해 window.confirm 으로 재확인을 받는다. 파일은 서버의
+  //    정식 소스(MongoDB)에 있으므로 서버 엔드포인트가 삭제하고 socket 의
+  //    'state:updated' 브로드캐스트로 로컬 gameState 가 자연스럽게 빈 노드·엣지로
+  //    수렴한다. 즉, 별도의 클라이언트 스토어 초기화가 필요 없다.
+  const resetGraph = async () => {
+    const scopeLabel = selectedProjectId
+      ? '현재 프로젝트의 코드 그래프'
+      : '전체 코드 그래프';
+    const confirmed = typeof window !== 'undefined'
+      ? window.confirm(`${scopeLabel}를 초기 상태로 리셋합니다. 계속하시겠습니까?`)
+      : true;
+    if (!confirmed) return;
+    try {
+      const qs = selectedProjectId ? `?projectId=${encodeURIComponent(selectedProjectId)}` : '';
+      const res = await safeFetch(`/api/graph/reset${qs}`, { method: 'POST' });
+      const body = await res.json().catch(() => ({} as { filesDeleted?: number; dependenciesDeleted?: number }));
+      const filesDeleted = typeof body.filesDeleted === 'number' ? body.filesDeleted : 0;
+      const depsDeleted = typeof body.dependenciesDeleted === 'number' ? body.dependenciesDeleted : 0;
+      addLog(`그래프 초기화: 파일 ${filesDeleted}개·의존성 ${depsDeleted}개 제거`);
+    } catch (e) {
+      addLog(`그래프 초기화 실패: ${(e as Error).message}`);
+    }
+  };
+
   // 긴급중단: 모든 에이전트 활동을 즉시 멈춘다.
   //  1) 자동 개발 루프를 끄고 LLM 호출 로컬 큐가 새로 뜨지 않도록 한다.
   //  2) 서버에 상태·작업 리셋을 요청해 모든 에이전트를 idle 로, 완료되지 않은
@@ -1351,11 +1377,18 @@ export default function App() {
           </nav>
 
           <div className="mt-auto pt-4 space-y-3">
-            <button 
+            <button
               onClick={() => setShowHireModal(true)}
               className="w-full bg-[var(--pixel-accent)] text-black py-3 font-bold uppercase border-b-4 border-[#0099cc] hover:brightness-110 transition-all"
             >
               에이전트 고용
+            </button>
+            <button
+              onClick={resetGraph}
+              title="현재 프로젝트의 코드 그래프(파일 노드·의존성 엣지)를 초기 상태로 되돌립니다"
+              className="w-full bg-[#f4a261] text-black py-3 font-bold uppercase border-b-4 border-[#a45a1c] hover:brightness-110 transition-all"
+            >
+              그래프 초기화
             </button>
             <button
               onClick={emergencyStop}
