@@ -355,6 +355,35 @@ export function parsePrUrlFromStdout(stdout: string | undefined): string | undef
   return m ? m[0].trim() : undefined;
 }
 
+// 파이프라인 실행 결과를 "호출자가 가장 자주 필요로 하는 3가지" 로 요약한다.
+// 지금까지는 커밋 SHA / 푸시 성공 여부 / PR URL 이 각각 다른 경로(로그 엔트리 빌더,
+// AgentStatusPanel 풋노트, server.ts 응답 해석)로 재파싱돼, 어느 한 곳에서 파서가
+// 흔들리면 나머지 소비자가 조용히 어긋났다. 이 요약은 단일 출처가 되어 "서버에서
+// 커밋 해시와 푸시 결과가 실제로 회수 가능한가" 를 한 함수로 계약화한다.
+export interface GitAutomationRunSummary {
+  // commit 단계가 성공했고 stdout 헤더에서 7자 이상 단축 SHA 를 파싱할 수 있었을 때만
+  // 채워진다. commit 이 실패했거나 stdout 이 캡처되지 않았으면 undefined — 호출자는
+  // 이 값의 유무로 "실제로 로컬 커밋이 성립했는가" 를 한 번에 판단할 수 있다.
+  commitSha?: string;
+  // push 단계가 ok=true 로 종료됐는가. push 가 플랜에 없었던(commitOnly) 경우도
+  // false — "원격까지 갔는가" 만 본다. 호출자가 "autoPush 가 꺼져 false 인 건지
+  // 실행이 실패해 false 인 건지" 를 구분하려면 run.results / run.skipped 를 함께 읽으면 된다.
+  pushed: boolean;
+  // pr 단계가 ok=true 로 종료됐고 stdout 에서 PR URL 을 파싱할 수 있었을 때만 채워진다.
+  prUrl?: string;
+}
+
+export function summarizeRunResult(run: GitAutomationRunResult): GitAutomationRunSummary {
+  const summary: GitAutomationRunSummary = { pushed: false };
+  for (const step of run.results) {
+    if (!step.ok) continue;
+    if (step.label === 'commit') summary.commitSha = parseCommitShaFromStdout(step.stdout);
+    else if (step.label === 'push') summary.pushed = true;
+    else if (step.label === 'pr') summary.prUrl = parsePrUrlFromStdout(step.stdout);
+  }
+  return summary;
+}
+
 // GitAutomationRunResult 의 단계 결과 배열을 AgentStatusPanel 이 바로 소비 가능한
 // 구조화 로그 엔트리로 펼친다. 계약:
 //   1) 각 단계(commit/push/pr) 마다 started 엔트리 1건을 먼저 쌓고, 이어서 성공
