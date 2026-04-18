@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -9,25 +10,57 @@ import { tmpdir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { MongoClient, Db } from 'mongodb';
 import multer from 'multer';
-import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings } from './src/types';
+import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings, GitAutomationBranchStrategy, GIT_AUTOMATION_BRANCH_STRATEGY_VALUES, GitCredential, GitCredentialRedacted, SharedGoal, SharedGoalPriority, SharedGoalStatus, ProjectOptionsUpdate, PROJECT_OPTION_DEFAULTS } from './src/types';
 import { AgentWorkerRegistry } from './src/server/agentWorker';
 import { TaskRunner } from './src/server/taskRunner';
 import { processDirectiveFile } from './src/server/fileProcessor';
+import { ProjectCompletionTracker } from './src/server/completionWatcher';
 import { parseEntry, type LedgerEntry } from './src/utils/handoffLedger';
 import { inferFileType, isExcludedFromCodeGraph, normalizeCodeGraphPath } from './src/utils/codeGraphFilter';
 import {
+  ProjectOptionsValidationError,
+  hasAnyUpdate,
+  projectOptionsView,
+  updateProjectOptionsSchema,
+} from './src/utils/projectOptions';
+import {
   DEFAULT_GIT_AUTOMATION_CONFIG,
-  buildRunPlan,
   formatCommitMessage,
   formatPrTitle,
   renderBranchName,
+  shouldAutoCommit,
+  shouldAutoOpenPR,
+  shouldAutoPush,
   validateGitAutomationConfig,
+  type GitAutomationRunResult,
+  type GitAutomationStepResult,
 } from './src/utils/gitAutomation';
+import { ActiveBranchCache, resolveBranch } from './src/utils/branchResolver';
+import {
+  decryptToken,
+  encryptToken,
+  injectTokenIntoRemoteUrl,
+  redactRemoteUrl,
+} from './src/utils/projectGitCredentials';
 import { spawnSync } from 'child_process';
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const DEBUG_CLAUDE = process.env.DEBUG_CLAUDE === '1';
 const PORT = parseInt(process.env.PORT || '3000', 10);
+
+// Git 자동화 트리거의 기본 브랜치 분기 모드. 설정 row 가 이 필드를 모르는 레거시
+// 프로젝트 응답과, MCP/REST 에서 명시 값 없이 들어온 트리거 요청에 모두 이 기본값을
+// 적용한다. 환경변수로 운영팀이 배치 단위로 "new 브랜치로 발사" 대 "현재 HEAD 유지"
+// 를 뒤집을 수 있게 한다.
+const GIT_AUTO_DEFAULT_BRANCH_STRATEGY: GitAutomationBranchStrategy =
+  process.env.GIT_AUTO_BRANCH_STRATEGY === 'current' ? 'current' : 'new';
+const GIT_AUTO_DEFAULT_BRANCH_NAME: string =
+  typeof process.env.GIT_AUTO_BRANCH_NAME === 'string' ? process.env.GIT_AUTO_BRANCH_NAME : '';
+
+// 프로세스 단위 활성 브랜치 캐시. per-session 전략에서 resolveBranch 가 같은
+// 프로젝트의 연속 호출에 같은 이름을 돌려주도록 한다. 재기동 시에는
+// projects.currentAutoBranch 로부터 복원된다.
+const activeBranchCache = new ActiveBranchCache();
 
 function shellQuote(s: string): string {
   const cleaned = s.replace(/\r?\n/g, ' ');
@@ -96,12 +129,11 @@ function callClaude(prompt: string, ctx?: AgentContext): Promise<string> {
       if (ctx && ctx.agentId && ctx.projectId) {
         mcpConfigPath = writeMcpConfig(ctx);
       }
-      // 셸을 거치지 않고 직접 spawn하여 한글 프롬프트가 cmd.exe 파싱에 깨지는 문제를 방지.
-      // shell:true + 문자열 명령 대신 argv 배열로 전달하면 OS가 인자를 그대로 넘긴다.
+      // 한글 프롬프트를 cmd.exe 인자로 넘기면 PC마다 코드 페이지 차이로 깨진다.
+      // stdin으로 파이프하면 셸 파싱을 완전히 우회한다.
       const args = ['--dangerously-skip-permissions'];
       if (mcpConfigPath) args.push('--mcp-config', mcpConfigPath);
-      args.push('-p', prompt.replace(/\r?\n/g, ' '));
-      if (DEBUG_CLAUDE) console.log('[claude] spawn', CLAUDE_BIN, args.map(a => a.length > 80 ? a.slice(0, 80) + '…' : a));
+      if (DEBUG_CLAUDE) console.log('[claude] spawn', CLAUDE_BIN, args, '| stdin:', prompt.slice(0, 80));
       const env: Record<string, string | undefined> = {
         ...process.env,
         PYTHONIOENCODING: 'utf-8',
@@ -118,12 +150,15 @@ function callClaude(prompt: string, ctx?: AgentContext): Promise<string> {
       const cwd = ctx?.workspacePath ? resolveWorkspace(ctx.workspacePath) : undefined;
       if (DEBUG_CLAUDE && cwd) console.log('[claude] cwd =', cwd);
       const child = spawn(CLAUDE_BIN, args, {
-        shell: false,
+        shell: true,
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         env,
         cwd,
       });
+      // 프롬프트를 stdin으로 전달하고 즉시 닫아 EOF 신호를 보낸다
+      child.stdin.write(prompt, 'utf8');
+      child.stdin.end();
       let stdout = '';
       const stderrChunks: Buffer[] = [];
       child.stdout?.on('data', d => { stdout += d.toString('utf8'); });
@@ -194,10 +229,20 @@ async function startServer() {
   const depsCol = db.collection<CodeDependency>('dependencies');
   const integrationsCol = db.collection<SourceIntegration>('source_integrations');
   const managedProjectsCol = db.collection<ManagedProject>('managed_projects');
+  // 프로젝트별 Git 자격증명(provider + username + PAT). projectId 를 논리적 주키로
+  // 쓰고 한 프로젝트당 한 쌍만 허용 — 저장소 임포트용 source_integrations 와 별개의
+  // "설정 화면 1:1 바인딩" 모델이라 인덱스와 컬렉션을 분리했다.
+  const gitCredentialsCol = db.collection<GitCredential>('git_credentials');
+  await gitCredentialsCol.createIndex({ projectId: 1 }, { unique: true });
   // 프로젝트별 Git 자동화 설정. projectId 를 논리적 주키로 쓰고, upsert 로만 갱신한다.
   // 리더 에이전트가 태스크 완료 이벤트마다 이 컬렉션을 조회해 auto-commit/push/PR 여부를 판정.
   const gitAutomationSettingsCol = db.collection<GitAutomationSettings>('git_automation_settings');
   await gitAutomationSettingsCol.createIndex({ projectId: 1 }, { unique: true });
+  // 프로젝트별 공동 목표(sharedGoal). projectId 당 활성 1건 원칙이며, 새 목표를
+  // insert 할 때 기존 active 를 archived 로 내려 불변식을 유지한다. 자동 개발
+  // 루프는 활성 목표가 있는 프로젝트만 돌린다.
+  const sharedGoalsCol = db.collection<SharedGoal>('shared_goals');
+  await sharedGoalsCol.createIndex({ projectId: 1, status: 1, createdAt: -1 });
   // 관리 메뉴(연동·가져온 저장소)는 프로젝트별로 격리한다. 전역 컬렉션을 공유하면
   // 한 프로젝트가 PR 대상으로 지정한 외부 저장소가 다른 프로젝트 화면에 섞여 나와
   // "어느 게임 프로젝트에 속한 것인지" 구분이 흐려진다. projectId 필드를 필수 키로
@@ -220,15 +265,28 @@ async function startServer() {
   // 유지하며 stream-json 으로 유저 턴을 큐잉한다. 에이전트 간 컨텍스트는 격리되고
   // 동일 에이전트에 대한 연속 지시는 같은 세션에서 이어진다.
   const workerRegistry = new AgentWorkerRegistry();
+  // 프로젝트 단위 "모든 에이전트 idle 수렴" 전이 추적기. 개별 태스크 완료마다
+  // git 자동화를 돌리는 기존 훅과 별개로, 한 묶음의 지시가 모두 끝난 시점을
+  // rising-edge 로 잡아 마무리 커밋/PR 을 한 번 더 정리한다. busy → completed
+  // 전이에서만 1회 발사되고, 이어지는 같은 completed tick 은 무시된다.
+  const completionTracker = new ProjectCompletionTracker();
+  // 리더 루프가 같은 세션 안에서 브랜치를 재사용하도록 하는 메모리 캐시.
+  // 프로세스 재기동 시에는 projects.currentAutoBranch 에서 복원된다.
+  const activeBranchCache = new ActiveBranchCache();
   const taskRunner = new TaskRunner({
     db,
     io,
     registry: workerRegistry,
     port: PORT,
     resolveWorkspace,
-    runGitAutomation: (projectId, ctx) => runGitAutomation(projectId, ctx),
+    runGitAutomation: (projectId, ctx) => executeGitAutomation(projectId, ctx),
     getGameState: () => getGameState(),
     getTasks: () => getTasks(),
+    onAgentStateChanged: (projectId) => {
+      allAgentsCompletedWatcher(projectId).catch(err =>
+        console.error('[all-agents-watcher] tick failed:', (err as Error).message),
+      );
+    },
   });
   await taskRunner.init();
 
@@ -373,12 +431,21 @@ async function startServer() {
       // 본인의 "completed" 를 다시 트리거하면 무한 루프 위험이 있다.
       const actor = await agentsCol.findOne({ id: task.assignedTo });
       if (actor && actor.role !== 'Leader') {
-        runGitAutomation(task.projectId, {
+        executeGitAutomation(task.projectId, {
           type: 'chore',
           summary: task.description?.slice(0, 64) || 'auto update',
           agent: actor.name,
+          // 긴급 수정 #a7b258fb: 태스크 완료 PATCH 경로도 taskRunner 훅과 동일하게
+          // 커밋+푸시를 한 번에 원격까지 반영하도록 강제한다.
+          forcePush: true,
         }).catch(err => console.error('[git-automation] auto-run failed:', err?.message));
       }
+      // 전원 idle 수렴 감시기 — 이번 태스크 완료로 프로젝트 전체가 idle 이 된
+      // 경우 집계 커밋을 1회 발사한다. 개별 태스크 트리거와 중복돼도 tracker
+      // rising-edge 가드가 1회로 수렴시킨다.
+      allAgentsCompletedWatcher(task.projectId).catch(err =>
+        console.error('[all-agents-watcher] tick failed:', (err as Error).message),
+      );
     }
 
     io.emit('tasks:updated', await getTasks());
@@ -399,11 +466,140 @@ async function startServer() {
       workspacePath: finalPath,
       status: 'active',
       agents: leader ? [leader.id] : [],
+      // 프로젝트 관리 옵션 기본값 주입. MongoDB 는 스키마리스라 이 필드들이
+      // 문서에 없어도 읽기는 가능하지만, 생성 시 한 번에 채워 넣어 후속 PATCH /
+      // UI 로직이 undefined 폴백을 반복하지 않도록 한다.
+      autoDevEnabled: PROJECT_OPTION_DEFAULTS.autoDevEnabled,
+      autoCommitEnabled: PROJECT_OPTION_DEFAULTS.autoCommitEnabled,
+      autoPushEnabled: PROJECT_OPTION_DEFAULTS.autoPushEnabled,
+      defaultBranch: PROJECT_OPTION_DEFAULTS.defaultBranch,
+      settingsJson: { ...PROJECT_OPTION_DEFAULTS.settingsJson },
     };
     await projectsCol.insertOne(project);
 
     io.emit('state:updated', await getGameState());
     res.json(project);
+  });
+
+  // 프로젝트 관리 옵션 부분 업데이트. 스키마리스 저장이라 null 로 명시된 필드는
+  // $unset 으로 제거하고, 지정되지 않은 필드는 건드리지 않는다. sharedGoalId 가
+  // 제공되면 동일 프로젝트 스코프의 활성/보관 목표를 실제로 가리키는지 검증한다.
+  app.patch('/api/projects/:id', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+    const body = (req.body || {}) as ProjectOptionsUpdate;
+
+    const $set: Record<string, unknown> = {};
+    const $unset: Record<string, ''> = {};
+
+    const assignBool = (key: keyof ProjectOptionsUpdate) => {
+      if (body[key] === undefined) return;
+      if (typeof body[key] !== 'boolean') {
+        throw new Error(`${key} 는 boolean 이어야 합니다`);
+      }
+      $set[key] = body[key];
+    };
+    try {
+      assignBool('autoDevEnabled');
+      assignBool('autoCommitEnabled');
+      assignBool('autoPushEnabled');
+
+      if (body.defaultBranch !== undefined) {
+        if (typeof body.defaultBranch !== 'string' || !body.defaultBranch.trim()) {
+          throw new Error('defaultBranch 는 비어있지 않은 문자열이어야 합니다');
+        }
+        $set.defaultBranch = body.defaultBranch.trim();
+      }
+      if (body.gitRemoteUrl !== undefined) {
+        if (body.gitRemoteUrl === null) $unset.gitRemoteUrl = '';
+        else if (typeof body.gitRemoteUrl === 'string') $set.gitRemoteUrl = body.gitRemoteUrl.trim();
+        else throw new Error('gitRemoteUrl 은 문자열 또는 null 이어야 합니다');
+      }
+      if (body.sharedGoalId !== undefined) {
+        if (body.sharedGoalId === null) $unset.sharedGoalId = '';
+        else if (typeof body.sharedGoalId === 'string') {
+          const goal = await sharedGoalsCol.findOne({ id: body.sharedGoalId, projectId: id });
+          if (!goal) throw new Error('지정한 sharedGoalId 가 이 프로젝트에 존재하지 않습니다');
+          $set.sharedGoalId = body.sharedGoalId;
+        } else throw new Error('sharedGoalId 는 문자열 또는 null 이어야 합니다');
+      }
+      if (body.settingsJson !== undefined) {
+        if (!body.settingsJson || typeof body.settingsJson !== 'object' || Array.isArray(body.settingsJson)) {
+          throw new Error('settingsJson 은 객체여야 합니다');
+        }
+        $set.settingsJson = body.settingsJson;
+      }
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message || 'invalid payload' });
+      return;
+    }
+
+    if (Object.keys($set).length === 0 && Object.keys($unset).length === 0) {
+      res.status(400).json({ error: '갱신할 필드가 없습니다' });
+      return;
+    }
+    const update: Record<string, unknown> = {};
+    if (Object.keys($set).length > 0) update.$set = $set;
+    if (Object.keys($unset).length > 0) update.$unset = $unset;
+    await projectsCol.updateOne({ id }, update);
+    const saved = await projectsCol.findOne({ id }, { projection: { _id: 0 } });
+    io.emit('state:updated', await getGameState());
+    res.json(saved);
+  });
+
+  // 프로젝트 관리 옵션 전용 조회. PATCH /api/projects/:id 와 달리 옵션 필드만
+  // 노출해 클라이언트 훅(useProjectOptions)이 GameState 전체를 수신하지 않고도
+  // 새로고침/재로그인 직후 권위값을 복원할 수 있다.
+  app.get('/api/projects/:id/options', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id }, { projection: { _id: 0 } });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+    res.json(projectOptionsView(project));
+  });
+
+  // 프로젝트 관리 옵션 부분 업데이트. 검증은 updateProjectOptionsSchema 가 담당하고,
+  // 저장은 projectsCol.updateOne 에 위임한다(별도 storage 모듈이 없음). sharedGoalId
+  // 는 해당 프로젝트 스코프의 목표를 가리키는지 DB 조회로 교차 검증한다.
+  app.patch('/api/projects/:id/options', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+
+    let validated;
+    try {
+      validated = updateProjectOptionsSchema(req.body);
+    } catch (e) {
+      if (e instanceof ProjectOptionsValidationError) {
+        res.status(400).json({ error: e.message, field: e.field });
+        return;
+      }
+      res.status(400).json({ error: (e as Error).message || 'invalid payload' });
+      return;
+    }
+
+    if (!hasAnyUpdate(validated)) {
+      res.status(400).json({ error: '갱신할 필드가 없습니다' });
+      return;
+    }
+
+    if (typeof validated.$set.sharedGoalId === 'string') {
+      const goal = await sharedGoalsCol.findOne({ id: validated.$set.sharedGoalId, projectId: id });
+      if (!goal) {
+        res.status(400).json({ error: '지정한 sharedGoalId 가 이 프로젝트에 존재하지 않습니다', field: 'sharedGoalId' });
+        return;
+      }
+    }
+
+    const update: Record<string, unknown> = {};
+    if (Object.keys(validated.$set).length > 0) update.$set = validated.$set;
+    if (Object.keys(validated.$unset).length > 0) update.$unset = validated.$unset;
+    await projectsCol.updateOne({ id }, update);
+    const saved = await projectsCol.findOne({ id }, { projection: { _id: 0 } });
+    if (!saved) { res.status(404).json({ error: 'project not found' }); return; }
+    io.emit('state:updated', await getGameState());
+    io.emit('project-options:updated', { projectId: id, options: projectOptionsView(saved) });
+    res.json(projectOptionsView(saved));
   });
 
   app.delete('/api/projects/:id', async (req, res) => {
@@ -414,6 +610,9 @@ async function startServer() {
     if (project?.agents) {
       for (const agentId of project.agents) taskRunner.disposeAgentWorker(agentId);
     }
+    // tracker 상태 초기화 — 같은 ID 의 프로젝트가 이후 재생성되더라도 이전 phase 가
+    // 유령처럼 남아 첫 관측 결과를 왜곡하지 않도록 한다.
+    completionTracker.reset(id);
     const files = await filesCol.find({ projectId: id }).toArray();
     const fileIds = files.map(f => f.id);
     await projectsCol.deleteOne({ id });
@@ -514,11 +713,22 @@ async function startServer() {
 
   app.patch('/api/auto-dev', async (req, res) => {
     const { enabled, projectId } = req.body || {};
-    const next = await taskRunner.setAutoDev({
-      enabled: typeof enabled === 'boolean' ? enabled : undefined,
-      projectId: projectId === null ? undefined : (typeof projectId === 'string' ? projectId : undefined),
-    });
-    res.json(next);
+    try {
+      const next = await taskRunner.setAutoDev({
+        enabled: typeof enabled === 'boolean' ? enabled : undefined,
+        projectId: projectId === null ? undefined : (typeof projectId === 'string' ? projectId : undefined),
+      });
+      res.json(next);
+    } catch (e: any) {
+      // 활성 공동 목표 미설정은 운영자가 UI 에서 즉시 복구 가능한 사용자 오류이므로
+      // 400 으로 내려보내 토스트·배지로 안내한다. 다른 오류는 기존 5xx 경로로 승격.
+      if (e?.code === 'SHARED_GOAL_REQUIRED') {
+        res.status(400).json({ error: e.message, code: 'SHARED_GOAL_REQUIRED' });
+        return;
+      }
+      console.error('[auto-dev] setAutoDev failed:', e?.message);
+      res.status(500).json({ error: e?.message || 'auto-dev update failed' });
+    }
   });
 
   // --- MCP-backed endpoints ---
@@ -544,6 +754,18 @@ async function startServer() {
     }
     await agentsCol.updateOne({ id }, { $set: update });
     io.emit('state:updated', await getGameState());
+    // 상태 전이에 따라 이 에이전트가 속한 모든 프로젝트의 completion 감시기를 재평가.
+    // 같은 에이전트가 동시에 여러 프로젝트에 매핑되는 일은 드물지만, projectId 를
+    // body 에 요구하지 않는 이 엔드포인트에서는 agents 배열에 포함된 모든 프로젝트를
+    // 후보로 본다.
+    const owningProjects = await projectsCol
+      .find({ agents: id }, { projection: { _id: 0, id: 1 } })
+      .toArray();
+    for (const p of owningProjects) {
+      allAgentsCompletedWatcher(p.id).catch(err =>
+        console.error('[all-agents-watcher] tick failed:', (err as Error).message),
+      );
+    }
     res.json({ success: true });
   });
 
@@ -701,6 +923,139 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // --- 프로젝트 설정 화면용 Git 자격증명 (GitCredentialsSection) ---
+  // localStorage 기반 토큰 저장을 걷어내고 전부 여기로 모은다. 저장은 AES-256-GCM
+  // 암호문으로만 이루어지고, 응답에는 암호문조차 노출하지 않는다(hasToken 배지로만 표기).
+  const redactCredential = (c: GitCredential): GitCredentialRedacted => {
+    const { tokenEncrypted, ...rest } = c;
+    return { ...rest, hasToken: typeof tokenEncrypted === 'string' && tokenEncrypted.length > 0 };
+  };
+
+  // 프로젝트 공동 목표(sharedGoal) 조회·갱신. 활성 1건만 조회해 내려주며, 없으면
+  // null 을 반환해 UI 가 "목표 미설정" 배지를 띄울 수 있게 한다.
+  app.get('/api/projects/:id/shared-goal', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+    const goal = await sharedGoalsCol.findOne(
+      { projectId: id, status: 'active' },
+      { projection: { _id: 0 }, sort: { createdAt: -1 } },
+    );
+    res.json(goal || null);
+  });
+
+  app.post('/api/projects/:id/shared-goal', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+    const { title, description, priority, deadline, status } = req.body || {};
+    const trimmedTitle = typeof title === 'string' ? title.trim() : '';
+    if (!trimmedTitle) {
+      res.status(400).json({ error: 'title required' });
+      return;
+    }
+    const normalizedPriority: SharedGoalPriority =
+      priority === 'low' || priority === 'high' ? priority : 'normal';
+    const normalizedStatus: SharedGoalStatus =
+      status === 'archived' || status === 'completed' ? status : 'active';
+    const goal: SharedGoal = {
+      id: uuidv4(),
+      projectId: id,
+      title: trimmedTitle,
+      description: typeof description === 'string' ? description.trim() : '',
+      priority: normalizedPriority,
+      deadline: typeof deadline === 'string' && deadline.trim() ? deadline.trim() : undefined,
+      status: normalizedStatus,
+      createdAt: new Date().toISOString(),
+    };
+    // "활성 1건" 불변식: 새 목표가 active 로 들어오면 기존 활성은 archived 로 내린다.
+    if (goal.status === 'active') {
+      await sharedGoalsCol.updateMany(
+        { projectId: id, status: 'active' },
+        { $set: { status: 'archived' } },
+      );
+    }
+    await sharedGoalsCol.insertOne(goal);
+    res.json(goal);
+  });
+
+  app.get('/api/projects/:id/git-credentials', async (req, res) => {
+    const projectId = String(req.params.id || '').trim();
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    const row = await gitCredentialsCol.findOne({ projectId }, { projection: { _id: 0 } });
+    if (!row) { res.status(404).json({ error: 'not-found' }); return; }
+    res.json(redactCredential(row as GitCredential));
+  });
+
+  app.post('/api/projects/:id/git-credentials', async (req, res) => {
+    const projectId = String(req.params.id || '').trim();
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    const { provider, username, token } = req.body || {};
+    if (provider !== 'github' && provider !== 'gitlab') {
+      res.status(400).json({ error: 'provider (github|gitlab) required' });
+      return;
+    }
+    const user = typeof username === 'string' ? username.trim() : '';
+    const pat = typeof token === 'string' ? token.trim() : '';
+    if (!user || !pat) {
+      res.status(400).json({ error: 'username and token required' });
+      return;
+    }
+    let tokenEncrypted: string;
+    try {
+      tokenEncrypted = encryptToken(pat);
+    } catch (e) {
+      // GIT_TOKEN_ENC_KEY 미설정/잘못된 키 길이 등은 서버 운영 단계의 구성 오류다.
+      // 평문 토큰을 로그에 남기지 않기 위해 상세 메시지만 한국어로 돌려준다.
+      console.error('[git-credentials] encryption failed:', (e as Error).message);
+      res.status(500).json({ error: 'token encryption unavailable' });
+      return;
+    }
+    const existing = await gitCredentialsCol.findOne({ projectId }, { projection: { _id: 0 } });
+    const nowIso = new Date().toISOString();
+    const next: GitCredential = {
+      projectId,
+      provider: provider as SourceProvider,
+      username: user,
+      tokenEncrypted,
+      createdAt: existing?.createdAt || nowIso,
+      updatedAt: nowIso,
+    };
+    await gitCredentialsCol.updateOne(
+      { projectId },
+      { $set: next },
+      { upsert: true },
+    );
+    res.json(redactCredential(next));
+  });
+
+  app.delete('/api/projects/:id/git-credentials', async (req, res) => {
+    const projectId = String(req.params.id || '').trim();
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    await gitCredentialsCol.deleteOne({ projectId });
+    res.json({ success: true });
+  });
+
+  // executeGitAutomation 의 push/pr 단계에서 호출되는 내부 조회 헬퍼.
+  // 성공 시 {username, token} 평문을 돌려주고, 실패(레코드 부재·복호 실패)는
+  // null 로 폴백해 호출자가 기존 경로(시스템 credential helper/대화형 프롬프트)
+  // 로 투명하게 내려가도록 한다.
+  async function loadDecryptedCredential(
+    projectId: string,
+  ): Promise<{ username: string; token: string } | null> {
+    const row = await gitCredentialsCol.findOne({ projectId }, { projection: { _id: 0 } });
+    if (!row || !row.tokenEncrypted) return null;
+    try {
+      const token = decryptToken(row.tokenEncrypted);
+      return { username: row.username, token };
+    } catch (e) {
+      console.warn(
+        `[git-credentials] decrypt failed project=${projectId}: ${(e as Error).message}`,
+      );
+      return null;
+    }
+  }
+
   async function fetchRepos(integration: SourceIntegration): Promise<ManagedProject[]> {
     const now = new Date().toISOString();
     if (integration.provider === 'github') {
@@ -837,6 +1192,13 @@ async function startServer() {
   // 구분해서 보여줄 수 있다.
   function withDefaultSettings(projectId: string, raw: Partial<GitAutomationSettings> | null): GitAutomationSettings {
     const base = { ...DEFAULT_GIT_AUTOMATION_CONFIG, ...(raw || {}) };
+    // branchStrategy 는 enum 두 값만 허용. 저장 row 가 이 필드를 모르면 env 기본값으로
+    // 보정해, UI/리더가 항상 유효한 값 하나를 받도록 한다.
+    const branchStrategy: GitAutomationBranchStrategy =
+      raw?.branchStrategy && GIT_AUTOMATION_BRANCH_STRATEGY_VALUES.includes(raw.branchStrategy)
+        ? raw.branchStrategy
+        : GIT_AUTO_DEFAULT_BRANCH_STRATEGY;
+    const branchName = typeof raw?.branchName === 'string' ? raw.branchName : GIT_AUTO_DEFAULT_BRANCH_NAME;
     return {
       projectId,
       enabled: raw?.enabled ?? false,
@@ -846,6 +1208,8 @@ async function startServer() {
       commitScope: base.commitScope,
       prTitleTemplate: base.prTitleTemplate,
       reviewers: base.reviewers,
+      branchStrategy,
+      branchName,
       updatedAt: raw?.updatedAt || new Date(0).toISOString(),
     };
   }
@@ -865,10 +1229,28 @@ async function startServer() {
     const body = req.body || {};
     const validation = validateGitAutomationConfig(body);
     if (validation.ok !== true) { res.status(400).json({ error: validation.error }); return; }
+    // validation.config 가 branchStrategy/branchName 을 이미 검증·머지해 둔 상태라
+    // withDefaultSettings 와 동일 경로로 env 기본값을 끼워 넣어 저장 row 에 항상
+    // 유효한 enum·string 쌍이 박히도록 한다.
+    const persistedBranchStrategy: GitAutomationBranchStrategy =
+      validation.config.branchStrategy
+        && GIT_AUTOMATION_BRANCH_STRATEGY_VALUES.includes(validation.config.branchStrategy)
+        ? validation.config.branchStrategy
+        : GIT_AUTO_DEFAULT_BRANCH_STRATEGY;
+    const persistedBranchName = typeof validation.config.branchName === 'string'
+      ? validation.config.branchName
+      : GIT_AUTO_DEFAULT_BRANCH_NAME;
     const settings: GitAutomationSettings = {
       projectId: id,
       enabled: body.enabled !== false,
-      ...validation.config,
+      flowLevel: validation.config.flowLevel,
+      branchTemplate: validation.config.branchTemplate,
+      commitConvention: validation.config.commitConvention,
+      commitScope: validation.config.commitScope,
+      prTitleTemplate: validation.config.prTitleTemplate,
+      reviewers: validation.config.reviewers,
+      branchStrategy: persistedBranchStrategy,
+      branchName: persistedBranchName,
       updatedAt: new Date().toISOString(),
     };
     await gitAutomationSettingsCol.updateOne(
@@ -880,56 +1262,377 @@ async function startServer() {
     res.json(settings);
   });
 
-  // 리더가 완료 이벤트에 맞춰 호출하는 자동 실행 엔드포인트. 설정을 읽어
-  // buildRunPlan 이 계산한 단계들을 프로젝트 workspacePath 에서 순차 실행한다.
-  // 실패한 단계에서 중단하고 이후 단계는 skip 으로 기록한다.
-  async function runGitAutomation(projectId: string, ctxHint?: { type?: string; summary?: string; agent?: string; prBase?: string }) {
-    const project = await projectsCol.findOne({ id: projectId });
-    if (!project) return { ok: false, error: 'project not found' };
-    const row = await gitAutomationSettingsCol.findOne({ projectId });
-    if (!row || row.enabled === false) return { ok: false, skipped: 'disabled' };
-    const settings = row as GitAutomationSettings;
-    const cwd = resolveWorkspace(project.workspacePath);
-    const branch = renderBranchName(settings.branchTemplate, {
-      type: ctxHint?.type || 'chore',
-      summary: ctxHint?.summary || 'auto',
-      agent: ctxHint?.agent,
-    });
-    const commitMessage = formatCommitMessage(settings, {
-      type: ctxHint?.type || 'chore',
-      summary: ctxHint?.summary || 'auto update',
-    });
-    const prTitle = formatPrTitle(settings.prTitleTemplate, {
-      type: ctxHint?.type || 'chore',
-      summary: ctxHint?.summary || 'auto update',
-      branch,
-    });
-    const steps = buildRunPlan(settings, {
-      workspacePath: cwd,
-      branch,
-      commitMessage,
-      prTitle,
-      prBase: ctxHint?.prBase,
-      reviewers: settings.reviewers,
-    });
-    const results: Array<{ label: string; ok: boolean; code: number | null; stderr?: string }> = [];
-    for (const step of steps) {
-      const [bin, ...rest] = step.cmd;
-      const r = spawnSync(bin, rest, { cwd, encoding: 'utf8', windowsHide: true });
-      const ok = r.status === 0;
-      results.push({ label: step.label, ok, code: r.status, stderr: ok ? undefined : (r.stderr || '').slice(0, 400) });
-      if (!ok) break;
+  // Git 자동화 패널 설정을 읽어 실제 git/gh 명령을 돌리는 실행기.
+  // autoCommit → autoPush → autoPR 순서로 플래그를 검사하고, 각 플래그가 켜진
+  // 경우에만 해당 단계의 명령을 수행한다. 한 단계라도 실패하면 뒷 단계는 건너뛰고
+  // 즉시 실패로 종결 — 실패한 push 를 그대로 덮어 PR 을 만들면 잘못된 상태가
+  // 공개 저장소에 박힌다.
+  async function executeGitAutomation(
+    projectId: string,
+    // forcePush: flowLevel='commitOnly' 로 저장된 프로젝트라도 태스크 완료 훅 호출에는
+    // 커밋 직후 바로 원격 push 까지 수행하도록 강제한다(긴급 수정 #a7b258fb).
+    // 마스터 스위치 enabled=false 는 여전히 우선되므로, 사용자가 명시적으로 끈 자동화는
+    // 이 플래그로 뚫리지 않는다.
+    ctxHint?: {
+      type?: string;
+      summary?: string;
+      agent?: string;
+      prBase?: string;
+      forcePush?: boolean;
+      taskId?: string;
+      // MCP/REST 트리거 1회 한정 오버라이드. 저장된 settings.branchStrategy 보다 우선.
+      branchStrategy?: GitAutomationBranchStrategy;
+      branchName?: string;
+    },
+  ): Promise<GitAutomationRunResult> {
+    try {
+      const project = await projectsCol.findOne({ id: projectId });
+      if (!project) return { ok: false, skipped: 'no-project', error: 'project not found', results: [] };
+      const options = projectOptionsView(project as Project);
+      const row = await gitAutomationSettingsCol.findOne({ projectId });
+      // 과거에는 두 경로를 같은 skipped='disabled' 로 뭉뚱그려 UI 토글이 ON 인데도
+      // 커밋이 침묵하는 경우 원인이 "설정 row 자체가 없음" 인지 "명시적 비활성" 인지
+      // 구분할 수 없었다. tests/auto-commit-no-fire-repro.md 의 침묵 경로 추적을 위해
+      // 최소 한 줄씩 분리 로그를 남긴다.
+      if (!row) {
+        console.warn(
+          `[git-automation] skip project=${projectId}: settings row 부재 — 한 번도 저장된 적 없음 (POST /api/projects/:id/git-automation 으로 초기화 필요)`,
+        );
+        return { ok: false, skipped: 'disabled', results: [] };
+      }
+      if (row.enabled === false) {
+        if (process.env.DEBUG_GIT_AUTO === '1') {
+          console.log(`[git-automation] skip project=${projectId}: enabled=false (명시적 OFF)`);
+        }
+        return { ok: false, skipped: 'disabled', results: [] };
+      }
+      const settings = row as GitAutomationSettings;
+      const cwd = resolveWorkspace(project.workspacePath);
+      const projectWithBranch = project as Project;
+
+      // 트리거 1회 한정 오버라이드가 있으면 저장된 settings 보다 우선한다. env 기본값은
+      // withDefaultSettings 와 동일 규칙으로 끼워 넣어, row 가 이 필드를 모르는 레거시
+      // 프로젝트에서도 유효한 enum 쌍을 돌려받는다.
+      const effectiveStrategy: GitAutomationBranchStrategy =
+        (ctxHint?.branchStrategy && GIT_AUTOMATION_BRANCH_STRATEGY_VALUES.includes(ctxHint.branchStrategy))
+          ? ctxHint.branchStrategy
+          : (settings.branchStrategy && GIT_AUTOMATION_BRANCH_STRATEGY_VALUES.includes(settings.branchStrategy))
+            ? settings.branchStrategy
+            : GIT_AUTO_DEFAULT_BRANCH_STRATEGY;
+      const effectiveBranchName = (
+        typeof ctxHint?.branchName === 'string' ? ctxHint.branchName
+          : typeof settings.branchName === 'string' ? settings.branchName
+            : GIT_AUTO_DEFAULT_BRANCH_NAME
+      ).trim();
+
+      // 'current' 모드는 checkout 단계를 건너뛰어 현재 HEAD 에 그대로 커밋/푸시한다.
+      // 브랜치 이름은 rev-parse 로 조회해 UI/구조화 로그 소비자가 "어느 브랜치에
+      // 박혔는지" 를 동일 계약(branch 필드)으로 읽도록 한다. detached HEAD 는 이름
+      // 대신 'HEAD' 를 돌려주므로 조기 실패시키고, 사용자가 수동 전환하도록 한다.
+      let branch: string;
+      let skipCheckout = false;
+      // 'new' 모드에서 explicit branchName 대신 resolveBranch 폴백을 썼을 때만 기존
+      // 재사용 경로(cache/persisted/fixed)를 그대로 유지해 `checkout <branch>` 로 전환.
+      // explicit branchName 경로는 항상 `-B` 로 힘 있게 생성/재설정한다.
+      let forceFreshCheckout = false;
+      if (effectiveStrategy === 'current') {
+        const head = spawnSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+        const headName = (head.stdout || '').trim();
+        if (head.status !== 0 || !headName || headName === 'HEAD') {
+          console.error(
+            `[git-automation] branchStrategy=current 실패 project=${projectId}: HEAD rev-parse code=${head.status ?? 'null'} name='${headName}' — detached 이거나 작업 디렉터리에 git 저장소가 없음`,
+          );
+          return {
+            ok: false,
+            error: 'branchStrategy=current 에서 HEAD 이름을 확인할 수 없습니다 (detached HEAD 또는 저장소 누락)',
+            results: [],
+          };
+        }
+        branch = headName;
+        skipCheckout = true;
+      } else if (effectiveBranchName) {
+        // 'new' + 명시 branchName — Project 측 네이밍 정책(per-session 등)을 우회해
+        // 이 이름으로 `checkout -B` 를 발사한다. cache/persisted 갱신은 건너뛴다.
+        branch = effectiveBranchName;
+        forceFreshCheckout = true;
+      } else {
+        // 'new' + branchName 미지정 — 기존 resolveBranch 폴백. 리더 루프가 매
+        // 태스크마다 새 브랜치를 만들던 회귀(#91aeaf7a) 를 그대로 차단.
+        const resolution = resolveBranch({
+          strategy: projectWithBranch.branchStrategy,
+          fixedBranchName: projectWithBranch.fixedBranchName,
+          branchNamePattern: projectWithBranch.branchNamePattern,
+          cachedActiveBranch: activeBranchCache.get(projectId),
+          persistedActiveBranch: projectWithBranch.currentAutoBranch,
+          fallbackTemplate: settings.branchTemplate,
+          templateContext: {
+            type: ctxHint?.type || 'chore',
+            summary: ctxHint?.summary || 'auto',
+            agent: ctxHint?.agent,
+          },
+        });
+        branch = resolution.branch;
+        forceFreshCheckout = resolution.source === 'fresh';
+        if (resolution.persist) {
+          activeBranchCache.set(projectId, branch);
+          await projectsCol.updateOne(
+            { id: projectId },
+            { $set: { currentAutoBranch: branch } },
+          );
+        } else if (resolution.source === 'cache' || resolution.source === 'persisted') {
+          // 캐시 경로에서 DB 에 값이 빠진 경우(예: 다른 프로세스가 기록 전), 백필해 둔다.
+          if (!projectWithBranch.currentAutoBranch) {
+            await projectsCol.updateOne(
+              { id: projectId },
+              { $set: { currentAutoBranch: branch } },
+            );
+          }
+          activeBranchCache.set(projectId, branch);
+        }
+      }
+      const commitMessage = formatCommitMessage(settings, {
+        type: ctxHint?.type || 'chore',
+        summary: ctxHint?.summary || 'auto update',
+      });
+      const prTitle = formatPrTitle(settings.prTitleTemplate, {
+        type: ctxHint?.type || 'chore',
+        summary: ctxHint?.summary || 'auto update',
+        branch,
+      });
+
+      const results: GitAutomationStepResult[] = [];
+      const runStep = (label: string, cmd: string[]): boolean => {
+        const [bin, ...rest] = cmd;
+        const r = spawnSync(bin, rest, { cwd, encoding: 'utf8', windowsHide: true });
+        // spawn 자체가 실패(바이너리 미설치 등)하면 r.status 는 null, r.error 가 채워진다.
+        // stderr 만 보면 원인이 빈 문자열로 남아 디버깅 불가 → r.error.message 를 로그에 합친다.
+        const ok = r.status === 0 && !r.error;
+        const stderrRaw = (r.stderr || '') + (r.error ? `\nspawn error: ${r.error.message}` : '');
+        const stdout = label === 'commit' || label === 'pr'
+          ? (r.stdout || '').slice(0, 400)
+          : undefined;
+        // 원격 URL 에 토큰이 인라인 주입된 상태라면, 실패 stderr 에 자격증명이 그대로
+        // 박힌 채 로그·소켓 페이로드로 흘러갈 위험이 있다. redactRemoteUrl 을 항상
+        // 통과시켜 `user:***@host` 로 마스킹한 뒤에만 외부에 노출한다.
+        const step: GitAutomationStepResult = {
+          label,
+          ok,
+          code: r.status,
+          stderr: ok ? undefined : redactRemoteUrl(stderrRaw).slice(0, 400),
+          stdout: stdout ? redactRemoteUrl(stdout) : undefined,
+        };
+        results.push(step);
+        if (!ok) {
+          console.error(
+            `[git-automation] step=${label} failed project=${projectId} branch=${branch} code=${r.status ?? 'null'} stderr=${(step.stderr || '').slice(0, 200)}`,
+          );
+        }
+        return ok;
+      };
+      const finalize = (ok: boolean): GitAutomationRunResult => {
+        io.emit('git-automation:ran', { projectId, results, branch });
+        return { ok, results, branch, commitMessage, prTitle };
+      };
+
+      // autoCommit: checkout → add → commit.
+      //   - branchStrategy='current' (skipCheckout=true): checkout 생략, 현재 HEAD 에 커밋.
+      //   - branchStrategy='new' + 명시 branchName: 항상 `checkout -B` 로 덮어써 생성/전환.
+      //   - branchStrategy='new' + 폴백(resolveBranch): 신규(fresh)면 -B, 재사용(cache/persisted/fixed)은
+      //     전환만 해 "매 태스크마다 새 브랜치" 회귀(#91aeaf7a)를 계속 차단.
+      if (shouldAutoCommit(settings)) {
+        if (!skipCheckout) {
+          const checkoutCmd = forceFreshCheckout
+            ? ['git', '-C', cwd, 'checkout', '-B', branch]
+            : ['git', '-C', cwd, 'checkout', branch];
+          if (!runStep('checkout', checkoutCmd)) return finalize(false);
+        }
+        if (!runStep('add', ['git', '-C', cwd, 'add', '-A'])) return finalize(false);
+        if (!runStep('commit', ['git', '-C', cwd, 'commit', '-m', commitMessage])) return finalize(false);
+      }
+
+      // autoPush: 원격 원브랜치로 업스트림 연결 후 push.
+      // 태스크 완료 훅은 ctxHint.forcePush=true 를 넘기므로, flowLevel='commitOnly' 로
+      // 저장된 프로젝트에서도 커밋 직후 push 가 한 번에 이어져 원격까지 반영된다.
+      const shouldPush = shouldAutoPush(settings) || ctxHint?.forcePush === true;
+      if (shouldPush) {
+        if (ctxHint?.forcePush === true && !shouldAutoPush(settings)) {
+          console.log(
+            `[git-automation] push forced project=${projectId} branch=${branch} (flowLevel=${settings.flowLevel}, forcePush=true)`,
+          );
+        }
+        // 프로젝트별 저장된 자격증명(AES-256-GCM 복호화)을 원격 HTTPS URL 에 인라인
+        // 주입해 매 push 마다 대화형 인증 프롬프트가 뜨는 문제를 차단한다. 복구
+        // 가능성을 위해 원래 URL 을 snapshot 으로 보관하고, push 성공/실패 여부와
+        // 무관하게 finally 블록에서 원상 복구한다. SSH 원격 또는 자격증명이 없는
+        // 프로젝트는 기존 경로(시스템 credential helper)로 그대로 흘러간다.
+        let originalRemoteUrl: string | null = null;
+        try {
+          const cred = await loadDecryptedCredential(projectId);
+          if (cred) {
+            const cur = spawnSync('git', ['-C', cwd, 'remote', 'get-url', 'origin'], {
+              encoding: 'utf8',
+              windowsHide: true,
+            });
+            const currentUrl = (cur.stdout || '').trim();
+            if (cur.status === 0 && currentUrl) {
+              const injected = injectTokenIntoRemoteUrl(currentUrl, cred.username, cred.token);
+              if (injected) {
+                const setR = spawnSync(
+                  'git',
+                  ['-C', cwd, 'remote', 'set-url', 'origin', injected],
+                  { encoding: 'utf8', windowsHide: true },
+                );
+                if (setR.status === 0) {
+                  originalRemoteUrl = currentUrl;
+                } else {
+                  console.warn(
+                    `[git-automation] remote set-url failed project=${projectId}: ${(setR.stderr || '').trim().slice(0, 200)}`,
+                  );
+                }
+              }
+            }
+          }
+          if (!runStep('push', ['git', '-C', cwd, 'push', '-u', 'origin', branch])) {
+            return finalize(false);
+          }
+        } finally {
+          if (originalRemoteUrl) {
+            const restore = spawnSync(
+              'git',
+              ['-C', cwd, 'remote', 'set-url', 'origin', originalRemoteUrl],
+              { encoding: 'utf8', windowsHide: true },
+            );
+            if (restore.status !== 0) {
+              // 복구 실패는 설정 파일에 토큰이 박힌 채 남을 위험이 있다 — 운영자가
+              // 수동으로 `git remote set-url origin <원래 URL>` 을 돌리도록 한국어로 경고.
+              console.error(
+                `[git-automation] remote URL 복구 실패 project=${projectId} — .git/config 에서 수동으로 토큰을 제거하세요`,
+              );
+            }
+          }
+        }
+      }
+
+      // autoMergeToMain: push 성공 이후 옵션이 켜진 경우 defaultBranch 로 ff-only
+      // 병합을 시도한다. --ff-only 로 제한해 자동 병합이 히스토리를 망가뜨리지 않도록
+      // 보수적으로 유지하고, 실패해도 경고 로그만 남기며 파이프라인은 성공으로 마감한다.
+      // 병합 완료 후 세션 브랜치를 기본값으로 리셋해 다음 리더 트리거가 새 세션을 시작.
+      if (options.autoMergeToMain && shouldPush) {
+        const target = options.defaultBranch || PROJECT_OPTION_DEFAULTS.defaultBranch;
+        if (target === branch) {
+          console.warn(
+            `[git-automation] autoMergeToMain 건너뜀 project=${projectId}: target==branch (${target})`,
+          );
+        } else {
+          const coTarget = spawnSync('git', ['-C', cwd, 'checkout', target], { encoding: 'utf8', windowsHide: true });
+          if (coTarget.status === 0) {
+            const merge = spawnSync('git', ['-C', cwd, 'merge', '--ff-only', branch], { encoding: 'utf8', windowsHide: true });
+            if (merge.status === 0) {
+              console.log(`[git-automation] autoMergeToMain 성공 project=${projectId} ${branch} → ${target}`);
+              // 세션 브랜치를 모두 비워 다음 호출에서 새 브랜치가 만들어지게 한다.
+              activeBranchCache.clear(projectId);
+              await projectsCol.updateOne(
+                { id: projectId },
+                { $unset: { currentAutoBranch: '' } },
+              );
+            } else {
+              console.warn(
+                `[git-automation] autoMergeToMain ff-only 실패 project=${projectId} stderr=${(merge.stderr || '').trim().slice(0, 200)}`,
+              );
+            }
+          } else {
+            console.warn(
+              `[git-automation] autoMergeToMain checkout(${target}) 실패 project=${projectId} stderr=${(coTarget.stderr || '').trim().slice(0, 200)}`,
+            );
+          }
+        }
+      }
+
+      // autoPR: gh CLI 가 인증돼 있어야 한다. 실패 로그는 호출자가 agent 워커로 전달.
+      if (shouldAutoOpenPR(settings)) {
+        const reviewerArgs: string[] = [];
+        for (const r of settings.reviewers || []) {
+          if (r && typeof r === 'string') reviewerArgs.push('--reviewer', r);
+        }
+        const base = ctxHint?.prBase?.trim();
+        const prCmd = [
+          'gh', 'pr', 'create',
+          '--title', prTitle,
+          '--body', commitMessage,
+          ...(base ? ['--base', base] : []),
+          '--head', branch,
+          ...reviewerArgs,
+        ];
+        if (!runStep('pr', prCmd)) return finalize(false);
+      }
+
+      return finalize(true);
+    } catch (e) {
+      // DB 조회·spawn 래퍼·템플릿 렌더 중 어디서든 throw 가 나면 호출자 쪽 훅이
+      // 이벤트를 못 받고 조용히 죽는다. 여기서 한 번 더 가두고 원인을 로그로 남겨
+      // TaskRunner.handleWorkerTaskComplete 와 /api/tasks PATCH 양쪽 호출자가
+      // 동일한 {ok:false, error} 계약만 보고도 판정 가능하게 한다.
+      const message = (e as Error)?.message || String(e);
+      console.error(`[git-automation] unexpected throw project=${projectId}: ${message}`);
+      return { ok: false, error: message, results: [] };
     }
-    io.emit('git-automation:ran', { projectId, results, branch });
-    return { ok: results.every(r => r.ok), results, branch, commitMessage, prTitle };
   }
 
   app.post('/api/projects/:id/git-automation/run', async (req, res) => {
     const { id } = req.params;
-    const out = await runGitAutomation(id, req.body || {});
-    if (!out.ok && 'error' in out) { res.status(404).json(out); return; }
+    const body = (req.body || {}) as Record<string, unknown>;
+    // 트리거 1회 한정 오버라이드 — MCP `trigger_git_automation` 이 이 경로로 흘러든다.
+    // enum 이외 값은 executeGitAutomation 안에서 무시되지만, 로그/에러 가시성을 위해
+    // 서버 경계에서도 가볍게 normalize 한다.
+    const rawStrategy = body.branchStrategy;
+    const branchStrategy =
+      rawStrategy === 'new' || rawStrategy === 'current' ? rawStrategy : undefined;
+    const branchName = typeof body.branchName === 'string' ? body.branchName : undefined;
+    const out = await executeGitAutomation(id, {
+      type: typeof body.type === 'string' ? body.type : undefined,
+      summary: typeof body.summary === 'string' ? body.summary : undefined,
+      agent: typeof body.agent === 'string' ? body.agent : undefined,
+      prBase: typeof body.prBase === 'string' ? body.prBase : undefined,
+      forcePush: body.forcePush === true,
+      taskId: typeof body.taskId === 'string' ? body.taskId : undefined,
+      branchStrategy,
+      branchName,
+    });
+    if (!out.ok && out.skipped === 'no-project') { res.status(404).json(out); return; }
     res.json(out);
   });
+
+  // 모든 에이전트 상태가 idle 로 수렴된 "전이 순간" 감시기.
+  //   - 각 태스크 완료 훅이 개별 변경을 커밋하는 것과는 별개로, 한 묶음의 지시가
+  //     "전원 idle" 로 가라앉는 시점에 한 번 더 자동화를 돌려 흩어진 변경을 모은
+  //     마무리 커밋/PR 을 남긴다.
+  //   - ProjectCompletionTracker 가 busy → completed 전이에만 true 를 돌려주므로
+  //     같은 completed 구간에서 tick 이 여러 번 와도 한 번만 발사된다.
+  //   - 프로젝트 agent 편성이 0명인 경우 tracker 가 이전 phase 를 그대로 유지해
+  //     의미 없는 자동화가 돌지 않는다.
+  async function allAgentsCompletedWatcher(projectId: string): Promise<void> {
+    const project = await projectsCol.findOne({ id: projectId }, { projection: { _id: 0 } });
+    if (!project?.agents || project.agents.length === 0) return;
+    const members = await agentsCol
+      .find({ id: { $in: project.agents } }, { projection: { _id: 0 } })
+      .toArray();
+    const statuses = members.map(m => m.status as Agent['status']);
+    const { fire } = completionTracker.observe(projectId, statuses);
+    if (!fire) return;
+    // 정상 전이 — 집계 커밋을 트리거. 실패는 기존 executeGitAutomation 의 구조화
+    // 로그/소켓 이벤트 경로로 흘러가므로 여기서는 로그만 남긴다.
+    executeGitAutomation(projectId, {
+      type: 'chore',
+      summary: 'all agents completed',
+      // 긴급 수정 #a7b258fb: 전원 idle 수렴 집계 커밋도 원격까지 한 번에 반영.
+      forcePush: true,
+    }).catch(err =>
+      console.error('[all-agents-watcher] auto-run failed:', (err as Error).message),
+    );
+  }
 
   // 긴급중단: 모든 에이전트를 idle 로 되돌리고, 완료되지 않은 모든 작업을 pending
   // 상태로 재설정한다. 이미 completed 인 작업은 그대로 보존해 이력을 잃지 않는다.

@@ -1,0 +1,465 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 1900" font-family="ui-monospace, 'Segoe UI Mono', 'Noto Sans Mono CJK KR', monospace">
+  <rect width="1240" height="1900" fill="#16213e"/>
+
+  <defs>
+    <style>
+      .px-border { stroke: #4fc3f7; stroke-width: 2; fill: none; }
+      .px-border-dim { stroke: #385b7c; stroke-width: 2; fill: none; }
+      .px-border-dash { stroke: rgba(255,255,255,0.25); stroke-width: 2; stroke-dasharray: 5 4; fill: none; }
+      .panel-bg { fill: #0f3460; }
+      .deep-bg { fill: rgba(0,0,0,0.30); }
+      .input-bg { fill: rgba(0,0,0,0.45); }
+      .accent { fill: #7fd4ff; }
+      .accent-fill { fill: #00d4ff; }
+      .white { fill: #ffffff; }
+      .mute { fill: rgba(255,255,255,0.60); }
+      .dim { fill: rgba(255,255,255,0.38); }
+      .lock { fill: rgba(255,255,255,0.45); }
+      .emerald { fill: #34d399; }
+      .emerald-bg { fill: rgba(52,211,153,0.15); stroke: #34d399; stroke-width: 2; }
+      .amber { fill: #fbbf24; }
+      .amber-bg { fill: rgba(251,191,36,0.12); stroke: #fbbf24; stroke-width: 2; }
+      .red { fill: #f87171; }
+      .red-bg { fill: rgba(248,113,113,0.12); stroke: #f87171; stroke-width: 2; }
+      .sky { fill: #60a5fa; }
+      .sky-bg { fill: rgba(96,165,250,0.14); stroke: #60a5fa; stroke-width: 2; }
+      .title { font-size: 15px; font-weight: bold; letter-spacing: 0.1em; text-transform: uppercase; }
+      .h2 { font-size: 13px; font-weight: bold; letter-spacing: 0.08em; text-transform: uppercase; }
+      .label { font-size: 10px; font-weight: bold; letter-spacing: 0.08em; text-transform: uppercase; }
+      .small { font-size: 10px; }
+      .tiny { font-size: 9px; letter-spacing: 0.04em; }
+      .input-txt { font-size: 12px; font-family: 'Consolas', 'Noto Sans Mono CJK KR', monospace; }
+      .code { font-size: 11px; font-family: 'Consolas', 'Noto Sans Mono CJK KR', monospace; fill: #bef4dd; }
+    </style>
+  </defs>
+
+  <!-- 전체 헤더 -->
+  <text x="32" y="36" class="accent title">ProjectSettingsPanel · 프로젝트 관리 옵션 패널 UI 시안</text>
+  <text x="32" y="56" class="mute small">2026-04-18 · 신규 컴포넌트 · 5 섹션 + 저장 상태 피드백 + 편입 동선 플로우차트</text>
+
+  <!-- ══════════════════════════ 좌측: 패널 전체 (5 섹션) ══════════════════════════ -->
+  <g transform="translate(32, 88)">
+    <text x="0" y="0" class="accent label">① 패널 전체 레이아웃 (우측 사이드바 도킹 · 360px 고정)</text>
+    <rect x="0" y="10" width="420" height="1400" class="panel-bg"/>
+    <rect x="0" y="10" width="420" height="1400" class="px-border"/>
+
+    <!-- 헤더 -->
+    <rect x="0" y="10" width="420" height="44" fill="rgba(0,0,0,0.25)"/>
+    <text x="16" y="38" class="white h2">📁 프로젝트 설정</text>
+    <rect x="270" y="24" width="134" height="18" class="emerald-bg"/>
+    <text x="280" y="37" class="emerald small">● 저장됨 · 2분 전</text>
+
+    <!-- 섹션 ① 자동화 토글 -->
+    <text x="16" y="78" class="accent label">① 자동화 토글</text>
+    <rect x="16" y="86" width="388" height="186" class="deep-bg"/>
+    <rect x="16" y="86" width="388" height="186" class="px-border-dim"/>
+
+    <!-- 자동 개발 -->
+    <text x="28" y="108" class="white small">⚡ 자동 개발</text>
+    <text x="28" y="124" class="mute tiny">리더가 공동 목표 기반으로 4명에게 분배</text>
+    <rect x="300" y="100" width="40" height="16" fill="rgba(52,211,153,0.25)" stroke="#34d399" stroke-width="2"/>
+    <rect x="326" y="104" width="10" height="8" fill="#7fd4ff"/>
+    <rect x="350" y="100" width="22" height="16" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.2)" stroke-width="2"/>
+    <text x="356" y="112" class="dim small">ⓘ</text>
+
+    <!-- 자동 커밋 -->
+    <line x1="28" y1="138" x2="396" y2="138" stroke="rgba(255,255,255,0.10)" stroke-width="1"/>
+    <text x="28" y="156" class="white small">📝 자동 커밋</text>
+    <text x="28" y="172" class="mute tiny">에이전트 작업 완료 후 자동 로컬 커밋</text>
+    <rect x="300" y="148" width="40" height="16" fill="rgba(52,211,153,0.25)" stroke="#34d399" stroke-width="2"/>
+    <rect x="326" y="152" width="10" height="8" fill="#7fd4ff"/>
+    <rect x="350" y="148" width="22" height="16" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.2)" stroke-width="2"/>
+    <text x="356" y="160" class="dim small">ⓘ</text>
+
+    <!-- 자동 푸시 -->
+    <line x1="28" y1="186" x2="396" y2="186" stroke="rgba(255,255,255,0.10)" stroke-width="1"/>
+    <text x="28" y="204" class="white small">🚀 자동 푸시</text>
+    <text x="28" y="220" class="mute tiny">커밋 후 원격 브랜치로 push (커밋 ON 필수)</text>
+    <rect x="300" y="196" width="40" height="16" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.25)" stroke-width="2"/>
+    <rect x="304" y="200" width="10" height="8" fill="rgba(255,255,255,0.30)"/>
+    <rect x="350" y="196" width="22" height="16" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.2)" stroke-width="2"/>
+    <text x="356" y="208" class="dim small">ⓘ</text>
+
+    <!-- 계단식 의존 라인 -->
+    <path d="M 32 116 L 32 156 L 32 204" fill="none" stroke="rgba(127,212,255,0.35)" stroke-width="2"/>
+    <circle cx="32" cy="116" r="3" fill="#7fd4ff"/>
+    <circle cx="32" cy="156" r="3" fill="#7fd4ff"/>
+    <circle cx="32" cy="204" r="3" fill="rgba(127,212,255,0.35)"/>
+
+    <text x="28" y="252" class="dim tiny">🔗 계단식: 개발 OFF → 커밋·푸시 자동 OFF · 커밋 OFF → 푸시 🔒</text>
+
+    <!-- 섹션 ② 저장소 연결 -->
+    <text x="16" y="296" class="accent label">② 저장소 연결</text>
+    <rect x="16" y="304" width="388" height="174" class="deep-bg"/>
+    <rect x="16" y="304" width="388" height="174" class="px-border-dim"/>
+
+    <text x="28" y="326" class="dim label">기본 브랜치</text>
+    <rect x="28" y="332" width="240" height="22" class="input-bg"/>
+    <text x="36" y="348" class="white input-txt">main</text>
+    <rect x="264" y="332" width="4" height="22" fill="#34d399"/>
+    <text x="280" y="348" class="dim tiny">기본값 ▼</text>
+    <text x="28" y="370" class="mute tiny">ⓘ 비어 있으면 서버가 원격 HEAD 자동 감지</text>
+
+    <text x="28" y="394" class="dim label">원격 저장소 URL</text>
+    <rect x="28" y="400" width="364" height="22" class="input-bg"/>
+    <text x="36" y="416" class="white input-txt">https://github.com/org/repo.git</text>
+    <rect x="388" y="400" width="4" height="22" fill="#34d399"/>
+    <text x="28" y="438" class="mute tiny">ⓘ HTTPS 또는 SSH · 변경 시 자격증명 호환성 검증</text>
+
+    <text x="28" y="462" class="dim label">PR 대상 브랜치</text>
+    <rect x="120" y="450" width="170" height="20" class="input-bg"/>
+    <text x="128" y="464" class="white input-txt">main ▼</text>
+
+    <!-- 섹션 ③ 공동 목표 연결 -->
+    <text x="16" y="502" class="accent label">③ 공동 목표 연결</text>
+    <rect x="16" y="510" width="388" height="100" class="deep-bg"/>
+    <rect x="16" y="510" width="388" height="100" stroke="#34d399" stroke-width="2" fill="none"/>
+
+    <rect x="28" y="524" width="368" height="28" class="input-bg"/>
+    <text x="38" y="542" class="white input-txt">결제 모듈 보안 강화</text>
+    <rect x="220" y="528" width="30" height="18" fill="rgba(248,113,113,0.15)" stroke="#f87171" stroke-width="2"/>
+    <text x="226" y="542" class="red tiny">P1</text>
+    <text x="258" y="542" class="mute tiny">~4/25</text>
+    <text x="380" y="542" class="dim small">▼</text>
+
+    <rect x="28" y="562" width="90" height="20" class="emerald-bg"/>
+    <text x="38" y="576" class="emerald tiny">🎯 연결됨</text>
+    <text x="128" y="576" class="mute tiny">ⓘ 미선택 시 "자동 개발" 🔒 잠김 (SharedGoalForm 재사용)</text>
+
+    <text x="28" y="600" class="dim tiny">목록 맨 위 "연결 없음" 옵션으로 해제 가능</text>
+
+    <!-- 섹션 ④ 고급 설정 (JSON) -->
+    <text x="16" y="634" class="accent label">④ 고급 설정 (JSON 뷰)</text>
+    <rect x="16" y="642" width="388" height="232" class="deep-bg"/>
+    <rect x="16" y="642" width="388" height="232" class="px-border-dim"/>
+
+    <text x="28" y="660" class="accent tiny">▾ JSON 뷰 펼침</text>
+    <rect x="28" y="668" width="364" height="148" fill="#0a1d36" stroke="rgba(255,255,255,0.12)" stroke-width="2"/>
+    <text x="38" y="686" class="code">{</text>
+    <text x="52" y="702" class="code">"branchPattern": "{type}/{ticket}-{branch}",</text>
+    <text x="52" y="716" class="code">"commitTemplate": "{type}: {branch}",</text>
+    <text x="52" y="730" class="code">"prTitleTemplate": "[{ticket}] {type} — ...",</text>
+    <text x="52" y="744" class="code">"flow": "commit-push",</text>
+    <text x="52" y="758" class="code">"enabled": true,</text>
+    <text x="52" y="772" class="code">"autoCommit": true,</text>
+    <text x="52" y="786" class="code">"autoPush": false</text>
+    <text x="38" y="802" class="code">}</text>
+
+    <rect x="28" y="828" width="60" height="22" class="deep-bg"/>
+    <rect x="28" y="828" width="60" height="22" stroke="rgba(255,255,255,0.3)" stroke-width="2" fill="none"/>
+    <text x="44" y="843" class="white small">검증</text>
+    <rect x="96" y="828" width="60" height="22" class="deep-bg"/>
+    <rect x="96" y="828" width="60" height="22" stroke="rgba(255,255,255,0.3)" stroke-width="2" fill="none"/>
+    <text x="110" y="843" class="white small">원복</text>
+    <rect x="164" y="828" width="90" height="22" fill="rgba(0,210,255,0.18)" stroke="#00d4ff" stroke-width="2"/>
+    <text x="178" y="843" class="accent small">💾 적용</text>
+    <text x="28" y="866" class="dim tiny">zod 스키마 검증 · 오류 시 해당 키 노란 배경 하이라이트</text>
+
+    <!-- 섹션 ⑤ 위험 영역 -->
+    <text x="16" y="898" class="red label">⑤ 위험 영역</text>
+    <rect x="16" y="906" width="388" height="70" class="red-bg"/>
+    <rect x="24" y="916" width="140" height="24" fill="rgba(248,113,113,0.20)" stroke="#f87171" stroke-width="2"/>
+    <text x="38" y="932" class="red small">🗑 프로젝트 삭제</text>
+    <rect x="176" y="916" width="180" height="24" fill="rgba(248,113,113,0.10)" stroke="#f87171" stroke-width="2"/>
+    <text x="190" y="932" class="red small">관리 목록에서 제거</text>
+    <text x="24" y="962" class="dim tiny">삭제는 라벨 타이핑 확인(IntegrationForm 패턴) · 복원 불가</text>
+
+    <!-- 헤더 오른쪽 상단 피드백 상세 -->
+    <text x="16" y="1004" class="accent label">헤더 저장 상태 피드백 (헤더 우상단)</text>
+    <g transform="translate(16, 1016)">
+      <rect x="0" y="0" width="188" height="28" class="emerald-bg"/>
+      <text x="12" y="18" class="emerald small">● 저장됨 · 2분 전 (idle)</text>
+
+      <rect x="200" y="0" width="188" height="28" class="sky-bg"/>
+      <text x="212" y="18" class="sky small">◔ 저장 중… (saving·pulse)</text>
+
+      <rect x="0" y="36" width="188" height="28" class="red-bg"/>
+      <text x="12" y="54" class="red small">✕ 저장 실패 · 재시도 (error)</text>
+
+      <rect x="200" y="36" width="188" height="28" class="amber-bg"/>
+      <text x="212" y="54" class="amber small">⚠ 저장되지 않음 (dirty)</text>
+    </g>
+
+    <!-- 필드별 스트립 설명 -->
+    <text x="16" y="1114" class="accent label">필드별 저장 스트립 (input 오른쪽 끝 4px)</text>
+    <g transform="translate(16, 1126)">
+      <rect x="0" y="0" width="100" height="18" class="input-bg"/>
+      <rect x="96" y="0" width="4" height="18" fill="#34d399"/>
+      <text x="110" y="13" class="emerald tiny">idle · 저장됨</text>
+
+      <rect x="200" y="0" width="100" height="18" class="input-bg"/>
+      <rect x="296" y="0" width="4" height="18" fill="#60a5fa"/>
+      <text x="310" y="13" class="sky tiny">saving</text>
+
+      <rect x="0" y="24" width="100" height="18" class="input-bg"/>
+      <rect x="96" y="24" width="4" height="18" fill="#f87171"/>
+      <text x="110" y="37" class="red tiny">error · 재시도</text>
+
+      <rect x="200" y="24" width="100" height="18" class="input-bg"/>
+      <rect x="296" y="24" width="4" height="18" fill="#fbbf24"/>
+      <text x="310" y="37" class="amber tiny">dirty · 변경 있음</text>
+    </g>
+
+    <!-- 접근성 노트 -->
+    <text x="16" y="1206" class="accent label">접근성(a11y) 체크</text>
+    <text x="16" y="1224" class="mute tiny">• role="region" + aria-labelledby="project-settings-heading"</text>
+    <text x="16" y="1240" class="mute tiny">• 3-토글 role="group" · 계단식 잠금 aria-disabled="true"</text>
+    <text x="16" y="1256" class="mute tiny">• JSON 오류 aria-invalid="true" + describedby</text>
+    <text x="16" y="1272" class="mute tiny">• 상태 배지 role="status" · error 만 aria-live="assertive"</text>
+    <text x="16" y="1288" class="mute tiny">• 색 + 아이콘(● ◔ ✕ ⚠) + 텍스트 3중 인코딩</text>
+    <text x="16" y="1304" class="mute tiny">• prefers-reduced-motion: pulse/shake 비활성</text>
+    <text x="16" y="1324" class="dim tiny">포커스 링: outline 2px var(--pixel-accent) offset 2px</text>
+    <text x="16" y="1340" class="dim tiny">최소 터치 영역 32×32 · 드롭다운 ↑↓/Enter/Esc</text>
+    <text x="16" y="1356" class="dim tiny">토글 잠금 shake 200ms + focus 이동(SharedGoalForm 재사용)</text>
+    <text x="16" y="1378" class="accent tiny">→ 전체 대비 4.5:1 이상 (패널 배경 #0f3460 기준)</text>
+  </g>
+
+  <!-- ══════════════════════════ 우측: 편입 동선 + 토큰 ══════════════════════════ -->
+  <g transform="translate(480, 88)">
+    <text x="0" y="0" class="accent label">② 편입 동선 플로우차트 (우측 사이드바 ≥1280px / 탭 <1280px)</text>
+    <rect x="0" y="10" width="728" height="440" class="panel-bg"/>
+    <rect x="0" y="10" width="728" height="440" class="px-border"/>
+
+    <!-- 진입점 -->
+    <rect x="40" y="40" width="160" height="46" class="input-bg"/>
+    <rect x="40" y="40" width="160" height="46" stroke="#7fd4ff" stroke-width="2" fill="none"/>
+    <text x="120" y="60" class="accent small" text-anchor="middle">ProjectManagement</text>
+    <text x="120" y="76" class="mute tiny" text-anchor="middle">(관리 그리드)</text>
+
+    <!-- 화살표 -->
+    <line x1="200" y1="63" x2="260" y2="63" stroke="#7fd4ff" stroke-width="2" marker-end="url(#ar2)"/>
+    <text x="230" y="56" class="mute tiny" text-anchor="middle">카드 클릭</text>
+
+    <!-- 상세 페이지 -->
+    <rect x="260" y="40" width="180" height="46" class="input-bg"/>
+    <rect x="260" y="40" width="180" height="46" stroke="#7fd4ff" stroke-width="2" fill="none"/>
+    <text x="350" y="60" class="accent small" text-anchor="middle">프로젝트 상세 페이지</text>
+    <text x="350" y="76" class="mute tiny" text-anchor="middle">useSearchParams('tab')</text>
+
+    <!-- 3 분기 탭 -->
+    <line x1="350" y1="86" x2="160" y2="130" stroke="rgba(127,212,255,0.55)" stroke-width="2"/>
+    <line x1="350" y1="86" x2="350" y2="130" stroke="rgba(127,212,255,0.55)" stroke-width="2"/>
+    <line x1="350" y1="86" x2="560" y2="130" stroke="#00d4ff" stroke-width="2" marker-end="url(#ar2)"/>
+
+    <rect x="80" y="130" width="160" height="40" class="input-bg"/>
+    <rect x="80" y="130" width="160" height="40" stroke="rgba(255,255,255,0.30)" stroke-width="2" fill="none"/>
+    <text x="160" y="154" class="mute small" text-anchor="middle">개요 탭</text>
+
+    <rect x="270" y="130" width="160" height="40" class="input-bg"/>
+    <rect x="270" y="130" width="160" height="40" stroke="rgba(255,255,255,0.30)" stroke-width="2" fill="none"/>
+    <text x="350" y="154" class="mute small" text-anchor="middle">에이전트 탭</text>
+
+    <rect x="460" y="130" width="200" height="40" fill="rgba(0,210,255,0.15)"/>
+    <rect x="460" y="130" width="200" height="40" stroke="#00d4ff" stroke-width="2" fill="none"/>
+    <text x="560" y="154" class="accent small" text-anchor="middle">⚙ 설정 탭 (신규)</text>
+
+    <!-- ProjectSettingsPanel 마운트 -->
+    <line x1="560" y1="170" x2="560" y2="200" stroke="#00d4ff" stroke-width="2" marker-end="url(#ar2)"/>
+    <rect x="420" y="200" width="280" height="50" fill="rgba(0,210,255,0.10)"/>
+    <rect x="420" y="200" width="280" height="50" stroke="#00d4ff" stroke-width="2" fill="none"/>
+    <text x="560" y="222" class="accent small" text-anchor="middle">ProjectSettingsPanel 마운트</text>
+    <text x="560" y="238" class="mute tiny" text-anchor="middle">≥1280px: sticky 우측 사이드바 · &lt;1280px: 탭</text>
+
+    <!-- 5 섹션 분기 -->
+    <g transform="translate(60, 272)">
+      <rect x="0" y="0" width="116" height="34" class="deep-bg"/>
+      <rect x="0" y="0" width="116" height="34" stroke="#7fd4ff" stroke-width="2" fill="none"/>
+      <text x="58" y="20" class="accent tiny" text-anchor="middle">① 자동화 토글</text>
+
+      <rect x="130" y="0" width="116" height="34" class="deep-bg"/>
+      <rect x="130" y="0" width="116" height="34" stroke="#7fd4ff" stroke-width="2" fill="none"/>
+      <text x="188" y="20" class="accent tiny" text-anchor="middle">② 저장소 연결</text>
+
+      <rect x="260" y="0" width="116" height="34" class="emerald-bg"/>
+      <text x="318" y="20" class="emerald tiny" text-anchor="middle">③ 공동 목표</text>
+
+      <rect x="390" y="0" width="116" height="34" class="deep-bg"/>
+      <rect x="390" y="0" width="116" height="34" stroke="#7fd4ff" stroke-width="2" fill="none"/>
+      <text x="448" y="20" class="accent tiny" text-anchor="middle">④ JSON 뷰</text>
+
+      <rect x="520" y="0" width="116" height="34" class="red-bg"/>
+      <text x="578" y="20" class="red tiny" text-anchor="middle">⑤ 위험 영역</text>
+    </g>
+
+    <!-- 반응형 규칙 -->
+    <text x="40" y="340" class="accent label">반응형 편입 규칙</text>
+    <text x="40" y="362" class="mute small">• ≥1280px — sticky 우측 사이드바(360px) · top: 72px · 스크롤 동기화</text>
+    <text x="40" y="380" class="mute small">• 768 ~ 1279px — 상단 탭(⚙ 설정) · 전체 폭 · 섹션 아코디언 기본 접힘</text>
+    <text x="40" y="398" class="mute small">• &lt; 768px — 탭 · 섹션 카드 세로 적층 · 고급(JSON) 은 모달로 분리</text>
+    <text x="40" y="420" class="dim tiny">탭 상태는 useSearchParams('tab') 로 URL 영속 — 새로고침해도 유지</text>
+
+    <defs>
+      <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#7fd4ff"/>
+      </marker>
+    </defs>
+  </g>
+
+  <!-- 저장 상태 전이 다이어그램 -->
+  <g transform="translate(480, 548)">
+    <text x="0" y="0" class="accent label">③ 저장 상태 전이 다이어그램 (saveStatus: idle · saving · error · dirty)</text>
+    <rect x="0" y="10" width="728" height="240" class="panel-bg"/>
+    <rect x="0" y="10" width="728" height="240" class="px-border-dim"/>
+
+    <!-- idle -->
+    <rect x="40" y="80" width="140" height="60" class="emerald-bg"/>
+    <text x="110" y="105" class="emerald small" text-anchor="middle">IDLE</text>
+    <text x="110" y="122" class="emerald tiny" text-anchor="middle">● 저장됨</text>
+
+    <!-- dirty -->
+    <rect x="220" y="80" width="140" height="60" class="amber-bg"/>
+    <text x="290" y="105" class="amber small" text-anchor="middle">DIRTY</text>
+    <text x="290" y="122" class="amber tiny" text-anchor="middle">⚠ 변경 있음</text>
+
+    <!-- saving -->
+    <rect x="400" y="80" width="140" height="60" class="sky-bg"/>
+    <text x="470" y="105" class="sky small" text-anchor="middle">SAVING</text>
+    <text x="470" y="122" class="sky tiny" text-anchor="middle">◔ 저장 중</text>
+
+    <!-- error -->
+    <rect x="580" y="80" width="130" height="60" class="red-bg"/>
+    <text x="645" y="105" class="red small" text-anchor="middle">ERROR</text>
+    <text x="645" y="122" class="red tiny" text-anchor="middle">✕ 재시도</text>
+
+    <!-- 화살표 -->
+    <line x1="180" y1="110" x2="220" y2="110" stroke="#fbbf24" stroke-width="2" marker-end="url(#ar3)"/>
+    <text x="200" y="102" class="amber tiny" text-anchor="middle">편집</text>
+    <line x1="360" y1="110" x2="400" y2="110" stroke="#60a5fa" stroke-width="2" marker-end="url(#ar3)"/>
+    <text x="380" y="102" class="sky tiny" text-anchor="middle">PATCH</text>
+    <line x1="540" y1="110" x2="580" y2="110" stroke="#f87171" stroke-width="2" marker-end="url(#ar3)"/>
+    <text x="560" y="102" class="red tiny" text-anchor="middle">실패</text>
+
+    <!-- 성공 루프 (saving → idle) -->
+    <path d="M 470 80 Q 470 50 110 50 Q 90 50 90 80" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#ar3)"/>
+    <text x="280" y="44" class="emerald tiny" text-anchor="middle">성공 200 OK (디바운스 600ms)</text>
+
+    <!-- 재시도 (error → saving) -->
+    <path d="M 645 140 Q 645 190 470 190 Q 470 160 470 140" fill="none" stroke="#60a5fa" stroke-width="2" marker-end="url(#ar3)"/>
+    <text x="560" y="184" class="sky tiny" text-anchor="middle">[재시도 클릭] → saving</text>
+
+    <!-- 롤백 (error → dirty) -->
+    <path d="M 580 110 Q 540 60 300 60 Q 290 60 290 80" fill="none" stroke="#f87171" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#ar3)"/>
+    <text x="430" y="72" class="red tiny" text-anchor="middle">자동 롤백 → dirty 재진입</text>
+
+    <text x="40" y="224" class="mute tiny">• 낙관적 업데이트: dirty → saving 진입 시 UI 는 즉시 새 값을 보여주고, 실패 시 이전 값으로 롤백</text>
+
+    <defs>
+      <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#7fd4ff"/>
+      </marker>
+    </defs>
+  </g>
+
+  <!-- 계단식 의존 상세 -->
+  <g transform="translate(480, 808)">
+    <text x="0" y="0" class="accent label">④ 자동화 3-토글 계단식 의존 규칙</text>
+    <rect x="0" y="10" width="728" height="200" class="panel-bg"/>
+    <rect x="0" y="10" width="728" height="200" class="px-border-dim"/>
+
+    <text x="24" y="40" class="white small">• 자동 개발 OFF  →  자동 커밋 · 자동 푸시 자동 OFF (보호 · 기존 값 보존)</text>
+    <text x="24" y="64" class="white small">• 자동 커밋 OFF  →  자동 푸시 🔒 잠김 (커밋 없이 푸시는 논리적으로 불가)</text>
+    <text x="24" y="88" class="white small">• 자동 커밋 ON   →  자동 푸시 조작 가능 · 토글 복원</text>
+    <text x="24" y="112" class="white small">• 공동 목표 미선택 → 자동 개발 🔒 잠김 (SharedGoalForm 시안과 통일)</text>
+
+    <text x="24" y="146" class="accent label">순수 함수 canEnable(kind, state)</text>
+    <rect x="24" y="156" width="680" height="38" fill="#0a1d36" stroke="rgba(255,255,255,0.12)" stroke-width="2"/>
+    <text x="36" y="178" class="code">canEnable('autoPush', { enabled:true, autoCommit:false }) === false  · src/utils/gitAutomation.ts 에 추출</text>
+  </g>
+
+  <!-- 색상 토큰 팔레트 -->
+  <g transform="translate(480, 1028)">
+    <text x="0" y="0" class="accent label">⑤ 색상 토큰 (index.css --project-settings-*)</text>
+    <rect x="0" y="10" width="728" height="180" class="panel-bg"/>
+    <rect x="0" y="10" width="728" height="180" class="px-border-dim"/>
+
+    <g transform="translate(24, 32)">
+      <rect x="0" y="0" width="130" height="46" fill="#0f3460" stroke="#4fc3f7" stroke-width="2"/>
+      <text x="65" y="20" class="white tiny" text-anchor="middle">panel-bg</text>
+      <text x="65" y="36" class="dim tiny" text-anchor="middle">#0f3460</text>
+
+      <rect x="144" y="0" width="130" height="46" fill="rgba(0,0,0,0.30)" stroke="#385b7c" stroke-width="2"/>
+      <text x="209" y="20" class="white tiny" text-anchor="middle">section-bg</text>
+      <text x="209" y="36" class="dim tiny" text-anchor="middle">rgba(0,0,0,.30)</text>
+
+      <rect x="288" y="0" width="130" height="46" fill="rgba(52,211,153,0.15)" stroke="#34d399" stroke-width="2"/>
+      <text x="353" y="20" class="emerald tiny" text-anchor="middle">save-idle</text>
+      <text x="353" y="36" class="emerald tiny" text-anchor="middle">#34d399</text>
+
+      <rect x="432" y="0" width="130" height="46" fill="rgba(96,165,250,0.14)" stroke="#60a5fa" stroke-width="2"/>
+      <text x="497" y="20" class="sky tiny" text-anchor="middle">save-saving</text>
+      <text x="497" y="36" class="sky tiny" text-anchor="middle">#60a5fa pulse</text>
+
+      <rect x="576" y="0" width="130" height="46" fill="rgba(248,113,113,0.12)" stroke="#f87171" stroke-width="2"/>
+      <text x="641" y="20" class="red tiny" text-anchor="middle">save-error</text>
+      <text x="641" y="36" class="red tiny" text-anchor="middle">#f87171</text>
+    </g>
+
+    <g transform="translate(24, 92)">
+      <rect x="0" y="0" width="130" height="46" fill="rgba(251,191,36,0.12)" stroke="#fbbf24" stroke-width="2"/>
+      <text x="65" y="20" class="amber tiny" text-anchor="middle">save-dirty</text>
+      <text x="65" y="36" class="amber tiny" text-anchor="middle">#fbbf24</text>
+
+      <rect x="144" y="0" width="130" height="46" fill="rgba(0,0,0,0.30)" stroke="rgba(255,255,255,0.10)" stroke-width="2"/>
+      <text x="209" y="20" class="dim tiny" text-anchor="middle">divider</text>
+      <text x="209" y="36" class="dim tiny" text-anchor="middle">white/10%</text>
+
+      <rect x="288" y="0" width="130" height="46" fill="rgba(0,0,0,0.40)" stroke="rgba(255,255,255,0.25)" stroke-width="2"/>
+      <text x="353" y="20" class="lock tiny" text-anchor="middle">🔒 lock-fg</text>
+      <text x="353" y="36" class="dim tiny" text-anchor="middle">white/45%</text>
+
+      <rect x="432" y="0" width="130" height="46" fill="rgba(0,0,0,0.40)" stroke="rgba(127,212,255,0.35)" stroke-width="2"/>
+      <text x="497" y="20" class="accent tiny" text-anchor="middle">toggle-chain</text>
+      <text x="497" y="36" class="dim tiny" text-anchor="middle">계단식 연결선</text>
+    </g>
+
+    <text x="24" y="168" class="mute tiny">색각 이상 대응: 모든 배지는 색 + 아이콘(● ◔ ✕ ⚠ 🔒) + 텍스트 3중 인코딩. 색상은 패널 배경 기준 4.5:1 이상.</text>
+  </g>
+
+  <!-- 구현 경로 -->
+  <g transform="translate(480, 1230)">
+    <text x="0" y="0" class="accent label">⑥ 구현 경로 (Kai 리더 리뷰용)</text>
+    <rect x="0" y="10" width="728" height="180" class="panel-bg"/>
+    <rect x="0" y="10" width="728" height="180" class="px-border"/>
+    <text x="24" y="40" class="white small">1. src/components/ProjectSettingsPanel.tsx 신규 — props: { project, settings, goals, onPatch, onLog }</text>
+    <text x="24" y="60" class="white small">2. src/utils/gitAutomation.ts 에 canEnable(kind, state) 순수 함수 추출 · GitAutomationPanel/본 패널 공유</text>
+    <text x="24" y="80" class="white small">3. 서버 PATCH /api/managed-projects/:id — defaultBranch · url · sharedGoalId 필드 허용</text>
+    <text x="24" y="100" class="white small">4. ProjectManagement.tsx 상세 페이지 라우트 분해 + useSearchParams('tab') 탭 영속화</text>
+    <text x="24" y="120" class="white small">5. JSON 뷰 zod 스키마는 기존 파서와 단일 진원 공유 · monaco-editor 는 후속 검토</text>
+    <text x="24" y="140" class="accent small">→ 회귀 테스트: tests/project-settings-panel-regression.md (후속) — 계단식 잠금·저장 상태 전이 커버</text>
+    <text x="24" y="168" class="dim tiny">기존 GitAutomationPanel 은 "파이프라인 flow + 템플릿" 으로 역할 축소 · 토글/연결/목표는 본 패널이 소유</text>
+  </g>
+
+  <!-- 툴팁 카피 -->
+  <g transform="translate(480, 1428)">
+    <text x="0" y="0" class="accent label">⑦ 툴팁 카피 스펙 (한국어 우선 · ⓘ 클릭/호버 시 표시)</text>
+    <rect x="0" y="10" width="728" height="446" class="panel-bg"/>
+    <rect x="0" y="10" width="728" height="446" class="px-border-dim"/>
+
+    <text x="24" y="36" class="accent label">자동 개발</text>
+    <text x="24" y="54" class="mute small">리더 에이전트가 공동 목표를 근거로 동료에게 작업을 분배합니다.</text>
+    <text x="24" y="70" class="mute small">공동 목표 선택이 전제조건입니다.</text>
+
+    <text x="24" y="100" class="accent label">자동 커밋</text>
+    <text x="24" y="118" class="mute small">각 에이전트의 작업이 완료되면 자동으로 로컬 커밋을 만듭니다.</text>
+    <text x="24" y="134" class="mute small">되돌리려면 amend/rebase 로 복구 가능.</text>
+
+    <text x="24" y="164" class="accent label">자동 푸시</text>
+    <text x="24" y="182" class="mute small">커밋 후 원격 브랜치로 push 합니다. 자동 커밋이 켜져 있어야 활성화됩니다.</text>
+    <text x="24" y="198" class="mute small">되돌리려면 force-push 가 필요합니다(고-위험).</text>
+
+    <text x="24" y="228" class="accent label">기본 브랜치</text>
+    <text x="24" y="246" class="mute small">저장소의 기본 브랜치. 비어 있으면 서버가 원격 HEAD 를 자동 감지합니다.</text>
+
+    <text x="24" y="276" class="accent label">원격 저장소 URL</text>
+    <text x="24" y="294" class="mute small">HTTPS 또는 SSH URL. 변경 시 기존 자격증명과의 호환성을 서버가 검증합니다.</text>
+
+    <text x="24" y="324" class="accent label">PR 대상</text>
+    <text x="24" y="342" class="mute small">Pull Request 의 base 브랜치. 기본 브랜치와 다른 릴리스 브랜치로 지정 가능.</text>
+
+    <text x="24" y="372" class="accent label">공동 목표</text>
+    <text x="24" y="390" class="mute small">이 프로젝트가 묶일 공동 목표(SharedGoal). 자동 개발 플로우의 분배 기준.</text>
+
+    <text x="24" y="420" class="accent label">JSON 뷰</text>
+    <text x="24" y="438" class="mute small">파워유저 전용. 잘못 입력 시 [검증] 이 막아줍니다. 스키마는 서버와 공유.</text>
+  </g>
+</svg>

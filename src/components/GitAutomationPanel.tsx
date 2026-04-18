@@ -1,6 +1,19 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Git 자동화 패널. 이 패널은 **리더 에이전트가 트리거하는 단일 브랜치 파이프라인**
+ * 상태만 노출한다 — 에이전트별 브랜치 목록/선택 UI는 제공하지 않는다.
+ * 리더 단일 브랜치 정책: 2026-04-18 리팩터. 실제 브랜치 이름은 서버가
+ * `branchPattern` 템플릿으로 단일 문자열을 생성하고, 패널은 그 결과 하나만 읽는다.
+ * 배경: 동료 에이전트별로 나뉜 브랜치 축은 UI 폭을 과도하게 점유하고,
+ * 리더-중심 트리거 모델(server.ts `executeGitAutomation`)과도 어긋났다.
+ */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GitCommit, GitBranch, GitPullRequest, RotateCcw, Save, AlertTriangle, Info, Power, CheckCircle2, Clock3, Check, Square, Loader2, XCircle, Upload, Hash, X } from 'lucide-react';
 import { useReducedMotion } from '../utils/useReducedMotion';
+import type { BranchStrategy } from '../types';
+import { BRANCH_STRATEGY_VALUES } from '../types';
 
 // 디자이너: Git 자동화 흐름은 "되돌릴 수 있는 일 → 원격에 남는 일 → 동료에게 알림이
 // 가는 일" 순으로 위험이 누적된다. 3단계 라디오를 가로로 배치하고, 각 단계를
@@ -16,6 +29,14 @@ export interface GitAutomationSettings {
   // 디자이너: 자동화는 "설정은 남아 있지만 지금은 돌지 않는" 상태와 "지금 실시간으로
   // 돌고 있다"는 상태를 분리해야 사용자가 설정을 잃을까 걱정하지 않고 잠시 꺼둘 수 있다.
   enabled: boolean;
+  // 브랜치 운영 전략. 'fixed-branch' 는 사용자가 직접 입력한 newBranchName 을 그대로
+  // 사용하고, 나머지는 branchPattern/템플릿 기반으로 매 세션·태스크·커밋에 새 브랜치를
+  // 만든다. 디자이너 시안(tests/branch-strategy-mockup.md)과 동일한 4 전략.
+  branchStrategy: BranchStrategy;
+  // 'fixed-branch' 선택 시 사용되는 고정 브랜치 이름. 다른 전략에서는 서버 측 템플릿
+  // 렌더링이 담당하므로 빈 값으로 유지된다. UI 는 값이 비어 있어도 전략 전환에 대비해
+  // 마지막 입력을 기억한다.
+  newBranchName: string;
 }
 
 export const DEFAULT_AUTOMATION: GitAutomationSettings = {
@@ -24,7 +45,45 @@ export const DEFAULT_AUTOMATION: GitAutomationSettings = {
   commitTemplate: '{type}: {branch}',
   prTitleTemplate: '[{ticket}] {type} — {branch}',
   enabled: true,
+  branchStrategy: 'per-session',
+  newBranchName: '',
 };
+
+// QA: 'fixed-branch' 전략에서 사용자가 입력한 브랜치명을 git ref 규칙과 팀 관례에
+// 비추어 검증한다. 입력·저장·스케줄러 트리거가 모두 같은 판정을 공유하도록 export 한다.
+//   - 미입력/공백 전용: 절대 허용하지 않는다 (원격 push 전에 실패).
+// - 연속 중복 특수문자(`//`, `..`, `--` 등): git 이 ref 에서 거부하거나 UX 상 혼동을 준다.
+//   - 선·후행 슬래시/점, 공백·제어문자: 모두 거부.
+//   - 허용 문자는 영문·숫자·`/`·`-`·`_`·`.` 로 한정. 한글 브랜치명은 서버 셸 파서가
+//     환경에 따라 깨지는 회귀가 있어 본 입력에서는 사전에 막는다.
+export type NewBranchNameValidation =
+  | { ok: true }
+  | { ok: false; code: 'empty' | 'whitespace' | 'duplicate' | 'invalid'; message: string };
+
+const NEW_BRANCH_NAME_ALLOWED = /^[A-Za-z0-9._\-/]+$/;
+
+export function validateNewBranchName(raw: string): NewBranchNameValidation {
+  if (!raw || raw.length === 0) {
+    return { ok: false, code: 'empty', message: '브랜치명을 입력하세요' };
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { ok: false, code: 'whitespace', message: '공백만으로는 브랜치를 만들 수 없습니다' };
+  }
+  if (/\s/.test(raw)) {
+    return { ok: false, code: 'whitespace', message: '브랜치명에는 공백을 쓸 수 없습니다' };
+  }
+  if (/\/\/|\.\.|--/.test(raw)) {
+    return { ok: false, code: 'duplicate', message: '연속된 `/`, `.`, `-` 는 허용되지 않습니다' };
+  }
+  if (/^[./-]|[./-]$/.test(raw)) {
+    return { ok: false, code: 'duplicate', message: '브랜치명은 `/`, `.`, `-` 로 시작하거나 끝날 수 없습니다' };
+  }
+  if (!NEW_BRANCH_NAME_ALLOWED.test(raw)) {
+    return { ok: false, code: 'invalid', message: '영문·숫자·`-`·`_`·`.`·`/` 만 사용할 수 있습니다' };
+  }
+  return { ok: true };
+}
 
 // 디자이너: 마지막 실행 시각은 "방금/몇 분 전/오늘"처럼 상대적으로 보여줘야 "이 자동화가
 // 살아 있긴 한가?"라는 질문에 한눈에 답이 된다. 1분 미만은 "방금", 60분 미만은 분 단위,
@@ -83,6 +142,8 @@ const FLOW_OPTIONS: FlowOption[] = [
 
 // 디자이너: 템플릿 변수는 "알고 있으면 편하지만 매번 검색하게 되는" 종류의 지식.
 // 각 필드 아래에 인라인 칩으로 노출해, 입력 중에도 바로 눈에 들어오게 한다.
+// 리더 단일 브랜치 정책: `{agent}` 토큰은 UI 에서 의도적으로 노출하지 않는다.
+// 브랜치가 리더 트리거마다 1개로 고정되므로, 템플릿에 에이전트 이름이 들어갈 이유가 없다.
 const TEMPLATE_VARS = [
   { name: '{branch}', hint: '자동 생성된 브랜치 식별자(제목 기반)' },
   { name: '{type}',   hint: '변경 유형 (feat/fix/docs/chore 등)' },
@@ -189,13 +250,90 @@ export interface GitAutomationPanelProps {
   // 사용자가 "저장 버튼이 진짜 먹혔나" 의심하지 않게 한다. 설정이 다시 dirty 가 되면
   // 자동으로 가려진다.
   appliedAt?: string | null;
+  // 브랜치 중복 생성 회귀(#91aeaf7a) 대응: 지금 서버가 재사용 중인 활성 브랜치명과
+  // 해당 프로젝트의 브랜치 운영 전략을 패널 상단에 노출해, 사용자가 "이번 커밋이
+  // 어느 브랜치에 쌓이고 있는가" 를 설정 화면에서 바로 확인하게 한다.
+  activeBranch?: string | null;
+  branchStrategy?: BranchStrategy | null;
 }
+
+// 브랜치 전략 → UI 라벨/설명 매핑. 전략이 추가되더라도 UI 문구를 여기 한 곳에서만
+// 관리하면 패널/툴팁/aria-label 이 함께 움직인다.
+const BRANCH_STRATEGY_LABEL: Record<BranchStrategy, { label: string; hint: string }> = {
+  'per-session': {
+    label: '세션 브랜치',
+    hint: '한 자동 개발 세션 동안 동일 브랜치를 재사용합니다 (권장).',
+  },
+  'fixed-branch': {
+    label: '고정 브랜치',
+    hint: '프로젝트에 고정된 브랜치명을 매번 사용합니다.',
+  },
+  'per-task': {
+    label: '태스크별 브랜치',
+    hint: '리더 태스크 1건당 새 브랜치를 만듭니다.',
+  },
+  'per-commit': {
+    label: '커밋별 브랜치',
+    hint: '커밋마다 새 브랜치가 생성됩니다 — 브랜치가 쏟아져 나올 수 있어 비권장.',
+  },
+};
 
 const SAMPLE_DEFAULT: Record<'branch' | 'type' | 'ticket', string> = {
   branch: 'git-automation-panel',
   type: 'feat',
   ticket: 'LLM-0417',
 };
+
+// 디자이너: 브랜치 전략 2모드 시안(A안). 4전략 카드(BranchStrategySection) 와 병존 —
+// 본 컴포넌트 안에서는 "새로 팔지 / 지금 브랜치 이어서 팔지" 라는 세션 수준 질문에만
+// 답하게 한다. 커밋 메시지·자동 푸시와 같은 레이어의 "세션당 한 번만 정하는 세팅" 으로
+// 위계가 맞춰져야 하므로 시각 두께도 Template 필드와 동급으로 유지한다.
+// 시안 문서: tests/branch-mode-mockup.md
+export type BranchMode = 'new' | 'continue';
+
+interface BranchModeOption {
+  key: BranchMode;
+  label: string;
+  subLabel: string;
+  description: string;
+}
+
+const BRANCH_MODE_OPTIONS: BranchModeOption[] = [
+  {
+    key: 'new',
+    label: '새 브랜치 생성',
+    subLabel: '세션 시작 시 한 번',
+    description: '리더 단일 브랜치 정책에 따라 세션 시작 시점에 새 브랜치를 하나 만들고, 세션 동안의 모든 커밋을 그 브랜치에 쌓습니다.',
+  },
+  {
+    key: 'continue',
+    label: '현재 브랜치에서 계속 작업',
+    subLabel: '활성 브랜치 재사용',
+    description: '이미 활성화된 브랜치(예: 직전 세션 또는 수동 체크아웃) 에 이어서 커밋합니다. 실험적 수정·긴 PR 을 한 브랜치에 누적하고 싶을 때 선택합니다.',
+  },
+];
+
+// 접두사(prefix) 규칙 — Git Flow·Conventional Branch 관례를 합쳐 4종을 기본 제공.
+// 칩 클릭 시 newBranchName 입력 필드의 prefix 를 교체(이미 동일 prefix 면 유지).
+const BRANCH_PREFIXES: Array<{ prefix: string; hint: string }> = [
+  { prefix: 'feature/', hint: '새 기능 · 사용자에게 보이는 가치 추가' },
+  { prefix: 'fix/',     hint: '버그 수정 · 회귀 또는 결함 복구' },
+  { prefix: 'chore/',   hint: '잡무 · 의존성·설정·리팩터 등 사용자 체감 없음' },
+  { prefix: 'docs/',    hint: '문서 · 주석·README·시안 문서 갱신' },
+];
+
+const BRANCH_PREFIX_REGEX = /^(feature|fix|chore|docs|hotfix|refactor)\//i;
+
+// 접두사 칩 클릭 시 현재 newBranchName 의 prefix 부분만 교체한다. 이름 뒷부분(슬러그)
+// 은 보존해 사용자가 입력하던 이름을 잃지 않게 한다. 값이 비어 있으면 prefix 만 삽입.
+export function replaceBranchPrefix(current: string, nextPrefix: string): string {
+  const trimmed = (current ?? '').trim();
+  if (!trimmed) return nextPrefix;
+  if (BRANCH_PREFIX_REGEX.test(trimmed)) {
+    return trimmed.replace(BRANCH_PREFIX_REGEX, nextPrefix);
+  }
+  return `${nextPrefix}${trimmed}`;
+}
 
 // 디자이너: 단계별 상태 메타데이터. 색·아이콘·라벨을 한 곳에서만 관리해
 // 커밋/푸시 두 배지가 같은 톤으로 움직이고, 새 상태가 추가될 때도 한 군데만 확장한다.
@@ -242,6 +380,7 @@ export function GitAutomationPanel({
   initial, onSave, onLog, sample, lastRunAt, lastRunFlow,
   commitStatus = 'idle', pushStatus = 'idle',
   lastCommitHash, lastPushAt, lastError, onDismissError, appliedAt,
+  activeBranch, branchStrategy,
 }: GitAutomationPanelProps) {
   // 활성 토글의 글로우 펄스를 prefers-reduced-motion 사용자에게 끈다 — 색은 유지.
   const reducedMotion = useReducedMotion();
@@ -251,6 +390,13 @@ export function GitAutomationPanel({
   const [commitTemplate, setCommitTemplate] = useState(baseline.commitTemplate);
   const [prTitleTemplate, setPrTitleTemplate] = useState(baseline.prTitleTemplate);
   const [enabled, setEnabled] = useState<boolean>(baseline.enabled);
+  const [branchStrategyChoice, setBranchStrategyChoice] = useState<BranchStrategy>(baseline.branchStrategy);
+  const [newBranchName, setNewBranchName] = useState<string>(baseline.newBranchName);
+  // 디자이너: 2모드 라디오 시안(A안) 전용 local 상태. onSave 페이로드와 분리해 사용 —
+  // 본 블록은 아직 "시안" 단계이므로 서버 스키마를 건드리지 않고 UI 만 먼저 검증한다.
+  // 후속 단계에서 Joker 가 4전략 라디오와 통합 결정을 내리면 해당 블록 중 하나를 철거.
+  const [branchModeSketch, setBranchModeSketch] = useState<BranchMode>('new');
+  const [branchNameSketch, setBranchNameSketch] = useState<string>('feature/');
   // 디자이너: "어디에 값이 들어가 있는지" 모를 때 변수 칩을 클릭하면 해당 필드 끝에
   // 삽입되도록, 현재 포커스된 필드 키를 추적한다. 포커스 잃어도 마지막 값을 유지해
   // 칩 클릭 시 의도한 곳에 확실히 삽입되게 한다.
@@ -279,7 +425,17 @@ export function GitAutomationPanel({
     || branchPattern !== baseline.branchPattern
     || commitTemplate !== baseline.commitTemplate
     || prTitleTemplate !== baseline.prTitleTemplate
-    || enabled !== baseline.enabled;
+    || enabled !== baseline.enabled
+    || branchStrategyChoice !== baseline.branchStrategy
+    || newBranchName !== baseline.newBranchName;
+
+  // 'fixed-branch' 전략일 때만 사용자가 입력한 브랜치명이 저장·실행 페이로드에 실린다.
+  // 다른 전략에서는 검증을 돌리지 않고 입력값도 저장 시 빈 문자열로 비운다.
+  const needsNewBranchInput = branchStrategyChoice === 'fixed-branch';
+  const newBranchValidation = useMemo(() =>
+    needsNewBranchInput ? validateNewBranchName(newBranchName) : ({ ok: true } as NewBranchNameValidation),
+  [needsNewBranchInput, newBranchName]);
+  const newBranchError = newBranchValidation.ok ? null : newBranchValidation.message;
 
   const reset = () => {
     setFlow(baseline.flow);
@@ -287,24 +443,39 @@ export function GitAutomationPanel({
     setCommitTemplate(baseline.commitTemplate);
     setPrTitleTemplate(baseline.prTitleTemplate);
     setEnabled(baseline.enabled);
+    setBranchStrategyChoice(baseline.branchStrategy);
+    setNewBranchName(baseline.newBranchName);
     onLog?.('Git 자동화 설정 초기화');
   };
 
   const save = () => {
-    const next: GitAutomationSettings = { flow, branchPattern, commitTemplate, prTitleTemplate, enabled };
+    if (needsNewBranchInput && !newBranchValidation.ok) {
+      // 저장 버튼이 disabled 여도 Enter 키나 폼 submit 경로로 들어오는 경우를 방어한다.
+      onLog?.(`Git 자동화 저장 실패: ${newBranchValidation.message}`);
+      return;
+    }
+    const next: GitAutomationSettings = {
+      flow,
+      branchPattern,
+      commitTemplate,
+      prTitleTemplate,
+      enabled,
+      branchStrategy: branchStrategyChoice,
+      newBranchName: needsNewBranchInput ? newBranchName.trim() : '',
+    };
     onSave?.(next);
-    onLog?.(`Git 자동화 저장: ${FLOW_OPTIONS.find(o => o.key === flow)?.label} (${risk.label})${enabled ? '' : ' · 비활성'}`);
+    const strategyLabel = BRANCH_STRATEGY_LABEL[branchStrategyChoice]?.label ?? branchStrategyChoice;
+    const branchSuffix = needsNewBranchInput ? ` · ${next.newBranchName}` : '';
+    onLog?.(`Git 자동화 저장: ${FLOW_OPTIONS.find(o => o.key === flow)?.label} (${risk.label}) · ${strategyLabel}${branchSuffix}${enabled ? '' : ' · 비활성'}`);
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
     setJustSaved(Date.now());
     savedTimerRef.current = setTimeout(() => setJustSaved(null), 2800);
   };
 
   const toggleEnabled = () => {
-    setEnabled(v => {
-      const nv = !v;
-      onLog?.(`Git 자동화 ${nv ? '활성화' : '비활성화'} (미저장)`);
-      return nv;
-    });
+    const nv = !enabled;
+    setEnabled(nv);
+    onLog?.(`Git 자동화 ${nv ? '활성화' : '비활성화'} (미저장)`);
   };
 
   const optionSummary = useMemo(() => deriveAutomationOptions({ flow, enabled }), [flow, enabled]);
@@ -631,6 +802,218 @@ export function GitAutomationPanel({
         })}
       </fieldset>
 
+      {/* 디자이너: 브랜치 전략 2모드 라디오 시안(A안) — 4전략 카드와 병존하는 단순화 대안.
+          시안 문서: tests/branch-mode-mockup.md. 이 블록은 아직 onSave 페이로드에 실리지
+          않고, 4전략 라디오가 실제 저장 값을 담당한다. 팀이 A안(2모드) 채택을 결정하면
+          아래 4전략 fieldset 을 철거하고 본 블록의 상태를 GitAutomationSettings 로 승격한다.
+          시각 위계: 커밋 메시지·자동 푸시와 같은 "세션당 한 번" 레이어이므로 Template
+          필드 블록과 동일한 border-2·bg-black/30 틀을 사용해 두께를 맞춘다. */}
+      <fieldset
+        role="radiogroup"
+        aria-labelledby="branch-mode-sketch-heading"
+        data-mockup="branch-mode-A"
+        className="branch-mode border-2 border-[var(--pixel-border)] bg-black/30 p-3 space-y-2"
+        data-mode={branchModeSketch}
+      >
+        <legend
+          id="branch-mode-sketch-heading"
+          className="px-1 text-[10px] font-bold text-[var(--pixel-accent)] uppercase tracking-wider flex items-center gap-2"
+        >
+          <GitBranch size={10} />
+          브랜치 전략 · 2모드 시안 (A안)
+          <span className="text-[9px] text-white/40 normal-case tracking-normal">
+            — 단순화 대안 · 아직 저장되지 않음
+          </span>
+        </legend>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {BRANCH_MODE_OPTIONS.map(opt => {
+            const isActive = branchModeSketch === opt.key;
+            const isContinueActive = opt.key === 'continue' && isActive && !!activeBranch;
+            return (
+              <label
+                key={opt.key}
+                title={opt.description}
+                data-kind={opt.key}
+                data-active={isContinueActive ? '1' : '0'}
+                className={`branch-mode__card relative cursor-pointer select-none flex flex-col gap-1 transition-colors ${
+                  isActive ? '' : 'hover:border-[var(--pixel-accent)]/60'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="git-branch-mode-sketch"
+                  value={opt.key}
+                  checked={isActive}
+                  onChange={() => setBranchModeSketch(opt.key)}
+                  aria-describedby={`branch-mode-${opt.key}-desc`}
+                  className={`sr-only peer ${focusRing}`}
+                />
+                <div className="flex items-center gap-2">
+                  <span
+                    aria-hidden="true"
+                    className={`inline-flex items-center justify-center w-4 h-4 border-2 ${
+                      isActive
+                        ? 'border-[var(--pixel-accent)] bg-[var(--pixel-accent)]/20'
+                        : 'border-[var(--pixel-border)] bg-black/40'
+                    }`}
+                  >
+                    {isActive && <span className="w-2 h-2 bg-[var(--pixel-accent)]" />}
+                  </span>
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-white">{opt.label}</span>
+                </div>
+                <span className="text-[9px] text-white/50 uppercase tracking-wider">{opt.subLabel}</span>
+                <span
+                  id={`branch-mode-${opt.key}-desc`}
+                  className="branch-mode__hint"
+                >
+                  {opt.description}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+
+        {branchModeSketch === 'new' && (
+          <div className="branch-mode__body pt-2">
+            <label className="block">
+              <span className="flex items-center gap-2 text-[10px] font-bold text-[var(--pixel-accent)] uppercase tracking-wider mb-1">
+                브랜치명
+                <span className="text-[9px] text-white/40 normal-case">— 접두사는 아래 칩으로 교체할 수 있습니다</span>
+              </span>
+              <input
+                type="text"
+                value={branchNameSketch}
+                onChange={e => setBranchNameSketch(e.target.value)}
+                placeholder="feature/short-slug"
+                aria-describedby="branch-mode-new-hint"
+                className={`w-full bg-black/40 border-2 border-[var(--pixel-border)] px-3 py-2 text-sm text-white font-mono placeholder:text-white/30 focus:border-[var(--pixel-accent)] focus:outline-none ${focusRing}`}
+              />
+              <p id="branch-mode-new-hint" className="mt-1 text-[10px] flex items-center gap-1 branch-mode__hint">
+                <Info size={10} />
+                접두사 규칙: <code className="font-mono text-[var(--pixel-accent)]">feature/</code>·<code className="font-mono text-[var(--pixel-accent)]">fix/</code>·<code className="font-mono text-[var(--pixel-accent)]">chore/</code>·<code className="font-mono text-[var(--pixel-accent)]">docs/</code> 중 하나로 시작해 목적을 즉시 드러냅니다.
+              </p>
+            </label>
+            <div className="flex flex-wrap items-center gap-2" aria-label="접두사 규칙 칩">
+              <span className="text-[9px] text-white/50 uppercase tracking-wider">접두사:</span>
+              {BRANCH_PREFIXES.map(p => (
+                <button
+                  key={p.prefix}
+                  type="button"
+                  onClick={() => setBranchNameSketch(prev => replaceBranchPrefix(prev, p.prefix))}
+                  title={p.hint}
+                  aria-label={`${p.prefix} 접두사로 교체`}
+                  className={`branch-mode__prefix-chip ${focusRing}`}
+                >
+                  {p.prefix}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {branchModeSketch === 'continue' && (
+          <div className="branch-mode__body pt-2">
+            <p className="text-[11px] text-white/80 leading-relaxed">
+              <span className="text-[var(--branch-mode-continue-accent,_#34d399)] font-bold">현재 브랜치</span>
+              {' '}에 이어서 커밋합니다. 새 브랜치는 만들어지지 않으며, 다음 세션도 같은 브랜치에 쌓입니다.
+            </p>
+            <div className="flex items-center gap-2 px-2 py-1.5 border-2 border-[var(--branch-mode-continue-accent,_#34d399)]/40 bg-black/40">
+              <GitBranch size={12} className="text-[var(--branch-mode-continue-accent,_#34d399)]" />
+              <span className="text-[9px] uppercase tracking-wider text-white/50">재사용할 브랜치</span>
+              <span
+                className={`font-mono tabular-nums text-[12px] ${activeBranch ? 'text-white' : 'text-white/40 italic'}`}
+                title={activeBranch ?? '이번 세션에서 아직 결정되지 않았습니다'}
+              >
+                {activeBranch ?? '아직 결정되지 않음'}
+              </span>
+            </div>
+            <p className="branch-mode__hint flex items-center gap-1">
+              <Info size={10} />
+              리뷰 이력이 길어지거나 단일 PR 에 여러 커밋을 누적하고 싶을 때 선택합니다. 사용하지 않는 브랜치가 누적되지 않도록 세션 종료 후 정리를 권장합니다.
+            </p>
+          </div>
+        )}
+      </fieldset>
+
+      {/* 디자이너: 브랜치 전략 라디오 그룹. tests/branch-strategy-mockup.md 의 4전략을
+          그대로 바인딩한다. `fixed-branch` 선택 시에만 아래 newBranchName 입력이 펼쳐지고,
+          나머지 전략은 상단의 branchPattern 템플릿을 그대로 사용한다. 선택한 값은
+          onSave → ProjectManagement 의 toServerSettings 를 거쳐 /api/git-automation/tick
+          트리거 페이로드에 실린다. */}
+      <fieldset
+        role="radiogroup"
+        aria-labelledby="branch-strategy-heading"
+        className="border-2 border-[var(--pixel-border)] bg-black/30 p-3 space-y-2"
+      >
+        <legend id="branch-strategy-heading" className="px-1 text-[10px] font-bold text-[var(--pixel-accent)] uppercase tracking-wider">
+          브랜치 전략
+        </legend>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {BRANCH_STRATEGY_VALUES.map(kind => {
+            const meta = BRANCH_STRATEGY_LABEL[kind];
+            const isActive = branchStrategyChoice === kind;
+            return (
+              <label
+                key={kind}
+                title={meta.hint}
+                className={`relative cursor-pointer select-none border-2 p-2 flex items-start gap-2 transition-colors ${
+                  isActive
+                    ? 'border-[var(--pixel-accent)] bg-[var(--pixel-accent)]/10'
+                    : 'border-[var(--pixel-border)] hover:border-[var(--pixel-accent)]/60'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="git-branch-strategy"
+                  value={kind}
+                  checked={isActive}
+                  onChange={() => setBranchStrategyChoice(kind)}
+                  aria-describedby={`strategy-${kind}-desc`}
+                  className={`mt-0.5 accent-[var(--pixel-accent)] ${focusRing}`}
+                />
+                <div className="min-w-0">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-white">{meta.label}</div>
+                  <div id={`strategy-${kind}-desc`} className="text-[10px] text-white/60 leading-relaxed">
+                    {meta.hint}
+                  </div>
+                </div>
+              </label>
+            );
+          })}
+        </div>
+        {needsNewBranchInput && (
+          <div className="pt-1">
+            <label className="block">
+              <span className="flex items-center gap-2 text-[10px] font-bold text-[var(--pixel-accent)] uppercase tracking-wider mb-1">
+                새 브랜치명
+                <span className="text-[9px] text-white/40 normal-case">— 고정 브랜치 재사용 시 사용됩니다</span>
+              </span>
+              <input
+                type="text"
+                value={newBranchName}
+                onChange={e => setNewBranchName(e.target.value)}
+                placeholder="예: auto/dev"
+                aria-invalid={newBranchError !== null}
+                aria-describedby="new-branch-name-hint"
+                className={`w-full bg-black/40 border-2 ${
+                  newBranchError ? 'border-red-400' : 'border-[var(--pixel-border)]'
+                } px-3 py-2 text-sm text-white font-mono placeholder:text-white/30 focus:border-[var(--pixel-accent)] focus:outline-none ${focusRing}`}
+              />
+              <p
+                id="new-branch-name-hint"
+                role={newBranchError ? 'alert' : undefined}
+                className={`mt-1 text-[10px] flex items-center gap-1 ${
+                  newBranchError ? 'text-red-300' : 'text-white/50'
+                }`}
+              >
+                {newBranchError ? <AlertTriangle size={10} /> : <Info size={10} />}
+                {newBranchError ?? '영문·숫자·`-`·`_`·`.`·`/` 만 사용할 수 있으며, 연속된 특수문자는 허용되지 않습니다.'}
+              </p>
+            </label>
+          </div>
+        )}
+      </fieldset>
+
       <div className="space-y-3">
         <TemplateField
           label="브랜치 이름 패턴"
@@ -638,6 +1021,8 @@ export function GitAutomationPanel({
           onChange={setBranchPattern}
           onFocus={() => setActiveField('branch')}
           placeholder="{type}/{ticket}-{branch}"
+          disabled={needsNewBranchInput}
+          disabledHint="고정 브랜치 전략에서는 새 브랜치명이 직접 사용됩니다"
         />
         <TemplateField
           label="커밋 메시지 템플릿"
@@ -671,6 +1056,43 @@ export function GitAutomationPanel({
           ))}
         </div>
       </div>
+
+      {(activeBranch || branchStrategy) && (() => {
+        // 디자이너: 브랜치 중복 생성 회귀(#91aeaf7a) 대응. 템플릿 미리보기와 별개로
+        // "지금 어떤 브랜치에 커밋이 쌓이고 있는가" + "그 브랜치가 어떤 전략으로 결정됐는가"
+        // 를 상단에 한 줄로 고정 노출한다. 활성 브랜치가 없으면(미결정) 이탤릭으로
+        // "아직 브랜치가 결정되지 않음" 을 표시해 세션 시작 전 상태와 구분한다.
+        const strategyInfo = branchStrategy ? BRANCH_STRATEGY_LABEL[branchStrategy] : null;
+        return (
+          <div
+            role="status"
+            aria-live="polite"
+            aria-label="현재 활성 브랜치 및 운영 전략"
+            className="bg-black/40 border-2 border-[var(--pixel-border)] p-3 flex items-center gap-3 flex-wrap"
+          >
+            <span className="inline-flex items-center justify-center w-7 h-7 border-2 border-[var(--pixel-accent)] bg-black/40 text-[var(--pixel-accent)]">
+              <GitBranch size={14} />
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="text-[9px] uppercase tracking-wider text-white/50">활성 브랜치</div>
+              <div
+                className={`text-[13px] font-mono tabular-nums truncate ${activeBranch ? 'text-white' : 'text-white/40 italic'}`}
+                title={activeBranch || '아직 이번 세션에서 브랜치가 결정되지 않았습니다'}
+              >
+                {activeBranch || '아직 결정되지 않음'}
+              </div>
+            </div>
+            {strategyInfo && (
+              <span
+                className="px-2 py-0.5 text-[10px] font-bold uppercase border-2 border-[var(--pixel-accent)] bg-black/40 text-[var(--pixel-accent)] tabular-nums"
+                title={strategyInfo.hint}
+              >
+                {strategyInfo.label}
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       <div
         role="status"
@@ -706,7 +1128,7 @@ export function GitAutomationPanel({
         <button
           type="button"
           onClick={save}
-          disabled={!dirty}
+          disabled={!dirty || (needsNewBranchInput && !newBranchValidation.ok)}
           aria-label="Git 자동화 설정 저장"
           className={`ml-auto px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider border-b-2 flex items-center gap-1.5 hover:brightness-110 active:translate-y-px transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 disabled:active:translate-y-0 ${risk.cta} ${focusRing}`}
         >

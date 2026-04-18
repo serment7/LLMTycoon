@@ -98,6 +98,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           summary: { type: 'string', description: '한 줄 요약 — 브랜치/커밋 메시지/PR 제목에 사용' },
           agent: { type: 'string', description: '완료를 보고한 동료 에이전트 이름(선택)' },
           prBase: { type: 'string', description: 'PR base 브랜치(선택). 지정 안하면 레포 기본 브랜치.' },
+          branchStrategy: {
+            type: 'string',
+            enum: ['new', 'current'],
+            description: "'new' 면 branchName 으로 `git checkout -B` 후 커밋, 'current' 면 현재 HEAD 브랜치에 그대로 커밋(선택). 지정 안하면 저장된 설정값을 사용.",
+          },
+          branchName: {
+            type: 'string',
+            description: "branchStrategy='new' 일 때 사용할 브랜치명(선택). 빈 값이면 Project.branchStrategy 기반 resolveBranch 폴백.",
+          },
         },
       },
     },
@@ -161,6 +170,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         summary: a.summary,
         agent: a.agent,
         prBase: a.prBase,
+        // 선택 오버라이드. enum/문자열 외 값은 서버 경계에서 걸러진다.
+        branchStrategy: a.branchStrategy,
+        branchName: a.branchName,
       });
       const out = await api(`/api/projects/${encodeURIComponent(PROJECT_ID)}/git-automation/run`, { method: 'POST', body });
       return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] };

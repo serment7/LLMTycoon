@@ -1,10 +1,10 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2, Download, Github, GitBranch, RefreshCw, FolderGit2, Link2Off, Server, BarChart3, Search, AlertTriangle, GitPullRequest, Check, Clock, FileDown, Sparkles, ClipboardCopy, Pin, Pencil } from 'lucide-react';
-import type { SourceIntegration, ManagedProject, SourceProvider, UserPreferences, GitAutomationPreference } from '../types';
-import { USER_PREFERENCES_KEY } from '../types';
+import type { SourceIntegration, ManagedProject, SourceProvider, UserPreferences, GitAutomationPreference, BranchStrategy } from '../types';
+import { USER_PREFERENCES_KEY, BRANCH_STRATEGY_VALUES } from '../types';
 import { GitAutomationPanel, DEFAULT_AUTOMATION, type GitAutomationSettings, type GitFlowLevel } from './GitAutomationPanel';
+import { GitCredentialsSection } from './GitCredentialsSection';
 import { startGitAutomationScheduler } from '../utils/gitAutomation';
-import { useReducedMotion } from '../utils/useReducedMotion';
 
 // UX: PR 대상 라디오 선택은 "매번 다시 고르기"보다 "한 번 정해두면 그대로"가 실수를
 // 줄인다. 로컬 단말의 선호를 localStorage에 두고, 앱 재진입 시 자동 복원한다.
@@ -95,42 +95,97 @@ export function migrateUserPreferencesToProject(projectId: string): void {
 export const GIT_AUTOMATION_PANEL_KEY = 'llm-tycoon:git-automation-panel';
 const VALID_FLOW_KEYS: readonly GitFlowLevel[] = ['commit', 'commit-push', 'full-pr'];
 
-function gitAutomationKey(projectId?: string): string {
-  return projectId ? `${GIT_AUTOMATION_PANEL_KEY}:${projectId}` : GIT_AUTOMATION_PANEL_KEY;
+// UI 패널의 flow → 서버 DB의 flowLevel 매핑
+const FLOW_TO_SERVER: Record<GitFlowLevel, string> = {
+  'commit': 'commitOnly',
+  'commit-push': 'commitPush',
+  'full-pr': 'commitPushPR',
+};
+const SERVER_TO_FLOW: Record<string, GitFlowLevel> = {
+  commitOnly: 'commit',
+  commitPush: 'commit-push',
+  commitPushPR: 'full-pr',
+};
+
+// UI 패널의 GitAutomationSettings → 서버 DB 형식 변환. branchStrategy·newBranchName
+// 은 서버 `git_automation_settings` 레코드 밖(프로젝트 옵션 레벨)에서 쓰이는 값이지만,
+// /api/git-automation/tick 트리거 페이로드가 settings 객체를 그대로 서버에 넘기므로
+// 여기서 함께 직렬화해 자동화 파이프라인이 전략·고정 브랜치명을 동시에 읽을 수 있게 한다.
+function toServerSettings(ui: GitAutomationSettings): Record<string, unknown> {
+  let branchTemplate = ui.branchPattern;
+  if (!branchTemplate.includes('{slug}')) {
+    branchTemplate = branchTemplate.includes('{branch}')
+      ? branchTemplate.replace('{branch}', '{slug}')
+      : branchTemplate + '/{slug}';
+  }
+  const payload: Record<string, unknown> = {
+    enabled: ui.enabled,
+    flowLevel: FLOW_TO_SERVER[ui.flow] || 'commitOnly',
+    branchTemplate,
+    commitConvention: 'conventional',
+    commitScope: '',
+    prTitleTemplate: ui.prTitleTemplate,
+    reviewers: [],
+    branchStrategy: ui.branchStrategy,
+  };
+  if (ui.branchStrategy === 'fixed-branch' && ui.newBranchName.trim()) {
+    payload.fixedBranchName = ui.newBranchName.trim();
+    payload.newBranchName = ui.newBranchName.trim();
+  }
+  return payload;
 }
 
-export function loadGitAutomationSettings(projectId?: string): GitAutomationSettings {
+// 서버 DB 형식 → UI 패널의 GitAutomationSettings 변환
+function fromServerSettings(server: Record<string, unknown>): GitAutomationSettings {
+  const flow = SERVER_TO_FLOW[server.flowLevel as string] ?? 'commit';
+  let branchPattern = (server.branchTemplate as string) || DEFAULT_AUTOMATION.branchPattern;
+  // 서버의 {slug} → UI의 {branch} 로 역변환
+  branchPattern = branchPattern.replace('{slug}', '{branch}');
+  const rawStrategy = server.branchStrategy;
+  const branchStrategy: BranchStrategy = typeof rawStrategy === 'string'
+    && (BRANCH_STRATEGY_VALUES as readonly string[]).includes(rawStrategy)
+      ? rawStrategy as BranchStrategy
+      : DEFAULT_AUTOMATION.branchStrategy;
+  const rawNewBranch = server.newBranchName ?? server.fixedBranchName;
+  const newBranchName = typeof rawNewBranch === 'string' ? rawNewBranch : '';
+  return {
+    flow,
+    branchPattern,
+    commitTemplate: DEFAULT_AUTOMATION.commitTemplate,
+    prTitleTemplate: (server.prTitleTemplate as string) || DEFAULT_AUTOMATION.prTitleTemplate,
+    enabled: server.enabled !== false,
+    branchStrategy,
+    newBranchName,
+  };
+}
+
+// 서버 DB에서 설정을 로드한다. (비동기)
+export async function loadGitAutomationSettings(projectId: string): Promise<GitAutomationSettings> {
   try {
-    const raw = typeof window !== 'undefined' ? window.localStorage?.getItem(gitAutomationKey(projectId)) : null;
-    if (!raw) return DEFAULT_AUTOMATION;
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return DEFAULT_AUTOMATION;
-    const o = parsed as Record<string, unknown>;
-    if (typeof o.flow !== 'string' || !VALID_FLOW_KEYS.includes(o.flow as GitFlowLevel)) return DEFAULT_AUTOMATION;
-    if (typeof o.branchPattern !== 'string') return DEFAULT_AUTOMATION;
-    if (typeof o.commitTemplate !== 'string') return DEFAULT_AUTOMATION;
-    if (typeof o.prTitleTemplate !== 'string') return DEFAULT_AUTOMATION;
-    if (typeof o.enabled !== 'boolean') return DEFAULT_AUTOMATION;
-    return {
-      flow: o.flow as GitFlowLevel,
-      branchPattern: o.branchPattern,
-      commitTemplate: o.commitTemplate,
-      prTitleTemplate: o.prTitleTemplate,
-      enabled: o.enabled,
-    };
+    const res = await fetch(`/api/projects/${projectId}/git-automation`);
+    if (!res.ok) return DEFAULT_AUTOMATION;
+    const data = await res.json();
+    return fromServerSettings(data);
   } catch {
-    // 손상된 JSON 은 조용히 기본값으로 복귀. 패널 전체가 먹통이 되는 것보다
-    // 이전 저장본을 잃어주는 편이 사용자 관점에서 회복 가능성이 높다.
     return DEFAULT_AUTOMATION;
   }
 }
 
-export function saveGitAutomationSettings(next: GitAutomationSettings, projectId?: string): void {
+// 서버 DB에 설정을 저장한다. (비동기)
+export async function saveGitAutomationSettings(next: GitAutomationSettings, projectId?: string): Promise<void> {
+  if (!projectId) return;
   try {
-    if (typeof window === 'undefined') return;
-    window.localStorage?.setItem(gitAutomationKey(projectId), JSON.stringify(next));
-  } catch {
-    // 쿼터 초과/프라이빗 모드는 조용히 세션 내 state 로만 유지한다.
+    const res = await fetch(`/api/projects/${projectId}/git-automation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(toServerSettings(next)),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.error('[git-automation] 서버 저장 실패:', body);
+    }
+  } catch (err) {
+    console.error('[git-automation] 서버 저장 요청 실패:', err);
   }
 }
 
@@ -483,8 +538,6 @@ export function ProjectManagement({ onLog, currentProjectId }: Props) {
 }
 
 function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentProjectId: string }) {
-  // 편집 중 헤더의 라이브 닷 펄스를 prefers-reduced-motion 사용자에게 차단한다.
-  const reducedMotion = useReducedMotion();
   const [integrations, setIntegrations] = useState<SourceIntegration[]>([]);
   const [managed, setManaged] = useState<ManagedProject[]>([]);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -641,17 +694,15 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
     setSelectedProjectId(prev => (prev === currentProjectId ? prev : currentProjectId));
   }, [currentProjectId]);
 
-  // 프로젝트 진입 시 해당 프로젝트의 저장본을 한 번만 로드한다. 이미 캐시에 있는
-  // 프로젝트는 재로드하지 않아, 다른 프로젝트로 잠시 이동했다가 돌아와도 아직 저장하지
-  // 않은 편집본을 잃지 않는다. structuredClone 으로 localStorage 파싱본과 state 사이를
-  // 한 번 끊어, 이후 불변 업데이트만으로 프로젝트간 격리가 유지되게 한다.
+  // 프로젝트 진입 시 서버 DB에서 설정을 로드한다.
   useEffect(() => {
     if (!selectedProjectId) return;
-    setGitAutomationByProject(prev => {
-      if (prev[selectedProjectId]) return prev;
-      const loaded = loadGitAutomationSettings(selectedProjectId);
-      return { ...prev, [selectedProjectId]: structuredClone(loaded) };
+    let cancelled = false;
+    loadGitAutomationSettings(selectedProjectId).then(loaded => {
+      if (cancelled) return;
+      setGitAutomationByProject(prev => ({ ...prev, [selectedProjectId]: loaded }));
     });
+    return () => { cancelled = true; };
   }, [selectedProjectId]);
 
   // 개발자(베타): 설정이 enabled 이고 flow 가 push 를 포함할 때만 주기 러너를 깨운다.
@@ -666,10 +717,15 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
       intervalMs: 120_000,
       isEnabled: () => gitAutomationSettings.enabled && !serverMissing,
       run: async () => {
+        // trigger_git_automation 페이로드에 선택한 브랜치 전략과 'fixed-branch' 의
+        // newBranchName 이 함께 직렬화되도록 서버 포맷으로 변환해 보낸다.
         const res = await fetch('/api/git-automation/tick', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ projectId: selectedProjectId, settings: gitAutomationSettings }),
+          body: JSON.stringify({
+            projectId: selectedProjectId,
+            settings: toServerSettings(gitAutomationSettings),
+          }),
         }).catch(() => null);
         if (!res) return;
         if (res.status === 404) { serverMissing = true; return; }
@@ -952,56 +1008,20 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
   return (
     <div className="p-8 space-y-8">
       <header
-        className={`flex items-center justify-between gap-3 p-3 border-2 ${editingLabel.hasProject ? 'border-[var(--pixel-accent)] bg-[#0f3460]' : 'border-dashed border-[var(--pixel-border)] bg-black/20'}`}
+        className="flex items-center justify-between gap-3 p-3 border-2 border-dashed border-[var(--pixel-border)] bg-black/20"
         aria-label="현재 편집 중인 프로젝트"
       >
         <div className="flex items-center gap-3 min-w-0">
-          <div className={`w-9 h-9 border-2 border-black flex items-center justify-center shrink-0 ${editingLabel.hasProject ? 'bg-[var(--pixel-accent)] text-black' : 'bg-black/40 text-white/50'}`}>
+          <div className="w-9 h-9 border-2 border-black flex items-center justify-center shrink-0 bg-black/40 text-white/50">
             <FolderGit2 size={16} />
           </div>
           <div className="min-w-0">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-white/60 flex items-center gap-1.5">
-              {editingLabel.hasProject && (
-                <span
-                  aria-hidden="true"
-                  className={`inline-block w-1.5 h-1.5 bg-[var(--pixel-accent)]${reducedMotion ? '' : ' animate-pulse'}`}
-                />
-              )}
-              편집 중
-            </p>
-            <h1
-              className={`text-base font-bold truncate ${editingLabel.hasProject ? 'text-[var(--pixel-accent)]' : 'text-white/60 italic'}`}
-              title={editingLabel.fullName}
-            >
-              <span className="text-white/60 font-normal mr-1">:</span>
-              {editingLabel.subtitle && (
-                <span className="text-white/60 font-normal mr-0.5">{editingLabel.subtitle}</span>
-              )}
-              {editingLabel.title}
+            <p className="text-[10px] uppercase tracking-[0.2em] text-white/60">편집 중</p>
+            <h1 className="text-base font-bold truncate text-white/60 italic">
+              선택된 프로젝트 없음
             </h1>
           </div>
         </div>
-        {editingLabel.hasProject && (
-          <div className="flex items-center gap-2 shrink-0">
-            {editingLabel.branch && (
-              <span
-                className="hidden sm:inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-white/70 bg-black/30 border border-[var(--pixel-border)] px-2 py-1"
-                title={`PR base 브랜치: ${editingLabel.branch}`}
-              >
-                <GitBranch size={10} /> {editingLabel.branch}
-              </span>
-            )}
-            <span
-              role="img"
-              aria-label={`${PROJECT_SCOPE_LABEL}: ${scopeTooltip}`}
-              title={scopeTooltip}
-              data-testid="project-scope-indicator"
-              className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-[var(--pixel-accent)] bg-black/40 border border-[var(--pixel-accent)]/60 px-2 py-1"
-            >
-              <Pin size={10} /> {PROJECT_SCOPE_LABEL}
-            </span>
-          </div>
-        )}
       </header>
       {loadError && (
         <div
@@ -1248,6 +1268,12 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
                 — {editingLabel.hasProject ? editingLabel.fullName : '프로젝트를 선택해 스코프를 고정하세요'}
               </span>
             </div>
+            {selectedProjectId && (
+              <GitCredentialsSection
+                projectId={selectedProjectId}
+                onLog={onLog}
+              />
+            )}
             <GitAutomationPanel
               initial={gitAutomationSettings}
               onSave={(next) => {

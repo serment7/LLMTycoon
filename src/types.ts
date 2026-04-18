@@ -32,6 +32,10 @@ export interface Agent {
   lastActiveTask?: string;
   lastMessage?: string;
   lastMessageTo?: string;
+  // 리더 최근 발화 유형. 'reply' = 답변 전용(분배 없이 대화만), 'delegate' = 업무 분배,
+  // 'plain' = 일반 텍스트. UI 가 리더 카드·말풍선·로그 배지를 이 값으로 판정한다.
+  // 리더가 아닌 에이전트의 발화는 'plain' 으로 남긴다.
+  lastLeaderMessageKind?: 'delegate' | 'reply' | 'plain';
   workingOnFileId?: string;
 }
 
@@ -42,7 +46,73 @@ export interface Project {
   workspacePath: string;
   agents: string[]; // Agent IDs
   status: 'active' | 'completed' | 'on-hold';
+  // 프로젝트 관리 옵션. 스키마리스 저장(MongoDB) 환경이라 필드 누락을 허용하되,
+  // 서버는 POST /api/projects 에서 기본값을 채워 넣고 읽기 경로에서는 누락된
+  // 필드를 undefined 로 노출해 클라이언트가 기본값 폴백을 수행한다.
+  autoDevEnabled?: boolean;
+  autoCommitEnabled?: boolean;
+  autoPushEnabled?: boolean;
+  defaultBranch?: string;
+  gitRemoteUrl?: string;
+  // 활성 공동 목표(SharedGoal) 의 id. 프로젝트는 단일 목표를 가리키며, 서버가
+  // setAutoDev / autoDevTick 에서 이 포인터 또는 최신 active goal 을 사용한다.
+  sharedGoalId?: string;
+  // 관리 UI 가 자유롭게 저장하는 키-값 묶음. Jsonb 대체 — MongoDB 문서 필드에
+  // 그대로 포함되며, 클라이언트 변경은 PATCH /api/projects/:id 를 통해 저장한다.
+  settingsJson?: Record<string, unknown>;
+  // Git 자동화 브랜치 전략. 기본 'per-session' — 자동 개발 세션 1회당 단일
+  // 브랜치를 재사용해 커밋마다 새 브랜치가 만들어지는 회귀를 막는다.
+  branchStrategy?: BranchStrategy;
+  // strategy === 'fixed-branch' 에서 사용하는 고정 브랜치 이름.
+  fixedBranchName?: string;
+  // strategy ∈ {per-task, per-session} 에서 사용하는 브랜치 이름 템플릿.
+  // `{date}` `{shortId}` `{type}` `{slug}` `{agent}` 토큰을 치환한다.
+  branchNamePattern?: string;
+  // 푸시 성공 후 defaultBranch 로 자동 병합할지 여부. 기본 false.
+  autoMergeToMain?: boolean;
+  // 'per-session' 전략 하에서 현재 서버가 재사용 중인 브랜치명. executeGitAutomation
+  // 이 첫 호출에 기록하고, 이후 같은 세션에서는 이 값을 재사용한다. 프로세스
+  // 재기동 시에도 같은 세션이 이어지도록 DB 에 영속화한다.
+  currentAutoBranch?: string;
 }
+
+export type BranchStrategy = 'per-commit' | 'per-task' | 'per-session' | 'fixed-branch';
+
+export const BRANCH_STRATEGY_VALUES: readonly BranchStrategy[] = [
+  'per-commit',
+  'per-task',
+  'per-session',
+  'fixed-branch',
+] as const;
+
+// 프로젝트 옵션 부분 업데이트(PATCH /api/projects/:id) 입력. Zod 가 설치돼 있지
+// 않은 저장소라 서버가 직접 필드별 타입·열거값을 검사한다. 지정하지 않은 필드는
+// 기존 값을 유지하며, null 명시는 "해제"(미설정) 의도로 해석된다.
+export interface ProjectOptionsUpdate {
+  autoDevEnabled?: boolean;
+  autoCommitEnabled?: boolean;
+  autoPushEnabled?: boolean;
+  defaultBranch?: string;
+  gitRemoteUrl?: string | null;
+  sharedGoalId?: string | null;
+  settingsJson?: Record<string, unknown>;
+  branchStrategy?: BranchStrategy;
+  fixedBranchName?: string;
+  branchNamePattern?: string;
+  autoMergeToMain?: boolean;
+}
+
+export const PROJECT_OPTION_DEFAULTS = {
+  autoDevEnabled: false,
+  autoCommitEnabled: false,
+  autoPushEnabled: false,
+  defaultBranch: 'main',
+  settingsJson: {} as Record<string, unknown>,
+  branchStrategy: 'per-session' as BranchStrategy,
+  fixedBranchName: 'auto/dev',
+  branchNamePattern: 'auto/{date}-{shortId}',
+  autoMergeToMain: false,
+} as const;
 
 export interface GameState {
   projects: Project[];
@@ -123,6 +193,58 @@ export interface GitAutomationPreference {
   reviewers: string[];
 }
 
+// Git 자동화 파이프라인 각 단계(commit/push/pr)의 시작·성공·실패를 그대로 보존한
+// 불변 이력 엔트리. 같은 단계에 대해 보통 started → (succeeded | failed) 두 건이
+// 쌓이며, 설정 비활성/프로젝트 누락 같은 전체 스킵은 단일 'skipped' 엔트리로 요약한다.
+// AgentStatusPanel 이 실패 원인 메시지를 사용자에게 노출할 때 errorMessage 를 그대로
+// 읽도록 설계했다. 서버는 이 배열을 'git-automation:log' 소켓 이벤트로 방출하고,
+// 클라이언트는 동일 태스크 ID 아래로 누적해 과거 실행까지 되짚을 수 있다.
+export type GitAutomationLogStage = 'commit' | 'push' | 'pr';
+export type GitAutomationLogOutcome = 'started' | 'succeeded' | 'failed' | 'skipped';
+
+export interface GitAutomationLogEntry {
+  // 이 엔트리가 속한 파이프라인 실행의 식별자. 같은 taskId 아래 여러 엔트리가
+  // 들어올 수 있다. 서버 측 디바운스 키와 동일.
+  taskId?: string;
+  // 파이프라인을 촉발한 에이전트 이름(로그/감사용 메타데이터). 리더 단일 브랜치 정책
+  // (2026-04-18)에 따라 UI 는 이 값을 기반으로 에이전트별 브랜치 축을 그리지 않는다
+  // — GitAutomationStageBadge/GitAutomationPanel 은 branch 한 줄만 소비한다.
+  // 알 수 없으면 비운다.
+  agent?: string;
+  stage: GitAutomationLogStage;
+  outcome: GitAutomationLogOutcome;
+  // 해당 outcome 이 발생한 시각(epoch ms). 시작/종료가 구분되지 않는 경로
+  // (예: skipped) 에서는 관측된 순간 하나만 기록한다.
+  at: number;
+  // 자동화가 대상으로 잡은 브랜치 이름. 리더 트리거당 한 줄로 고정(단일 브랜치).
+  // skipped 엔트리에서도 빈 값을 허용한다.
+  branch?: string;
+  // commit 단계 성공 시 server.ts 가 stdout 에서 파싱한 단축 SHA(7자+).
+  commitSha?: string;
+  // pr 단계 성공 시 `gh pr create` stdout 에서 파싱한 PR URL.
+  prUrl?: string;
+  // 단계가 돌려준 종료 코드. 알 수 없으면 null(spawn 실패) 또는 undefined(스킵).
+  exitCode?: number | null;
+  // 실패/스킵 사유. outcome === 'failed' 일 때 AgentStatusPanel 이 stage.errorMessage
+  // 로 그대로 노출하고, 'skipped' 일 때는 스킵 원인(disabled/no-project)을 담는다.
+  // 페이로드 비용을 막기 위해 400자 상한으로 잘라 서버가 채운다.
+  errorMessage?: string;
+}
+
+// MCP `trigger_git_automation` / GET `get_git_automation_settings` 단에서만 쓰이는
+// "브랜치 분기 모드". Project.branchStrategy(`per-commit` 등 네이밍 정책)와는 축이
+// 다르다 — 여기서는 "checkout 단계를 어떻게 내보낼지" 만 결정한다:
+//   - 'new'    : branchName 을 대상으로 `git checkout -B` 로 새 브랜치를 만들고 커밋.
+//   - 'current': checkout 단계를 건너뛰고 현재 HEAD 브랜치에 그대로 커밋/푸시.
+// 과거 값이 유실된(Row 가 이 필드를 모르는) 레거시 프로젝트는 server.ts 의
+// withDefaultSettings 가 env 기본값으로 보정해 응답한다.
+export type GitAutomationBranchStrategy = 'new' | 'current';
+
+export const GIT_AUTOMATION_BRANCH_STRATEGY_VALUES: readonly GitAutomationBranchStrategy[] = [
+  'new',
+  'current',
+] as const;
+
 // 서버 DB(git_automation_settings) 에 프로젝트별로 1:1 저장되는 레코드.
 // projectId 가 주키. enabled=false 면 리더가 자동 실행을 건너뛴다.
 export interface GitAutomationSettings {
@@ -134,10 +256,60 @@ export interface GitAutomationSettings {
   commitScope: string;
   prTitleTemplate: string;
   reviewers: string[];
+  // 'new' 면 branchName 으로 `checkout -B`, 'current' 면 HEAD 에 그대로 커밋.
+  // optional 인 이유: 저장 row 가 이 필드를 모르는 레거시 프로젝트, 그리고 기존 설정
+  // 입력 픽스처(둘 다 이 필드를 몰랐음)와의 구조적 호환. server withDefaultSettings 가
+  // 응답 직전 env 기본값으로 반드시 채워서 UI/리더는 항상 값 하나를 받게 된다.
+  branchStrategy?: GitAutomationBranchStrategy;
+  // 'new' 모드에서 사용할 브랜치명. 빈/누락이면 server 가 Project.branchStrategy
+  // 기반 resolveBranch 로 폴백해 기존 네이밍 정책을 유지한다.
+  branchName?: string;
   updatedAt: string;
 }
 
+// 프로젝트 단위 Git 자격증명. 기존 SourceIntegration 은 "저장소 임포트" 용으로
+// 공급자별 여러 건을 허용하지만, 프로젝트 설정 화면의 GitCredentialsSection 은
+// "이 프로젝트에 딱 한 쌍(provider + username + PAT)" 을 바인딩하는 간소 모델.
+// 서버는 projectId 를 주키로 upsert 하고, 클라이언트로 내려줄 때는 token 을
+// 반드시 마스킹해서 hasToken 플래그만 전달한다.
+export interface GitCredential {
+  projectId: string;
+  provider: SourceProvider;
+  username: string;
+  // AES-256-GCM 으로 암호화된 personal access token 바이트를
+  // base64 로 인코딩한 문자열(`iv(12) || authTag(16) || ciphertext`). 복호화 키는
+  // 환경변수 GIT_TOKEN_ENC_KEY 에만 존재하므로, DB 덤프가 유출돼도 평문 복원은
+  // 불가능하다. 응답 페이로드에는 절대 포함되지 않고, 저장 여부만 hasToken 으로 노출된다.
+  tokenEncrypted: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// 클라이언트가 읽는 형태: 암호문조차 내려보내지 않고 "저장됨" 플래그만 노출해
+// UI 가 마스킹 배지를 표시할 수 있게 한다. POST 성공 응답과 GET 응답이 동일 구조를 공유한다.
+export type GitCredentialRedacted = Omit<GitCredential, 'tokenEncrypted'> & { hasToken: boolean };
+
 export const USER_PREFERENCES_KEY = 'llm-tycoon:user-preferences';
+
+// 자동 개발 루프 전체가 공유하는 "공동 목표(sharedGoal)". 리더 에이전트가 분배
+// 프롬프트를 조립할 때 주입되어 팀원들이 한 방향으로 움직이도록 가이드한다.
+// 한 프로젝트에 동시에 활성인 목표는 1개로 한정(서버가 upsert 시 기존 active 를
+// archived 로 내린다). 활성 목표가 없으면 /api/auto-dev 가 enabled=true 로
+// 전환되는 것을 서버가 거부하고, auto-dev tick 도 해당 프로젝트를 건너뛴다.
+export type SharedGoalPriority = 'low' | 'normal' | 'high';
+export type SharedGoalStatus = 'active' | 'archived' | 'completed';
+
+export interface SharedGoal {
+  id: string;
+  projectId: string;
+  title: string;
+  description: string;
+  priority: SharedGoalPriority;
+  // ISO 문자열(YYYY-MM-DD 또는 전체 timestamp). 비우면 마감 미정.
+  deadline?: string;
+  status: SharedGoalStatus;
+  createdAt: string;
+}
 
 export interface ManagedProject {
   id: string;

@@ -51,8 +51,8 @@ import { AlertTriangle, Briefcase, CheckCircle2, Clock, FolderGit2, FolderOpen, 
  *     에이전트 이벤트가 LogPanel 에 누적되면 안 된다. 메뉴 스코프 불변식과
  *     로그 단일화의 교차 계약.
  *   검증: App.tsx 전역 logs 는 프로젝트 경계로 분리되지 않지만, 워크스페이스 외
- *     이벤트는 busyAgentCount/missingFileCount 배지가 먼저 경고 신호를 띄우고
- *     LogFilter.tsx dedup(L50) 가 UI 단계에서 중복을 막는다.
+ *     이벤트는 busyAgentCount/missingFileCount 배지가 먼저 경고 신호를 띄운다.
+ *     (이전엔 LogFilter UI 의 dedup 도 2차 가드였으나, 필터 제거에 따라 폐기됨.)
  *
  * 종합 판정: 4/5 PASS. TC-LOG-DUP1 이 유일한 블로커 — App.tsx:464~480 에서
  *   addLog 를 setGameState 업데이터 바깥으로 꺼내야 StrictMode 이중 호출에
@@ -177,6 +177,12 @@ interface EmptyProjectPlaceholderProps {
   // projectId 키로 분리 저장된 관리 메뉴/상태가 있으므로, "화면이 왜 비었지?" 라는
   // 오해를 막기 위해 비활성 scope 를 명시적으로 표시한다.
   gatedScopes?: string[];
+  // 사용자가 "왜 화면이 비었지?" 의 원인이 되는 특정 메뉴 라벨. 제공되면 해당
+  // scope-badge 에 data-active="true" 가 붙어 accent 실선 + 글로우로 강조되고,
+  // 카드 본문 상단에 "접근하려던 메뉴: {라벨}" 보조 안내가 한 줄 추가된다.
+  // 예: TC-PM1 시나리오에서 '프로젝트 관리' 탭 직진입 시 '프로젝트 관리' 를 넘긴다.
+  // scopes 배열에 없는 라벨이 들어오면 activeScope 는 무시된다(오타/스코프 드리프트 방어).
+  activeScope?: string;
   // 코드그래프에서 참조는 남아있지만 실체 노드가 사라진 파일 수.
   // (workingOnFileId / add_dependency 가 가리키는 id 가 현재 files 에 없을 때)
   // 프로젝트 미선택 상태에서도 잔존 reference 를 노출해 "왜 그래프가 비어 보이지?"
@@ -274,7 +280,7 @@ const DEFAULT_GATED_SCOPES = ['프로젝트 관리', '태스크 분배', '협업
  *   Secondary(transparent, accent border) 두 단계로 명확히 분리.
  * 타이포그래피: 제목 18px uppercase 0.08em, 본문 12px 1.5 line-height, 메타 10px.
  */
-export function EmptyProjectPlaceholder({ projectCount, onOpenProjectList, onCreateProject, currentProjectId, busyAgentCount, busyAgentNames, pendingAgentCount, erroredAgentCount, staleRestoredAgentCount, gatedScopes, missingFileCount, missingFileNames }: EmptyProjectPlaceholderProps) {
+export function EmptyProjectPlaceholder({ projectCount, onOpenProjectList, onCreateProject, currentProjectId, busyAgentCount, busyAgentNames, pendingAgentCount, erroredAgentCount, staleRestoredAgentCount, gatedScopes, activeScope, missingFileCount, missingFileNames }: EmptyProjectPlaceholderProps) {
   // currentProjectId 가 이미 선택돼 있으면 빈-상태 안내는 절대 나오면 안 된다.
   // 호출부 조건을 이중으로 보호하는 방어적 가드.
   // null/undefined/빈문자열 세 경우만 "미선택" 으로 취급한다. (프로젝트 스위칭 훅은
@@ -283,6 +289,10 @@ export function EmptyProjectPlaceholder({ projectCount, onOpenProjectList, onCre
   if (hasSelectedProject) return null;
   const hasProjects = projectCount > 0;
   const scopes = gatedScopes && gatedScopes.length > 0 ? gatedScopes : DEFAULT_GATED_SCOPES;
+  // scopes 배열에 실제로 포함된 라벨만 "활성" 으로 인정. 호출부가 오타를 넘기거나
+  // 커스텀 scopes 와 activeScope 가 어긋나도 조용히 무시된다(드리프트 방어).
+  const resolvedActiveScope =
+    activeScope && scopes.includes(activeScope) ? activeScope : null;
   // 상위 소켓 이벤트가 동일 에이전트/파일을 두 번 흘려보내도 chips 라벨이 중복 노출되지
   // 않도록 첫 등장 순서를 보존하며 dedup 한다. 빈 문자열은 식별자 가치가 없어 함께 제거.
   const dedupedBusyAgentNames = busyAgentNames
@@ -308,6 +318,16 @@ export function EmptyProjectPlaceholder({ projectCount, onOpenProjectList, onCre
           <br />
           기존 프로젝트를 열거나 새 프로젝트를 시작해 워크스페이스를 활성화하세요.
         </p>
+        {resolvedActiveScope && (
+          /* TC-PM1: "프로젝트 관리" 탭처럼 특정 메뉴 직진입으로 화면이 비었을 때,
+           * 원인이 되는 메뉴 이름을 본문 바로 아래 얇은 인라인 힌트로 고지한다.
+           * scope-badge 위계(점선 테두리 / 흐린 톤) 보다 한 단계 주목도가 높아야
+           * "이 메뉴 때문에 막혔다" 를 즉시 연결 지을 수 있다. aria-live 는 카드
+           * 전체가 이미 polite 라 중복 고지를 피하기 위해 달지 않는다. */
+          <p className="empty-project-placeholder__active-scope" title="이 메뉴는 프로젝트 선택 후에만 열립니다.">
+            접근하려던 메뉴 · <strong>{resolvedActiveScope}</strong>
+          </p>
+        )}
 
         <div className="empty-project-placeholder__actions">
           <button
@@ -342,11 +362,22 @@ export function EmptyProjectPlaceholder({ projectCount, onOpenProjectList, onCre
           aria-label="프로젝트 선택 전까지 비활성화된 메뉴"
           title="server 는 projectId 별로 이 메뉴들의 상태를 분리 저장합니다. 선택된 프로젝트가 없으면 API 가 payload 를 내려주지 않습니다."
         >
-          {scopes.map((label) => (
-            <span key={label} className="empty-project-placeholder__scope-badge" role="listitem">
-              {label}
-            </span>
-          ))}
+          {scopes.map((label) => {
+            const isActive = label === resolvedActiveScope;
+            return (
+              <span
+                key={label}
+                className="empty-project-placeholder__scope-badge"
+                role="listitem"
+                // activeScope 와 일치하는 배지만 accent 실선 + 글로우 로 강조.
+                // 나머지는 기존 점선/회색 톤을 유지해 "이 메뉴가 원인" 의 대비를 키운다.
+                data-active={isActive ? 'true' : undefined}
+                aria-current={isActive ? 'true' : undefined}
+              >
+                {label}
+              </span>
+            );
+          })}
         </div>
 
         {(

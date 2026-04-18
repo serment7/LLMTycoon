@@ -6,6 +6,20 @@ import {
   type PipelineRole,
 } from '../utils/workspaceInsights';
 import { useReducedMotion } from '../utils/useReducedMotion';
+import {
+  classifyLeaderMessage,
+  LEADER_ANSWER_ONLY_LABEL,
+  LEADER_ANSWER_ONLY_TOOLTIP,
+  type LeaderMessageKind,
+} from '../utils/leaderMessage';
+import { getLeaderMessageIcon } from './AgentContextBubble';
+import {
+  GitAutomationStageBadge,
+  AutoFlowProgressBar,
+  deriveAutoFlowFromGitStages,
+  type AutoFlowStages,
+  type GitAutomationBadgeState,
+} from './GitAutomationStageBadge';
 
 type AgentStatus = Agent['status'];
 
@@ -32,12 +46,43 @@ export interface DirectiveDigest {
   orphanHandoffCount?: number;
 }
 
+// Git 자동화 단계(commit/push/pr)의 실행 상태.
+// 디자인 합의 2026-04-18 §Git 자동화 패널 UX: 4단계 — 대기/진행중/성공/실패.
+// 배지 톤과 재시도 버튼 가드는 이 문자열을 단일 원천으로 쓴다.
+export type GitAutomationStageState = 'idle' | 'running' | 'success' | 'failed';
+
+export type GitAutomationStageKey = 'commit' | 'push' | 'pr';
+
+export interface GitAutomationStage {
+  state: GitAutomationStageState;
+  /** 사용자에게 보일 부가 설명(예: 커밋 해시, 실패 원인). 생략 시 상태 라벨만 표시. */
+  detail?: string;
+  /** 실패 시 노출할 에러 메시지. state 가 failed 일 때만 사용. */
+  errorMessage?: string;
+}
+
+export interface GitAutomationDigest {
+  stages: Record<GitAutomationStageKey, GitAutomationStage>;
+  /**
+   * 재시도 훅. 실패 단계별 버튼을 누르면 전달된다. 생략되면 버튼은 숨겨진다.
+   * (엔진이 아직 재시도 미구현이면 undefined 로 두어 UX 를 정확히 반영.)
+   */
+  onRetryStage?: (stage: GitAutomationStageKey) => void;
+  /** 특정 단계가 현재 재시도 중인지. 버튼을 잠시 비활성화해 중복 클릭을 막는다. */
+  retryingStage?: GitAutomationStageKey | null;
+  /** 서버가 체크아웃한 브랜치 이름(예: chore/auto-2026-04-18-abcd). 단계 행 아래 풋노트로 표시. */
+  branch?: string;
+  /** 자동 커밋의 단축 SHA(7+자리). App.tsx 가 git stdout 에서 파싱. */
+  commitSha?: string;
+  /** `gh pr create` 가 뱉은 PR URL. 링크로 렌더하고 새 탭에서 연다. */
+  prUrl?: string;
+}
+
 type Props = {
   agents: Agent[];
   files: CodeFile[];
   translateRole: (role: string) => string;
   translateStatus: (status: string) => string;
-  onAgentClick?: (agentId: string) => void;
   showSummary?: boolean;
   // 연구 관점 지표(활성률·역할 분포)를 함께 렌더할지 여부.
   showInsights?: boolean;
@@ -46,12 +91,49 @@ type Props = {
   // 오늘 인박스 지시 요약 행을 렌더할지 여부. 데이터(`directiveDigest`)가 함께 있어야 렌더된다.
   showDirectiveDigest?: boolean;
   directiveDigest?: DirectiveDigest;
+  // Git 자동화 단계별 진행 인디케이터(대기/진행중/성공/실패)를 렌더할지 여부.
+  // `gitAutomation` 데이터가 함께 있어야 렌더되며, 실패 단계에는 재시도 버튼이 붙는다.
+  showGitAutomation?: boolean;
+  gitAutomation?: GitAutomationDigest;
+  // 자동 개발 메타 루프(개선 보고 → 리더 재분배 → 전원 완료 → Git 자동화 발동)
+  // 상태를 상위에서 명시할 때 넘긴다. 생략하면 gitAutomation 으로부터 보수적으로
+  // 유추한 기본 값이 사용된다.
+  autoFlow?: AutoFlowStages;
   /**
    * 인박스 경로 클릭 훅. 상위 컨테이너에서 FileTooltip/문서 뷰어로 연결할 수 있게 주입한다.
    * 누락되면 경로는 읽기 전용 텍스트로만 노출된다.
    */
   onInboxPathClick?: (path: string) => void;
 };
+
+// 단계 키 → 한국어 라벨. 패널 전역에서 동일 언어를 유지한다.
+const GIT_AUTOMATION_STAGE_LABEL: Record<GitAutomationStageKey, string> = {
+  commit: '자동 커밋',
+  push: '원격 푸시',
+  pr: 'PR 생성',
+};
+
+// 상태 → 글리프(스크린리더용 텍스트와 동일 의미). CSS 에도 동일 매핑 존재.
+const GIT_AUTOMATION_STATE_GLYPH: Record<GitAutomationStageState, string> = {
+  idle: '○',
+  running: '◔',
+  success: '◉',
+  failed: '✕',
+};
+
+const GIT_AUTOMATION_STATE_LABEL: Record<GitAutomationStageState, string> = {
+  idle: '대기',
+  running: '진행중',
+  success: '성공',
+  failed: '실패',
+};
+
+// 단계 순서 고정(커밋 → 푸시 → PR). 화면 읽기 방향과 동일하게 좌→우 진행감을 준다.
+const GIT_AUTOMATION_STAGE_ORDER: ReadonlyArray<GitAutomationStageKey> = [
+  'commit',
+  'push',
+  'pr',
+];
 
 // 지시 상태 → 유니코드 글리프. CollabTimeline(팀 축)과 동일한 매핑을 유지해
 // 대시보드 전체에서 상태 언어를 통일한다.
@@ -830,6 +912,238 @@ export function getForbiddenSoloBandTone(band: ForbiddenSoloBand): string {
   return FORBIDDEN_SOLO_BAND_TONE[band];
 }
 
+// Git 자동화 단계 배지 + 실패 시 재시도 버튼.
+// 디자인 결정:
+//   - 단계 3개는 좌→우 파이프라인으로 시각화(사이에 얇은 커넥터).
+//   - state 는 data-state 속성으로 CSS 에 위임(톤·펄스·펜던트 글리프 모두 CSS 책임).
+//   - 실패 시 "재시도" 버튼이 배지 옆에 붙고, 재시도 중(retryingStage 일치)에는
+//     버튼을 disabled 로 잠가 중복 호출을 막고, CSS 가 로딩 톤으로 전환.
+function GitAutomationStageRow({
+  digest,
+  reducedMotion,
+  autoFlow,
+}: {
+  digest: GitAutomationDigest;
+  reducedMotion: boolean;
+  autoFlow?: AutoFlowStages;
+}) {
+  const { stages, onRetryStage, retryingStage, branch, commitSha, prUrl } = digest;
+  // autoFlow 가 명시되지 않으면 commit/push/pr 상태로부터 보수적인 기본 값을
+  // 유추한다. 상위 데이터가 풍부해지는 즉시 호출부에서 autoFlow 를 직접 넘겨
+  // 이 파생 경로를 대체하는 것이 이상적이다.
+  const resolvedAutoFlow: AutoFlowStages =
+    autoFlow ??
+    deriveAutoFlowFromGitStages({
+      commit: stages.commit.state as GitAutomationBadgeState,
+      push: stages.push.state as GitAutomationBadgeState,
+      pr: stages.pr.state as GitAutomationBadgeState,
+    });
+  const hasAnyFailure = GIT_AUTOMATION_STAGE_ORDER.some(
+    key => stages[key].state === 'failed',
+  );
+  const hasAnyRunning = GIT_AUTOMATION_STAGE_ORDER.some(
+    key => stages[key].state === 'running',
+  );
+  // 디자이너: "커밋이 안 됐다" 를 즉각 인지시키기 위한 경고 배너 진단.
+  // 첫 번째 실패 단계의 라벨·에러 메시지를 뽑아, 단계 배지 이전에 배너로 노출.
+  // 성공/대기 상태에서는 배너를 아예 렌더하지 않아 노이즈를 만들지 않는다.
+  const firstFailedKey = GIT_AUTOMATION_STAGE_ORDER.find(
+    key => stages[key].state === 'failed',
+  );
+  const firstFailedStage = firstFailedKey ? stages[firstFailedKey] : null;
+  const firstFailedLabel = firstFailedKey ? GIT_AUTOMATION_STAGE_LABEL[firstFailedKey] : null;
+  // "진행 흔적이 전혀 없는" 상태 — 즉 트리거 자체가 오지 않았을 가능성. 단계 배지만으로는
+  // "대기 중" 과 구분이 어렵기 때문에, 전부 idle 이면서 branch/commitSha/prUrl 도 비어
+  // 있을 때만 "자동화가 아직 트리거되지 않았습니다" 힌트 배너를 노출한다.
+  const allIdle = GIT_AUTOMATION_STAGE_ORDER.every(key => stages[key].state === 'idle');
+  const hasAnyArtifact = Boolean(branch || commitSha || prUrl);
+  const showNotTriggeredHint = !hasAnyFailure && !hasAnyRunning && allIdle && !hasAnyArtifact;
+
+  const toneClass = hasAnyFailure
+    ? 'git-auto-stages--failed'
+    : hasAnyRunning
+      ? 'git-auto-stages--running'
+      : '';
+
+  return (
+    <div
+      className={`git-auto-stages ${toneClass}`.trim()}
+      data-reduced-motion={reducedMotion ? 'true' : 'false'}
+      role="group"
+      aria-label="Git 자동화 단계 진행 상황"
+    >
+      <div
+        className="git-auto-stages__header"
+        title="자동 개발 ON 상태에서 태스크 완료 시 트리거됩니다"
+      >
+        <span
+          className="git-auto-stages__title"
+          aria-describedby="git-auto-stages-trigger-hint"
+        >
+          Git 자동화 파이프라인
+        </span>
+        <span
+          id="git-auto-stages-trigger-hint"
+          className="sr-only"
+        >
+          자동 개발 ON 상태에서 태스크 완료 시 트리거됩니다
+        </span>
+        <span className="git-auto-stages__summary" aria-hidden>
+          {hasAnyFailure ? '실패' : hasAnyRunning ? '진행중' : '대기/완료'}
+        </span>
+      </div>
+      <AutoFlowProgressBar stages={resolvedAutoFlow} />
+      {hasAnyFailure && firstFailedLabel && (
+        <div
+          className="git-auto-alert"
+          role="alert"
+          data-tone="failure"
+          aria-label={`Git 자동화 ${firstFailedLabel} 단계 실패`}
+        >
+          <span className="git-auto-alert__icon" aria-hidden>✕</span>
+          <div className="git-auto-alert__body">
+            <div className="git-auto-alert__title">
+              커밋이 완료되지 않았습니다 — {firstFailedLabel} 단계에서 실패
+            </div>
+            {firstFailedStage?.errorMessage && (
+              <div
+                className="git-auto-alert__reason"
+                title={firstFailedStage.errorMessage}
+              >
+                사유: {firstFailedStage.errorMessage}
+              </div>
+            )}
+            {!firstFailedStage?.errorMessage && (
+              <div className="git-auto-alert__reason">
+                사유: 서버 로그를 확인하거나 아래 재시도 버튼을 눌러 주세요.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {showNotTriggeredHint && (
+        <div
+          className="git-auto-alert"
+          role="status"
+          data-tone="not-triggered"
+          aria-label="Git 자동화가 아직 트리거되지 않았습니다"
+        >
+          <span className="git-auto-alert__icon" aria-hidden>!</span>
+          <div className="git-auto-alert__body">
+            <div className="git-auto-alert__title">
+              자동화가 아직 트리거되지 않았습니다
+            </div>
+            <div className="git-auto-alert__reason">
+              자동 개발이 ON 이고 태스크가 성공 종료되면 이 영역에 커밋·푸시·PR 결과가 표시됩니다.
+            </div>
+          </div>
+        </div>
+      )}
+      <ol className="git-auto-stages__list">
+        {GIT_AUTOMATION_STAGE_ORDER.map((key, idx) => {
+          const stage = stages[key];
+          const label = GIT_AUTOMATION_STAGE_LABEL[key];
+          const stateLabel = GIT_AUTOMATION_STATE_LABEL[stage.state];
+          const glyph = GIT_AUTOMATION_STATE_GLYPH[stage.state];
+          const isRetrying = retryingStage === key;
+          const canRetry =
+            stage.state === 'failed' && Boolean(onRetryStage) && !isRetrying;
+
+          return (
+            <li
+              key={key}
+              className="git-auto-stages__item"
+              data-stage={key}
+              data-state={stage.state}
+              aria-label={`${label} ${stateLabel}`}
+            >
+              {idx > 0 && (
+                <span
+                  className="git-auto-stages__connector"
+                  data-prev-state={stages[GIT_AUTOMATION_STAGE_ORDER[idx - 1]].state}
+                  aria-hidden
+                />
+              )}
+              <GitAutomationStageBadge
+                stage={key}
+                state={stage.state as GitAutomationBadgeState}
+                label={label}
+                detail={stage.detail}
+                errorMessage={stage.errorMessage}
+              />
+              {stage.state === 'failed' && stage.errorMessage && (
+                <span
+                  className="git-auto-stages__error"
+                  role="alert"
+                  title={stage.errorMessage}
+                >
+                  {stage.errorMessage}
+                </span>
+              )}
+              {canRetry && onRetryStage && (
+                <button
+                  type="button"
+                  className="git-auto-retry"
+                  onClick={() => onRetryStage(key)}
+                  aria-label={`${label} 재시도`}
+                >
+                  <span aria-hidden>↻</span>
+                  <span>재시도</span>
+                </button>
+              )}
+              {isRetrying && (
+                <button
+                  type="button"
+                  className="git-auto-retry"
+                  data-retrying="true"
+                  disabled
+                  aria-label={`${label} 재시도 중`}
+                >
+                  <span aria-hidden>◔</span>
+                  <span>재시도 중…</span>
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      {(branch || commitSha || prUrl) && (
+        <div
+          className="git-auto-stages__footer"
+          aria-label="Git 자동화 실행 결과"
+        >
+          {branch && (
+            <span className="git-auto-stages__footer-item" title={`브랜치 ${branch}`}>
+              <span className="git-auto-stages__footer-label">브랜치</span>
+              <code className="git-auto-stages__footer-value">{branch}</code>
+            </span>
+          )}
+          {commitSha && (
+            <span className="git-auto-stages__footer-item" title={`커밋 ${commitSha}`}>
+              <span className="git-auto-stages__footer-label">커밋</span>
+              <code className="git-auto-stages__footer-value">{commitSha}</code>
+            </span>
+          )}
+          {prUrl && (
+            <span className="git-auto-stages__footer-item">
+              <span className="git-auto-stages__footer-label">PR</span>
+              <a
+                className="git-auto-stages__footer-value git-auto-stages__footer-link"
+                href={prUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={prUrl}
+              >
+                {prUrl.replace(/^https?:\/\//, '')}
+              </a>
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CollabIndicatorRows({ digest }: { digest: DirectiveDigest }) {
   const reducedMotion = useReducedMotion();
   const threshold = digest.forbiddenSoloThreshold ?? DEFAULT_FORBIDDEN_SOLO_THRESHOLD;
@@ -912,12 +1226,14 @@ export function AgentStatusPanel({
   files,
   translateRole,
   translateStatus,
-  onAgentClick,
   showSummary = true,
   showInsights = false,
   showQualityWarnings = false,
   showDirectiveDigest = false,
   directiveDigest,
+  showGitAutomation = false,
+  gitAutomation,
+  autoFlow,
   onInboxPathClick,
 }: Props) {
   // STATUS_DOT/품질 경고 배너 등 패널 전역 애니메이션 게이트.
@@ -1224,6 +1540,14 @@ export function AgentStatusPanel({
         </div>
       )}
 
+      {showGitAutomation && gitAutomation && (
+        <GitAutomationStageRow
+          digest={gitAutomation}
+          reducedMotion={reducedMotion}
+          autoFlow={autoFlow}
+        />
+      )}
+
       {showInsights && (
         <div
           className="border-2 border-[var(--pixel-border)] bg-black/30 p-3 space-y-2"
@@ -1344,7 +1668,6 @@ export function AgentStatusPanel({
           const workingFile = agent.workingOnFileId
             ? fileNameById.get(agent.workingOnFileId)
             : undefined;
-          const isInteractive = Boolean(onAgentClick);
           const statusLabel = translateStatus(agent.status);
           const agentIssues = issuesByAgent.get(agent.id) ?? [];
           const hasIssues = showQualityWarnings && agentIssues.length > 0;
@@ -1353,24 +1676,13 @@ export function AgentStatusPanel({
             showInsights && agents.length > 1 && isolatedAgentIds.has(agent.id);
 
           return (
+            // 에이전트 카드는 클릭 가능한 대상이 아니라 상태 요약 전용이다.
+            // 이전에는 onAgentClick 이 주입되면 role="button"·cursor-pointer 로 승격됐지만,
+            // 호출부가 없어 접근성 안내(버튼으로 보이지만 반응 없음)만 남는 부작용이 있었다.
             <li
               key={agent.id}
-              onClick={() => onAgentClick?.(agent.id)}
-              onKeyDown={e => {
-                if (!isInteractive) return;
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  onAgentClick?.(agent.id);
-                }
-              }}
-              role={isInteractive ? 'button' : undefined}
-              tabIndex={isInteractive ? 0 : undefined}
               aria-label={`${agent.name} · ${translateRole(agent.role)} · ${statusLabel}`}
-              className={`bg-black/25 border-2 border-[var(--pixel-border)] p-3 space-y-1 ${
-                isInteractive
-                  ? 'cursor-pointer hover:border-[var(--pixel-accent)] focus:outline-none focus-visible:border-[var(--pixel-accent)] focus-visible:ring-2 focus-visible:ring-[var(--pixel-accent)]/60'
-                  : ''
-              } transition-colors`}
+              className="bg-black/25 border-2 border-[var(--pixel-border)] p-3 space-y-1 transition-colors"
               title={agent.persona ?? translateRole(agent.role)}
             >
               <div className="flex items-center gap-2">
@@ -1405,31 +1717,71 @@ export function AgentStatusPanel({
                 <span>{translateRole(agent.role)}</span>
                 <span aria-hidden className="text-white/30">·</span>
                 <PipelineBadge role={derivePipelineRole(agent)} />
+                {/*
+                  '답변 전용' 배지는 lastMessage TTL 이 만료돼도 lastLeaderMessageKind
+                  값으로 판단하므로 메시지가 사라진 뒤에도 "최근 응답 유형" 을 계속
+                  드러낸다. 리더 역할에 한해 노출해 비리더 에이전트에 오인된 배지가
+                  붙지 않도록 방어.
+                */}
+                {agent.role === 'Leader' && agent.lastLeaderMessageKind === 'reply' && (
+                  <>
+                    <span aria-hidden className="text-white/30">·</span>
+                    <span
+                      className="text-[9px] uppercase tracking-wider text-cyan-200 border border-cyan-300/40 bg-cyan-400/10 px-1"
+                      data-leader-kind="reply"
+                      title={LEADER_ANSWER_ONLY_TOOLTIP}
+                    >
+                      {LEADER_ANSWER_ONLY_LABEL}
+                    </span>
+                  </>
+                )}
               </div>
+              {agent.persona && (
+                <div
+                  className="kr-msg text-[10px] mt-1 text-white/60 line-clamp-2 italic"
+                  title={agent.persona}
+                  data-testid="agent-persona"
+                >
+                  {agent.persona}
+                </div>
+              )}
               {workingFile && (
                 <div className="text-[10px] mt-1 text-[var(--pixel-accent)] truncate">
-                  작업 파일: <span className="opacity-90">{workingFile}</span>
+                  <span className="kr-label">작업 파일:</span> <span className="opacity-90">{workingFile}</span>
                 </div>
               )}
               {agent.currentTask && (
                 <div
-                  className="text-[10px] mt-1 text-white/80 line-clamp-2"
+                  className="kr-msg text-[10px] mt-1 text-white/80 line-clamp-2"
                   title={agent.currentTask}
                 >
                   할 일: {agent.currentTask}
                 </div>
               )}
-              {agent.lastMessage && (
-                <div
-                  className="text-[10px] mt-1 text-white/70 line-clamp-2 italic"
-                  title={agent.lastMessage}
-                >
-                  {agent.lastMessageTo
-                    ? `→ ${agentNameById.get(agent.lastMessageTo) ?? agent.lastMessageTo}: `
-                    : ''}
-                  “{agent.lastMessage}”
-                </div>
-              )}
+              {agent.lastMessage && (() => {
+                // 리더가 남긴 메시지는 "업무 분배" 인지 "답변 전용" 인지가 팀 운영의 핵심
+                // 구분 신호라, 다른 역할의 메시지와는 다른 톤/아이콘으로 한 번에 식별하게 한다.
+                // 비리더 에이전트의 lastMessage 는 기존 중립 톤(plain) 을 유지한다.
+                const kind: LeaderMessageKind =
+                  agent.role === 'Leader'
+                    ? classifyLeaderMessage(agent.lastMessage)
+                    : 'plain';
+                return (
+                  <div
+                    className={`leader-msg leader-msg--${kind} kr-msg text-[10px] mt-1 line-clamp-2 italic`}
+                    data-leader-kind={kind}
+                    title={agent.lastMessage}
+                  >
+                    <span className="leader-msg__icon" aria-hidden>
+                      {getLeaderMessageIcon(kind)}
+                    </span>
+                    {agent.lastMessageTo
+                      ? `${agentNameById.get(agent.lastMessageTo) ?? agent.lastMessageTo}: `
+                      : ''}
+                    “{agent.lastMessage}”
+                  </div>
+                );
+              })()}
               {hasIssues && (
                 <div
                   className="flex flex-wrap gap-1 mt-1"

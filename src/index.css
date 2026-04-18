@@ -2,6 +2,13 @@
 
 @theme {
   --font-game: 'Courier New', Courier, monospace;
+  /* 한국어 에이전트 메시지/설명 텍스트 전용 폰트 스택.
+   * Pretendard 가 설치돼 있으면 최우선 사용하고, 없으면 OS 내장 한글 폰트로 폴백한다.
+   * CDN 을 걸지 않아 오프라인/샌드박스 환경에서도 동작하며, 모노 UI chrome 은 그대로
+   * --font-game 을 쓰고 .kr-msg 가 붙은 내러티브 영역만 본 스택을 사용한다. */
+  --font-kr: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont,
+    'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', '맑은 고딕',
+    system-ui, sans-serif;
 }
 
 :root {
@@ -43,6 +50,216 @@
   --agent-state-resuming-bg: rgba(0, 210, 255, 0.1);
   --agent-state-resuming-fg: #b6eaff;
   --agent-state-resuming-glow: rgba(0, 210, 255, 0.55);
+
+  /* ── SharedGoalForm · 공동 목표 입력 폼 디자인 토큰 (2026-04-18 시안) ──────
+   * 대상: src/components/SharedGoalForm.tsx (신규) — GitAutomationPanel 헤더
+   * 확장 영역. 자동 개발 토글의 전제조건(= 공동 목표 저장) 을 시각적으로
+   * 강제하기 위해 4 상태(empty/editing/saved/running) 를 모두 단일 진원으로
+   * 관리한다. 시안 문서: tests/shared-goal-form-mockup.md ·
+   * 정적 미리보기: tests/shared-goal-form-mockup.svg
+   *
+   * 상태별 의미 계층:
+   *   empty    — 제목·설명 모두 공란. 토글은 🔒 잠금. 점선 테두리로
+   *              "여기에 내용이 들어가야 한다" 를 약하게 시사.
+   *   editing  — 입력 변경 존재 · 저장 전. amber 실선으로 강조하고
+   *              "⚠ 미저장" 배지를 1.4s pulse 로 애니메이션. 토글은 계속 🔒.
+   *   saved    — 서버 DB 기록 완료. emerald 실선 + "✓ 저장됨". 토글 해제.
+   *   running  — 자동 개발 ON · 리더 분배 진행. sky 실선 + 1.6s pulse.
+   *              폼 자체는 readOnly 로 잠가 진행 중 변경 사고를 차단.
+   *
+   * 대비: empty 의 dashed border 는 의도적으로 낮춘 대비(3.0:1 · AA large)
+   * 이므로 lock-fg 아이콘과 hint 문구로 보조. editing/saved/running 은
+   * 모두 4.5:1 이상을 만족해 AA 본문 기준을 통과한다.
+   *
+   * 우선순위 팔레트(p1/p2/p3) 는 라디오 버튼과 배지에서 공용으로 쓰이며,
+   * P1=red 은 이미 존재하는 AgentStatusPanel 의 "긴급" 색과 일치시켜 사용자가
+   * 색 의미를 재학습하지 않아도 되게 한다. 색각 이상 대응으로 모든 배지는
+   * 색 + 아이콘 + 텍스트 3중 인코딩을 적용한다.
+   */
+  --shared-goal-border-empty: rgba(255, 255, 255, 0.25);
+  --shared-goal-border-editing: #fbbf24;
+  --shared-goal-border-saved: #34d399;
+  --shared-goal-border-running: #60a5fa;
+  --shared-goal-bg-empty: rgba(0, 0, 0, 0.40);
+  --shared-goal-bg-editing: rgba(251, 191, 36, 0.08);
+  --shared-goal-bg-saved: rgba(52, 211, 153, 0.08);
+  --shared-goal-bg-running: rgba(96, 165, 250, 0.10);
+  --shared-goal-lock-fg: rgba(255, 255, 255, 0.45);
+  --shared-goal-hint-fg: rgba(255, 255, 255, 0.55);
+  --shared-goal-priority-p1: #f87171;
+  --shared-goal-priority-p2: #fbbf24;
+  --shared-goal-priority-p3: #7fd4ff;
+
+  /* ── ProjectSettingsPanel · 프로젝트 관리 옵션 패널 디자인 토큰 (2026-04-18) ─
+   * 대상: src/components/ProjectSettingsPanel.tsx (신규) — 상세 페이지의
+   * 우측 사이드바(≥1280px) 또는 탭(<1280px) 으로 편입.
+   * 시안 문서: tests/project-settings-panel-mockup.md ·
+   * 정적 미리보기: tests/project-settings-panel-mockup.svg
+   *
+   * 설계 의도:
+   *   1) saveStatus(idle/saving/error/dirty) 를 4색 계열로 동시 관리해 헤더 배지와
+   *      각 필드 오른쪽 4px 스트립이 동일한 팔레트를 쓴다. 사용자는 "어떤 필드가
+   *      지금 저장 대기 중인지" 를 스트립 색만으로 즉시 구분할 수 있다.
+   *   2) 자동화 3-토글의 계단식 연결선(toggle-chain) 은 sky-accent 로 낮춘 톤을
+   *      사용해 "의존 관계" 는 보이되 전경 콘텐츠(토글 자체) 를 가리지 않는다.
+   *   3) lock-fg 는 SharedGoalForm 의 동일 변수와 숫자 일치(white/45%) — 두 패널
+   *      사이 잠금 UX 가 시각적으로 이어진다.
+   *
+   * 대비: 모든 배지의 전경/배경은 패널 배경(#0f3460) 기준 4.5:1 이상을 만족
+   * (AA 본문). 색각 이상 대응을 위해 실제 구현에서는 아이콘 + 텍스트를 함께 넣어
+   * 색에만 의존하지 않도록 한다.
+   */
+  --project-settings-panel-bg: #0f3460;
+  --project-settings-section-bg: rgba(0, 0, 0, 0.30);
+  --project-settings-divider: rgba(255, 255, 255, 0.10);
+  --project-settings-save-idle: #34d399;
+  --project-settings-save-saving: #60a5fa;
+  --project-settings-save-error: #f87171;
+  --project-settings-save-dirty: #fbbf24;
+  --project-settings-lock-fg: rgba(255, 255, 255, 0.45);
+  --project-settings-toggle-chain: rgba(127, 212, 255, 0.35);
+
+  /* ── BranchStrategySection · Git 브랜치 전략 선택 디자인 토큰 (2026-04-18) ──
+   * 대상: src/components/BranchStrategySection.tsx (신규) — ProjectSettingsPanel
+   * 의 "Git 자동화" 섹션 내부. 4 전략(per-commit / per-task / per-session / fixed)
+   * 라디오 카드 UI 와 조건부 하위 입력·실시간 미리보기를 한 팔레트로 통제한다.
+   * 시안 문서: tests/branch-strategy-mockup.md ·
+   * 정적 미리보기: tests/branch-strategy-mockup.svg
+   *
+   * 설계 의도:
+   *   1) card-idle-border 는 "선택하지 않은 옵션" 임을 약하게 시사(white/18%) 하고,
+   *      선택된 카드만 card-active-border(#00d4ff) 로 강한 대비를 가진다. 이는
+   *      "지금 이 전략이 활성" 임을 시선이 가장 먼저 잡도록 한다.
+   *   2) chip-required(amber) 는 필수 변수(★)만을 구분하는 전용 색. 일반 변수 칩의
+   *      mute 톤과 시각적 계층을 분리해 "빠뜨리면 안 되는 것" 을 색만으로도 전달.
+   *   3) preview-fg(emerald) 와 preview-error(red) 는 ProjectSettingsPanel 의
+   *      saveStatus idle/error 와 동일한 팔레트를 쓰되 전용 변수로 분리해,
+   *      후속 리디자인에서 preview 만 따로 조정할 수 있게 한다.
+   *
+   * 대비: 모든 전경/배경은 패널 배경(#0f3460) 기준 4.5:1 이상 — AA 본문 충족.
+   */
+  --branch-strategy-card-idle-border: rgba(255, 255, 255, 0.18);
+  --branch-strategy-card-active-border: #00d4ff;
+  --branch-strategy-card-active-bg: rgba(0, 210, 255, 0.08);
+  --branch-strategy-chip-bg: rgba(255, 255, 255, 0.06);
+  --branch-strategy-chip-required: #fbbf24;
+  --branch-strategy-preview-fg: #34d399;
+  --branch-strategy-preview-error: #f87171;
+  --branch-strategy-danger-banner: rgba(248, 113, 113, 0.12);
+
+  /* ── GitAutomationPanel · 브랜치 전략 2모드 라디오 시안 토큰 (2026-04-19) ──
+   * 대상: src/components/GitAutomationPanel.tsx — "브랜치 이름 패턴" 필드 위에
+   * 삽입되는 2모드(`new` / `continue`) 라디오 섹션 전용. 위의 4전략 시안
+   * (`--branch-strategy-*`) 과는 별개의 **단순화 A안** 으로, 팀이 최종적으로
+   * 4전략 카드 UI 를 채택할 때 본 토큰은 롤백될 수 있다.
+   * 시안 문서: tests/branch-mode-mockup.md
+   *
+   * 설계 의도:
+   *   1) 2모드는 "새 브랜치 팔지 / 지금 브랜치 이어서 팔지" 라는 세션 수준
+   *      질문에만 답한다 — 이 질문은 커밋 메시지·자동 푸시 체크박스와 같은
+   *      "세션당 한 번만 정하는 세팅" 층위이므로, 시각적 위계를 그 둘과 맞춘다.
+   *   2) card-idle-border 는 --branch-strategy-card-idle-border 와 같은 값을
+   *      복제해 4전략 시안과 A/B 비교 시 테두리 무게가 동일하도록 한다.
+   *   3) prefix-chip 은 접두사 규칙(feature/ · fix/ · chore/ · docs/) 힌트칩
+   *      전용. --branch-strategy-chip-bg 보다 약간 높은 불투명도로 "힌트이되
+   *      클릭 가능한 실체" 임을 시사한다(추후 클릭 삽입 인터랙션 여지).
+   *   4) hint-fg 는 모드별 설명 줄의 mute 톤. white/55% 고정 — 상단 "위험도는
+   *      실행 시 영향 범위에 따라 색으로 구분" 문구 톤과 일치.
+   *
+   * 대비: 패널 배경(#0f3460) 기준 card-active-border 는 4.9:1, prefix-chip-fg
+   *       는 4.6:1, hint-fg 는 3.2:1(AA large) — 모든 값이 의도된 계층 유지.
+   */
+  --branch-mode-card-idle-border: rgba(255, 255, 255, 0.18);
+  --branch-mode-card-active-border: #00d4ff;
+  --branch-mode-card-active-bg: rgba(0, 210, 255, 0.08);
+  --branch-mode-prefix-chip-bg: rgba(255, 255, 255, 0.08);
+  --branch-mode-prefix-chip-fg: #b6eaff;
+  --branch-mode-prefix-chip-border: rgba(0, 210, 255, 0.35);
+  --branch-mode-hint-fg: rgba(255, 255, 255, 0.55);
+  --branch-mode-continue-accent: #34d399;
+
+  /* ── Git 자동화 파이프라인·로그 뷰어 디자인 토큰 (2026-04-18) ─────────────
+   * 목적: AgentStatusPanel 의 `.git-auto-stages*` 배지와 신규 Git 자동화 로그
+   * 뷰어(`.git-auto-log*`) 가 동일한 단계 팔레트를 공유하게 한다. 기존
+   * `.git-auto-stages__badge[data-state]` 규칙은 같은 값을 리터럴로 박아 쓰고
+   * 있어, 후속 PR 에서 이 토큰으로 치환하면 중복 제거가 가능하다(이번 PR 에서는
+   * 렌더 회귀 방지를 위해 리터럴을 남겨 두고 토큰만 선-도입).
+   *
+   * 단계 의미:
+   *   idle     — 대기. 점선 테두리 + muted. "아직 실행 신호 없음".
+   *   running  — 실행중. 파랑 톤 + 느린 펄스(glow). "지금 돌고 있음".
+   *   success  — 성공. emerald. "최근 실행이 정상 종료됨".
+   *   failed   — 실패. red + 강한 펄스. "사용자 조치 필요".
+   *
+   * 대비: gray-900 배경 대비 running/success/failed 모두 4.5:1 이상(AA 본문),
+   *       idle 은 3.1:1(AA large) — muted 의도적 낮춤.
+   */
+  --git-stage-idle-border: rgba(255, 255, 255, 0.25);
+  --git-stage-idle-bg: rgba(255, 255, 255, 0.04);
+  --git-stage-idle-fg: rgba(255, 255, 255, 0.55);
+
+  --git-stage-running-border: #60a5fa;
+  --git-stage-running-bg: rgba(96, 165, 250, 0.12);
+  --git-stage-running-fg: #bfdbfe;
+  --git-stage-running-glow: rgba(96, 165, 250, 0.5);
+
+  --git-stage-success-border: #34d399;
+  --git-stage-success-bg: rgba(52, 211, 153, 0.12);
+  --git-stage-success-fg: #6ee7b7;
+
+  --git-stage-failed-border: #f87171;
+  --git-stage-failed-bg: rgba(248, 113, 113, 0.14);
+  --git-stage-failed-fg: #fecaca;
+  --git-stage-failed-glow: rgba(248, 113, 113, 0.55);
+
+  /* 로그 뷰어 전용 토큰 — 타임스탬프, 해시/브랜치 칩, 복사 버튼, 오류 펼침.
+   * 컨테이너는 카드 톤(--pixel-card) 위에 얹히므로 칩 배경은 살짝 진한
+   * rgba(0,0,0,0.32) 로 고정해 단계 배지와 구분 가능한 층을 만든다. */
+  --git-log-row-bg: rgba(0, 0, 0, 0.28);
+  --git-log-row-hover-bg: rgba(0, 0, 0, 0.42);
+  --git-log-divider: rgba(255, 255, 255, 0.08);
+
+  --git-log-timestamp-fg: rgba(255, 255, 255, 0.8);   /* 상대 시각 — 본문 톤 */
+  --git-log-timestamp-abs-fg: rgba(255, 255, 255, 0.45); /* 절대 시각 — 보조 */
+
+  --git-log-hash-fg: #a7f3d0;
+  --git-log-hash-bg: rgba(52, 211, 153, 0.08);
+  --git-log-hash-border: rgba(52, 211, 153, 0.35);
+
+  --git-log-branch-fg: #bfdbfe;
+  --git-log-branch-bg: rgba(96, 165, 250, 0.1);
+  --git-log-branch-border: rgba(96, 165, 250, 0.38);
+
+  --git-log-copy-border: rgba(255, 255, 255, 0.22);
+  --git-log-copy-fg: rgba(255, 255, 255, 0.6);
+  --git-log-copy-hover-bg: rgba(0, 210, 255, 0.12);
+  --git-log-copy-hover-fg: var(--pixel-accent);
+  --git-log-copy-success-fg: #6ee7b7;
+  --git-log-copy-success-border: #34d399;
+
+  --git-log-error-fg: #fecaca;
+  --git-log-error-collapsed-bg: rgba(248, 113, 113, 0.08);
+  --git-log-error-expanded-bg: rgba(248, 113, 113, 0.14);
+  --git-log-error-border: rgba(248, 113, 113, 0.45);
+
+  /* ── Git 자동화 경고 배너 토큰 (2026-04-18) ───────────────────────────────
+   * AgentStatusPanel 의 파이프라인 상단, AgentContextBubble 의 머리 위 말풍선
+   * 내부에 공용으로 얹는 배너. "커밋이 안 됐다" 를 초점 이동 없이 인지시키는
+   * 것이 목표. 두 톤만 둔다:
+   *   failure       — 단계 실패. red + 강한 대비, 아이콘 ✕
+   *   not-triggered — 자동화 흔적 자체가 없음. amber + 중립 대비, 아이콘 !
+   * 성공 톤은 의도적으로 두지 않았다 — 단계 배지만으로 충분하며, 성공 때 배너가
+   * 또 뜨면 "정상인데도 시선이 낚이는" 가짜 경보가 된다. */
+  --git-alert-failure-border: var(--git-stage-failed-border);
+  --git-alert-failure-bg: rgba(248, 113, 113, 0.18);
+  --git-alert-failure-fg: #fecaca;
+  --git-alert-failure-icon: #fca5a5;
+  --git-alert-failure-glow: rgba(248, 113, 113, 0.45);
+
+  --git-alert-not-triggered-border: rgba(250, 204, 21, 0.55);
+  --git-alert-not-triggered-bg: rgba(250, 204, 21, 0.12);
+  --git-alert-not-triggered-fg: #fde68a;
+  --git-alert-not-triggered-icon: #facc15;
 }
 
 * {
@@ -56,6 +273,37 @@ body {
   background-color: var(--pixel-bg);
   color: var(--pixel-white);
   font-family: var(--font-game);
+}
+
+/* ── 한국어 내러티브 텍스트 가독성 유틸리티 (2026-04-18 Thanos 수요 기반) ──────
+ * 에이전트 메시지·페르소나·태스크 설명처럼 '읽히는' 텍스트에만 선택적으로 붙인다.
+ * UI 크롬(버튼/탭/칩 라벨) 은 그대로 --font-game 을 유지해 픽셀/아케이드 톤을 깨지 않는다.
+ *
+ *  - font-family: Pretendard 가 있으면 그것을, 없으면 Apple SD Gothic Neo / Malgun 폴백.
+ *    monospace 섞일 때 한·영 x-height 가 튀는 문제를 줄인다.
+ *  - word-break: keep-all — 한국어 문장이 "낱말" 단위로 줄바꿈되게 강제. Latin 단어 중간에서
+ *    깨지는 회귀는 overflow-wrap: anywhere 로 함께 처리(URL/파일명 예외 케이스 방어).
+ *  - letter-spacing: -0.005em — Pretendard 기본이 약간 헐겁게 느껴져 미세 수축.
+ *    Latin 숫자/기호에도 안전한 범위.
+ *  - line-height: 1.55 — 줄간 여유. 10~12px 소형 본문에서 한·영 혼용 시 눌림을 완화.
+ *  - font-feature-settings: 'palt' — Pretendard 가 로드된 경우에만 효과적으로 작용,
+ *    한글 프로포셔널 커닝으로 영문·기호 사이 공백을 자연스럽게 닫는다. */
+.kr-msg {
+  font-family: var(--font-kr);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  letter-spacing: -0.005em;
+  line-height: 1.55;
+  font-feature-settings: 'palt';
+}
+
+/* 라벨·칩처럼 짧은 한국어는 줄간 여유보다 '자간 정상화'가 우선이다.
+ * tracking-wider 가 Latin 에 적용된 배경에서 한국어만 떠 보이지 않게 letter-spacing 을
+ * 다시 0 에 가깝게 당기고, line-height 도 라벨 높이에 맞춰 짧게 둔다. */
+.kr-label {
+  font-family: var(--font-kr);
+  letter-spacing: 0;
+  line-height: 1.3;
 }
 
 .infinite-grid {
@@ -364,6 +612,687 @@ body {
     animation: none;
   }
   .git-auto-summary__tip {
+    transition: none;
+  }
+}
+
+/* ── Git 자동화 단계별 진행 인디케이터 (2026-04-18 디자이너 정의) ─────
+ * commit → push → pr 3단계 파이프라인을 배지 + 커넥터 + 재시도 버튼 한 줄로
+ * 표현한다. 톤 팔레트는 git-auto-summary 의 safe/remote/pr 와 의도적으로
+ * 분리 — 이쪽은 "현재 실행 결과" 이므로 success/failed 중심의 이원적 색이
+ * 우선이다.
+ *
+ *   .git-auto-stages               컨테이너 (border + title + list)
+ *   .git-auto-stages__item         단일 단계 셀 (배지 + 재시도 버튼)
+ *   .git-auto-stages__badge        배지. data-state 로 톤 전환
+ *     data-state="idle"            중립(흐린 회색, 테두리 점선)
+ *     data-state="running"         accent(파랑) + 느린 펄스
+ *     data-state="success"         emerald(진초록)
+ *     data-state="failed"          red(진홍) + 강조 펄스
+ *   .git-auto-stages__connector    단계 사이 얇은 선. prev-state 색 상속.
+ *   .git-auto-retry                실패 시에만 노출되는 재시도 버튼.
+ *                                  hover/focus/active 피드백이 단계마다 동일.
+ */
+.git-auto-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background-color: rgba(0, 0, 0, 0.32);
+  border: 2px solid var(--pixel-border);
+  border-left-width: 6px;
+  font-family: var(--font-game);
+  transition: border-color 140ms ease-out;
+}
+
+.git-auto-stages.git-auto-stages--running { border-left-color: #60a5fa; }
+.git-auto-stages.git-auto-stages--failed  { border-left-color: #f87171; }
+.git-auto-stages:not(.git-auto-stages--running):not(.git-auto-stages--failed) {
+  border-left-color: #34d399;
+}
+
+.git-auto-stages__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.git-auto-stages__title {
+  color: rgba(255, 255, 255, 0.75);
+  font-weight: 700;
+}
+
+.git-auto-stages__summary {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 9px;
+}
+
+.git-auto-stages.git-auto-stages--running .git-auto-stages__summary { color: #93c5fd; }
+.git-auto-stages.git-auto-stages--failed  .git-auto-stages__summary { color: #fca5a5; }
+
+.git-auto-stages__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 4px;
+}
+
+.git-auto-stages__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.git-auto-stages__connector {
+  display: inline-block;
+  width: 16px;
+  height: 2px;
+  background-color: rgba(255, 255, 255, 0.2);
+  flex-shrink: 0;
+}
+
+.git-auto-stages__connector[data-prev-state="success"] { background-color: #34d399; }
+.git-auto-stages__connector[data-prev-state="running"] { background-color: #60a5fa; }
+.git-auto-stages__connector[data-prev-state="failed"]  { background-color: #f87171; }
+
+.git-auto-stages__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  background-color: rgba(255, 255, 255, 0.04);
+  font-size: 10px;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  transition: border-color 140ms ease-out, background-color 140ms ease-out,
+    color 140ms ease-out;
+}
+
+/* ── QA 검증 매트릭스 — GitAutomationStageBadge 단계·상태 시각 스펙 ─────
+ * (2026-04-18 디자이너: 자동 커밋/푸시 진행 상태 가시성 강화)
+ *
+ * 입력 축(stage × state) 과 기대 시각을 표로 고정한다. 개발자가 파이프라인
+ * 로직(`deriveBadgeStateFromLog` in GitAutomationStageBadge.tsx)을 수정한 뒤,
+ * 이 표와 UI 스크린샷을 대조해 "올바른 단계·상태가 실제 렌더됐는가" 를
+ * 한 페이지에서 검증할 수 있게 한다. 세 호스트(AgentStatusPanel,
+ * AgentContextBubble, GitAutomationPanel) 모두 같은 뱃지를 사용하므로 시각
+ * 스펙은 단일 진원(index.css) 에서만 관리한다.
+ *
+ *   stage   │ idle(대기)        │ running(실행중)     │ success(성공)      │ failed(실패)
+ *   ────────┼───────────────────┼─────────────────────┼────────────────────┼─────────────────────
+ *   commit  │ ○ 자동 커밋 대기   │ ◔ 자동 커밋 실행중 │ ◉ 자동 커밋 성공   │ ✕ 자동 커밋 실패
+ *   push    │ ○ 원격 푸시 대기   │ ◔ 원격 푸시 실행중 │ ◉ 원격 푸시 성공   │ ✕ 원격 푸시 실패
+ *   pr      │ ○ PR 생성 대기     │ ◔ PR 생성 실행중    │ ◉ PR 생성 성공     │ ✕ PR 생성 실패
+ *
+ * 톤(토큰: --git-stage-*):
+ *   idle    — 점선 테두리, 본문 투명도 55%.  "아직 시작 안 함" 조용한 상태.
+ *   running — 파랑 실선 + 느린 펄스(1.4s).  "지금 돌고 있음" 의 활성 신호.
+ *   success — emerald 실선.                  "정상 종료" — 펄스 없음(정적 확정).
+ *   failed  — red 실선 + 빠른 펄스(1.2s) + inset 보조 outline + 강한 glow.
+ *             "사용자 조치 필요" — 화면에서 가장 먼저 읽히도록 의도적으로 과장.
+ *
+ * 실패 상태 가시성 규약(중요):
+ *   1) 배지 자체 border 를 다른 상태와 동일한 2px 로 두되, box-shadow 로
+ *      inset 1px 보조 outline + 2px outer halo 를 겹쳐 "두꺼워 보이는"
+ *      인상을 만든다. 실제 레이아웃 폭은 그대로 유지돼 컴팩트 변형에서도
+ *      줄 넘침이 발생하지 않는다.
+ *   2) 글리프(✕) 는 성공(◉) 대비 채도를 한 단계 올리고 font-weight 700 으로
+ *      강조한다.
+ *   3) 펄스 주기는 running(1.4s) 보다 짧은 1.2s 로 두어 두 상태가 같은 화면에
+ *      있을 때 "실패 쪽이 더 급하게 움직인다" 를 암시한다.
+ *   4) prefers-reduced-motion 사용자에게는 모든 애니메이션을 정지하되, failed
+ *      상태의 glow(정적) 는 유지해 톤만으로도 눈에 띄게 한다.
+ *
+ * 접근성:
+ *   - 배지 래퍼는 `aria-label="{stage} {state}"` 를 이미 컴포넌트에서 부여.
+ *   - title 속성이 단계·상태·에러·브랜치·커밋·PR URL 요약을 제공.
+ *   - 색 외에도 글리프(○/◔/◉/✕) 로 상태를 구분하므로 색각 이상 사용자에게도
+ *     동일한 정보가 전달된다.
+ */
+.git-auto-stages__badge[data-state="idle"] {
+  border-style: dashed;
+  border-color: var(--git-stage-idle-border);
+  background-color: var(--git-stage-idle-bg);
+  color: var(--git-stage-idle-fg);
+}
+
+.git-auto-stages__badge[data-state="running"] {
+  border-color: var(--git-stage-running-border);
+  background-color: var(--git-stage-running-bg);
+  color: var(--git-stage-running-fg);
+  animation: git-auto-stage-run 1.4s ease-in-out infinite;
+}
+
+.git-auto-stages__badge[data-state="success"] {
+  border-color: var(--git-stage-success-border);
+  background-color: var(--git-stage-success-bg);
+  color: var(--git-stage-success-fg);
+}
+
+.git-auto-stages__badge[data-state="failed"] {
+  border-color: var(--git-stage-failed-border);
+  background-color: var(--git-stage-failed-bg);
+  color: var(--git-stage-failed-fg);
+  /* inset 1px 보조 outline + 2px outer halo 로 "두꺼운 테두리" 인상을 준다.
+   * 실제 border 는 2px 로 유지되어 레이아웃 폭은 다른 상태와 동일. */
+  box-shadow:
+    inset 0 0 0 1px var(--git-stage-failed-border),
+    0 0 0 2px rgba(248, 113, 113, 0.22);
+  animation: git-auto-stage-fail 1.2s ease-in-out infinite;
+}
+
+/* 실패 상태 글리프(✕) 는 성공·실행중 대비 더 무겁게 표기해 "조치 필요" 가
+ * 단어("실패") 를 읽기 전에 먼저 시선에 들어오게 한다. */
+.git-auto-stages__badge[data-state="failed"] .git-auto-stages__glyph {
+  font-weight: 700;
+  color: #fee2e2;
+  text-shadow: 0 0 6px rgba(248, 113, 113, 0.55);
+}
+
+.git-auto-stages__glyph {
+  display: inline-block;
+  width: 10px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.git-auto-stages__badge-label {
+  font-weight: 700;
+}
+
+.git-auto-stages__badge-state {
+  opacity: 0.75;
+  font-size: 9px;
+}
+
+/* 컴팩트 변형 — AgentContextBubble 같은 좁은 호스트에서 3단계 뱃지를 한 줄로
+ * 붙이기 위한 축약 폼. 라벨은 숨기지 않고 폰트·간격을 한 단계 줄여 접근성
+ * (글리프 전용 뱃지가 아니라 텍스트도 함께 읽힌다) 을 유지한다. */
+.git-auto-stages__badge--compact {
+  padding: 2px 5px;
+  gap: 4px;
+  font-size: 9px;
+}
+.git-auto-stages__badge--compact .git-auto-stages__badge-label {
+  font-size: 9px;
+  max-width: 48px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-auto-stages__badge--compact .git-auto-stages__badge-state {
+  font-size: 8px;
+}
+
+/* AgentContextBubble 하단에 붙는 3단계 뱃지 스트립. 200px 버블 폭에 세 배지를
+ * 균등 분포시키고, 줄바꿈이 필요할 만큼 좁아지면 wrap 으로 두 줄까지 허용한다. */
+.git-auto-bubble-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.15);
+}
+
+.git-auto-stages__error {
+  margin-left: 4px;
+  padding: 2px 6px;
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  background-color: rgba(248, 113, 113, 0.08);
+  color: #fecaca;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes git-auto-stage-run {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.5); }
+  50%      { box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15); }
+}
+
+@keyframes git-auto-stage-fail {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.55); }
+  50%      { box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.2); }
+}
+
+/* 재시도 버튼 — 실패 단계 옆에서만 나타남.
+ * hover: 테두리/배경 강조, focus-visible: 2px ring, active: 짧은 눌림,
+ * disabled(재시도 중): 회색+스피너 글리프 회전. 체감 피드백이 단계/패널에
+ * 걸쳐 일관되도록 여기서만 정의한다. */
+.git-auto-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  padding: 3px 8px;
+  border: 2px solid #f87171;
+  background-color: rgba(248, 113, 113, 0.08);
+  color: #fca5a5;
+  font-family: var(--font-game);
+  font-size: 10px;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: transform 100ms ease-out, background-color 140ms ease-out,
+    border-color 140ms ease-out, color 140ms ease-out,
+    box-shadow 140ms ease-out;
+}
+
+.git-auto-retry:hover {
+  background-color: rgba(248, 113, 113, 0.18);
+  border-color: #fecaca;
+  color: #fee2e2;
+  box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.25);
+}
+
+.git-auto-retry:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--pixel-accent), 0 0 0 4px rgba(248, 113, 113, 0.3);
+}
+
+.git-auto-retry:active {
+  transform: translateY(1px);
+  background-color: rgba(248, 113, 113, 0.26);
+}
+
+.git-auto-retry[data-retrying="true"],
+.git-auto-retry:disabled {
+  cursor: wait;
+  border-color: rgba(255, 255, 255, 0.3);
+  background-color: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.55);
+  animation: git-auto-retry-spin 1.2s linear infinite;
+}
+
+@keyframes git-auto-retry-spin {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.1); }
+  50%      { box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .git-auto-stages__badge,
+  .git-auto-retry,
+  .git-auto-retry[data-retrying="true"] {
+    animation: none;
+  }
+  .git-auto-stages[data-reduced-motion="true"] .git-auto-stages__badge[data-state="running"],
+  .git-auto-stages[data-reduced-motion="true"] .git-auto-stages__badge[data-state="failed"] {
+    animation: none;
+  }
+}
+
+/* ── AutoFlowProgressBar (2026-04-18 메타 루프 진행 표시줄) ─────────────
+ * 개선 보고 → 리더 재분배 → 전원 완료 → Git 자동화 발동 4단계.
+ * GitAutomationStageRow 헤더 바로 아래에 얹혀, "Git 자동화 파이프라인"
+ * 내부 3단계(commit/push/pr)가 왜 대기/진행 중인지 한 단계 위 맥락에서
+ * 읽히게 한다. 데이터 스키마는 commit/push/pr 와 분리(state: idle/running/done/failed).
+ *
+ *   .auto-flow-progress                 래퍼 <ol>. data-all-done="true" 시 글로우.
+ *   .auto-flow-progress__step           단일 단계 셀. data-stage + data-state 로 톤 전환.
+ *     data-state="idle"                 회색 점선 — 아직 도달하지 않음.
+ *     data-state="running"              파랑 + 느린 펄스 — 현재 단계.
+ *     data-state="done"                 초록 — 이미 완료.
+ *     data-state="failed"               적색 + 펄스 — 단계 실패 (리더 개입 필요).
+ *   .auto-flow-progress__connector      단계 간 얇은 선. 앞 단계 상태 색을 상속.
+ *
+ * 마지막 단계 data-stage="git" 이 done 으로 진입하는 순간,
+ * auto-flow-progress[data-all-done="true"] 셀렉터가 활성화되어 Git 자동화
+ * 패널이 "지금 발동했다" 는 느낌의 emerald 글로우 애니메이션을 돌린다.
+ */
+.auto-flow-progress {
+  list-style: none;
+  margin: 0;
+  padding: 6px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 2px;
+  background-color: rgba(0, 0, 0, 0.24);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  font-family: var(--font-game);
+  transition: border-color 160ms ease-out, box-shadow 160ms ease-out,
+    background-color 160ms ease-out;
+}
+
+.auto-flow-progress[data-any-failed="true"] {
+  border-color: rgba(248, 113, 113, 0.55);
+  background-color: rgba(248, 113, 113, 0.06);
+}
+
+.auto-flow-progress[data-git-activated="true"] {
+  border-color: rgba(96, 165, 250, 0.6);
+  background-color: rgba(96, 165, 250, 0.06);
+}
+
+.auto-flow-progress[data-all-done="true"] {
+  border-style: solid;
+  border-color: #34d399;
+  background-color: rgba(52, 211, 153, 0.1);
+  animation: auto-flow-activate 1.6s ease-out;
+}
+
+.auto-flow-progress__step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  margin: 0;
+}
+
+.auto-flow-progress__connector {
+  display: inline-block;
+  width: 14px;
+  height: 2px;
+  background-color: rgba(255, 255, 255, 0.2);
+  flex-shrink: 0;
+  transition: background-color 160ms ease-out;
+}
+
+.auto-flow-progress__connector[data-prev-state="running"] { background-color: #60a5fa; }
+.auto-flow-progress__connector[data-prev-state="done"]    { background-color: #34d399; }
+.auto-flow-progress__connector[data-prev-state="failed"]  { background-color: #f87171; }
+
+.auto-flow-progress__body {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  background-color: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 10px;
+  line-height: 1;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: border-color 160ms ease-out, background-color 160ms ease-out,
+    color 160ms ease-out, box-shadow 160ms ease-out;
+}
+
+.auto-flow-progress__step[data-state="idle"] .auto-flow-progress__body {
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.22);
+  color: rgba(255, 255, 255, 0.5);
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.auto-flow-progress__step[data-state="running"] .auto-flow-progress__body {
+  border-color: #60a5fa;
+  background-color: rgba(96, 165, 250, 0.14);
+  color: #bfdbfe;
+  animation: auto-flow-pulse-running 1.4s ease-in-out infinite;
+}
+
+.auto-flow-progress__step[data-state="done"] .auto-flow-progress__body {
+  border-color: #34d399;
+  background-color: rgba(52, 211, 153, 0.14);
+  color: #6ee7b7;
+}
+
+.auto-flow-progress__step[data-state="failed"] .auto-flow-progress__body {
+  border-color: #f87171;
+  background-color: rgba(248, 113, 113, 0.14);
+  color: #fecaca;
+  animation: auto-flow-pulse-failed 1.2s ease-in-out infinite;
+}
+
+/* 단계별 시각 힌트: data-stage 에 따른 고유 악센트 색(아이콘만).
+ * 상태 색상을 해치지 않도록 글리프 색은 기본을 상속하되, idle 일 때만
+ * stage 고유 색을 보조로 깜빡여 "어느 단계인지" 먼저 읽히게 한다. */
+.auto-flow-progress__step[data-stage="report"][data-state="idle"] .auto-flow-progress__glyph {
+  color: #fcd34d; /* amber — 보고서 작성 */
+}
+.auto-flow-progress__step[data-stage="redistribute"][data-state="idle"] .auto-flow-progress__glyph {
+  color: #c4b5fd; /* violet — 리더 지시 */
+}
+.auto-flow-progress__step[data-stage="complete"][data-state="idle"] .auto-flow-progress__glyph {
+  color: #86efac; /* green — 팀 완료 */
+}
+.auto-flow-progress__step[data-stage="git"][data-state="idle"] .auto-flow-progress__glyph {
+  color: #7dd3fc; /* sky — git 자동화 */
+}
+
+.auto-flow-progress__glyph {
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.auto-flow-progress__label {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.auto-flow-progress__state {
+  opacity: 0.65;
+  font-size: 9px;
+}
+
+/* 컴팩트 변형 — AgentContextBubble 처럼 좁은 호스트용. 라벨은 숨기지 않고
+ * 상태 텍스트만 접어 줄바꿈 없이 4단계가 한 줄에 들어오도록 한다. */
+.auto-flow-progress--compact {
+  padding: 4px 6px;
+  gap: 2px;
+}
+
+.auto-flow-progress--compact .auto-flow-progress__body {
+  padding: 2px 5px;
+  font-size: 9px;
+  gap: 3px;
+}
+
+.auto-flow-progress--compact .auto-flow-progress__state {
+  display: none;
+}
+
+.auto-flow-progress--compact .auto-flow-progress__connector {
+  width: 8px;
+}
+
+@keyframes auto-flow-pulse-running {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.55); }
+  50%      { box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.18); }
+}
+
+@keyframes auto-flow-pulse-failed {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.6); }
+  50%      { box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.22); }
+}
+
+/* 4단계가 모두 done 으로 진입했을 때 1회성으로 터지는 활성화 글로우.
+ * 컨테이너 자체를 짧게 확장→수축시켜 "Git 자동화가 방금 발동했다" 를 전달.
+ * 한 루프에 한 번만 재생되며 이후에는 정적 emerald 테두리가 유지된다. */
+@keyframes auto-flow-activate {
+  0% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.0);
+    transform: scale(1);
+  }
+  40% {
+    box-shadow: 0 0 0 6px rgba(52, 211, 153, 0.28);
+    transform: scale(1.012);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.0);
+    transform: scale(1);
+  }
+}
+
+/* 루프 완료 순간 바로 아래 git-auto-stages 패널에도 "활성화" 글로우를 전달한다.
+ * AutoFlowProgressBar 는 git-auto-stages 컨테이너 내부 첫 자식 위치에 놓이므로,
+ * 형제 셀렉터(+) 로 ol.list 에 닿지 못한다. 대신 data-all-done="true" 를 상위
+ * 컨테이너로 끌어올리고 싶지 않기 때문에, 여기서는 :has() 셀렉터로
+ * "all-done 진행바를 품은 git-auto-stages" 를 부드럽게 강조한다. */
+.git-auto-stages:has(.auto-flow-progress[data-all-done="true"]) {
+  border-left-color: #34d399;
+  animation: git-auto-panel-activate 1.8s ease-out;
+}
+
+@keyframes git-auto-panel-activate {
+  0%   { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.0); }
+  35%  { box-shadow: 0 0 18px 2px rgba(52, 211, 153, 0.35); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auto-flow-progress,
+  .auto-flow-progress[data-all-done="true"],
+  .auto-flow-progress__step[data-state="running"] .auto-flow-progress__body,
+  .auto-flow-progress__step[data-state="failed"] .auto-flow-progress__body,
+  .git-auto-stages:has(.auto-flow-progress[data-all-done="true"]) {
+    animation: none;
+  }
+}
+
+/* ── 리더 메시지 구분 (2026-04-18 디자이너 정의) ──────────────────────
+ * 사용자가 "리더가 업무를 분배했는가 / 답변만 하고 끝냈는가" 를 한 눈에
+ * 구분할 수 있도록, AgentContextBubble·AgentStatusPanel·AgentStatusSnapshot
+ * 모두 동일한 leader-msg 프리미티브를 재사용한다.
+ *
+ *   .leader-msg                     라인/말풍선 래퍼. data-leader-kind 로 톤 전환.
+ *     [data-leader-kind="delegate"]   강조 배경(파랑) + 좌측 두꺼운 바 + 화살표 아이콘
+ *     [data-leader-kind="reply"]      연한 배경(시안) + 점선 바 + 말풍선 아이콘
+ *     [data-leader-kind="plain"]      기본 중립 톤(기존 스타일 보존)
+ *   .leader-msg__icon               앞쪽 8px 글리프. 색은 data-leader-kind 에서 상속.
+ *
+ * 톤 근거:
+ *   - delegate 는 실행 영향이 크므로 accent 블루 계열로 시선을 먼저 잡는다.
+ *   - reply 는 정보 전달에 그치므로 EmptyProjectPlaceholder 톤(시안 연한 배경) 과
+ *     의도적으로 맞춰, "큰일은 아님" 을 색으로 전달한다.
+ *   - plain 은 과거 메시지(텍스트만) 와 동일한 중립 톤을 유지해 회귀를 방지한다.
+ */
+.leader-msg {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 8px;
+  border-left: 3px solid transparent;
+  font-family: var(--font-game);
+  transition: background-color 120ms ease-out, border-color 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.leader-msg__icon {
+  display: inline-block;
+  min-width: 10px;
+  text-align: center;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.leader-msg[data-leader-kind="delegate"] {
+  background-color: rgba(96, 165, 250, 0.18);
+  border-left-color: #60a5fa;
+  color: #dbeafe;
+}
+
+.leader-msg[data-leader-kind="delegate"] .leader-msg__icon {
+  color: #93c5fd;
+}
+
+.leader-msg[data-leader-kind="reply"] {
+  background-color: rgba(0, 210, 255, 0.08);
+  border-left: 3px dashed rgba(0, 210, 255, 0.55);
+  color: rgba(191, 232, 243, 0.92);
+}
+
+.leader-msg[data-leader-kind="reply"] .leader-msg__icon {
+  color: var(--pixel-accent);
+}
+
+.leader-msg[data-leader-kind="plain"] {
+  background-color: transparent;
+  border-left-color: rgba(255, 255, 255, 0.12);
+  color: inherit;
+}
+
+.leader-msg[data-leader-kind="plain"] .leader-msg__icon {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+/* Snapshot 에 들어가는 "분배/답변" 요약 행. 공통 leader-msg 톤을 그대로 상속하되
+ * 작은 칩 형태로 압축한다. */
+.leader-msg-mix {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-top: 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.leader-msg-mix__label {
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 700;
+}
+
+.leader-msg-mix__chip {
+  padding: 2px 6px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+/* Context bubble 의 빈 상태 — EmptyProjectPlaceholder 일러스트 톤과 동일한
+ * 시안 accent + 연한 배경 + 부드러운 펄스를 공유해, 패널 간 "대기" 의미가
+ * 한 시선 안에서 연결되도록 한다. */
+.context-bubble-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px dashed rgba(0, 210, 255, 0.45);
+  background-color: rgba(0, 210, 255, 0.06);
+  color: var(--pixel-accent);
+  font-family: var(--font-game);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  box-shadow: 0 0 10px rgba(0, 210, 255, 0.18);
+  animation: context-bubble-empty-pulse 3.6s ease-in-out infinite;
+}
+
+.context-bubble-empty__icon {
+  display: inline-block;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--pixel-accent);
+  text-shadow: 0 0 6px rgba(0, 210, 255, 0.55);
+}
+
+.context-bubble-empty__label {
+  opacity: 0.8;
+}
+
+@keyframes context-bubble-empty-pulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(0, 210, 255, 0.18); opacity: 1; }
+  50%      { box-shadow: 0 0 18px rgba(0, 210, 255, 0.35); opacity: 0.88; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .context-bubble-empty {
+    animation: none;
+  }
+  .leader-msg {
     transition: none;
   }
 }
@@ -818,6 +1747,38 @@ body {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.55);
+}
+
+/* activeScope 로 지정된 배지 — "사용자가 접근하려던 메뉴" 를 accent 실선 + 내부
+ * 글로우 + 가중치 700 으로 강조해 다른 점선 배지들 사이에서 즉시 식별된다.
+ * scope-badge 기본 톤(점선 accent@0.35, 글자 white@0.55) 과의 대비로 주목도를
+ * 주고, .agent-status-badge[data-state="pending"] shimmer 와 구분하기 위해
+ * 애니메이션은 쓰지 않는다(정적 상태 표지). */
+.empty-project-placeholder__scope-badge[data-active="true"] {
+  border: 1px solid var(--pixel-accent);
+  background-color: rgba(0, 210, 255, 0.14);
+  color: #e6faff;
+  font-weight: 700;
+  box-shadow: 0 0 0 1px rgba(0, 210, 255, 0.35),
+    inset 0 0 6px rgba(0, 210, 255, 0.25);
+}
+
+/* 본문 바로 아래 "접근하려던 메뉴 · {라벨}" 한 줄 힌트. scope-badge 강조와
+ * 쌍을 이뤄 "왜 막혔는지" 를 같은 시선 범위에서 한 번 더 묶어 준다. scope-badge
+ * 보다 주목도가 조금 더 높아야 하므로 accent 글자 + 부드러운 이모지 없는 중간점
+ * 구분자를 쓴다. 말풍선 톤이 아닌 meta 수준이라 bold 한 글자만 강조한다. */
+.empty-project-placeholder__active-scope {
+  margin-top: 4px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pixel-accent);
+  opacity: 0.9;
+}
+
+.empty-project-placeholder__active-scope strong {
+  font-weight: 700;
+  color: #f0fbff;
 }
 
 @keyframes empty-project-placeholder-in {
@@ -1348,6 +2309,91 @@ body {
   .pm-editing-header.is-transitioning::before {
     animation: none;
   }
+}
+
+/* ── "편집 중 · 선택된 프로젝트 없음" 고정 라벨 규격 (2026-04-18 디자이너) ───
+ * 사용처: src/components/ProjectManagement.tsx 상단 <header>, 선택된 프로젝트가
+ *   없을 때 노출되는 두 토막 텍스트("편집 중" eyebrow + "선택된 프로젝트 없음"
+ *   placeholder)의 시각 결합 규약을 한곳에 고정한다.
+ *
+ * 설계 원칙:
+ *   1. 시각 무게 보존 — 선택 상태의 프로젝트명(14px / 700 / accent)과 미선택
+ *      상태의 placeholder(14px / 500 / white 0.55)는 같은 "자리(슬롯)" 에
+ *      렌더된다. 폰트 크기를 키우거나 색을 더 어둡게 내려 "비어 있는 느낌"을
+ *      과장하지 않는다 — 헤더의 무게 중심이 흔들리면 사용자가 "지금 내가
+ *      뭘 편집하는 중인가" 를 한 번 더 생각해야 하는 부담을 준다.
+ *   2. placeholder 톤 — color rgba(255,255,255,0.55), font-weight 500, italic.
+ *      비활성/입력 전 필드의 placeholder 와 동일한 톤이므로 사용자가 "값이
+ *      비어 있음" 으로 즉시 인식한다. accent 색 재사용은 금지(선택 상태와
+ *      오해 유발).
+ *   3. 구분자 — "편집 중" eyebrow 와 placeholder 를 한 줄로 압축하는
+ *      .pm-editing-header--compact 변형에서만 `·` (U+00B7, middle dot) 를
+ *      사용한다. "—" (em dash) 는 시각 무게가 커 미선택 상태의 낮은 톤과
+ *      충돌하므로 쓰지 않는다. 구분자 좌우 여백은 6px 고정(한글 한 글자
+ *      폭의 약 40%) — 좁으면 두 토막이 뭉치고 넓으면 "따로 놀아" 보인다.
+ *   4. 간격 — 기본(stacked) 레이아웃에서 eyebrow → title 수직 간격은 4px
+ *      (기존 `.pm-editing-header__eyebrow { margin: 0 0 4px }`). 컴팩트
+ *      변형에서는 수직 간격이 사라지는 대신 수평 gap 8px 로 대체한다.
+ *
+ * 접근성:
+ *   - 컴팩트 변형이어도 screen reader 는 "편집 중, 선택된 프로젝트 없음" 을
+ *     두 토막으로 읽게 해야 한다. `.pm-editing-header__separator` 는
+ *     `aria-hidden="true"` 로 마크업하고, 두 토막 사이에 comma 를 암시하도록
+ *     리더가 자연 포즈를 가질 수 있게 `<span>` 경계로 분리한다.
+ *   - 미선택 상태의 placeholder 톤은 rgba(255,255,255,0.55) 로 gray-900
+ *     배경 대비 4.6:1 — AA 본문 기준 충족.
+ */
+.pm-editing-header__label {
+  display: inline-flex;
+  align-items: baseline;
+  min-width: 0;
+  gap: 6px;
+}
+
+.pm-editing-header__placeholder {
+  font-family: var(--font-game);
+  font-size: 14px;
+  line-height: 1.2;
+  font-weight: 500;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.pm-editing-header__separator {
+  display: inline-block;
+  flex-shrink: 0;
+  margin: 0 6px;
+  font-family: var(--font-game);
+  font-size: 12px;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.35);
+  user-select: none;
+}
+
+/* 컴팩트 변형 — 헤더 폭이 좁거나 placeholder 만 렌더될 때, "편집 중 · 선택된
+ * 프로젝트 없음" 을 한 줄로 압축한다. 수직 스택(__eyebrow / __title) 을 쓰는
+ * 기본 레이아웃과는 상호 배타: 컴팩트가 켜지면 __title 의 마진/폭 규약이
+ * 유효하지 않으므로 아래 재정의로 eyebrow 의 하단 margin 을 0 으로 내린다. */
+.pm-editing-header--compact .pm-editing-header__eyebrow {
+  margin-bottom: 0;
+}
+
+.pm-editing-header--compact .pm-editing-header__label {
+  flex-wrap: nowrap;
+}
+
+/* placeholder 자리에 실제 프로젝트명이 들어올 때(선택 상태 복귀) 시각 무게가
+ * 급격히 변하지 않도록, 동일 슬롯에 .pm-editing-header__title 가 들어와도
+ * 같은 폰트 크기(14px)·라인하이트(1.2 근사)를 유지한다. font-weight 는
+ * 500 → 700 으로 올라가고 italic 이 제거되는 정도가 "상태 변화" 의 시그널. */
+.pm-editing-header--compact .pm-editing-header__title {
+  font-size: 14px;
+  line-height: 1.2;
 }
 
 /* ── 범용 스켈레톤 shimmer (2026-04-18 Joker) ─────────────────────────
@@ -2306,4 +3352,1049 @@ body {
   border: 1px solid rgba(0, 0, 0, 0.25);
   border-radius: 2px;
   font-variant-numeric: tabular-nums;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Git 자동화 로그 뷰어 시안 (2026-04-18 디자이너 정의)
+ *
+ * 목적: AgentStatusPanel 의 `.git-auto-stages` 파이프라인 배지(스냅샷) 옆에
+ * 최근 N회 실행 이력을 시간순으로 나열하는 로그 뷰어를 얹을 때 사용할 스타일.
+ * 단계 팔레트는 :root 의 --git-stage-* 토큰을 그대로 참조해 배지 한 종만
+ * 곳곳에 복사되지 않도록 한다.
+ *
+ * 구조 (각 로그 한 줄):
+ *   .git-auto-log__entry
+ *   ├── .git-auto-log__timestamp          — 상대 시각(주) + 절대 시각(보조)
+ *   ├── .git-auto-log__stage-pill         — data-state 로 단계 톤 전환
+ *   ├── .git-auto-log__meta               — 브랜치·커밋 해시 칩 묶음
+ *   │   ├── .git-auto-log__chip--branch   — `chore/auto-...`
+ *   │   └── .git-auto-log__chip--hash     — `abc1234`
+ *   │   └── .git-auto-log__copy           — 각 칩 오른쪽에 붙는 복사 버튼
+ *   └── .git-auto-log__error              — <details> 기반 펼침/접힘
+ *       └── summary 에 한 줄 요약, 열면 stderr 전문 <pre>
+ *
+ * 타임스탬프 표기 규약:
+ *   - 주 라벨: 상대 시각("방금 전", "3분 전", "2시간 전", "2일 전").
+ *     formatRelativeTime() 를 재사용해 패널 전역 표기와 일치시킨다.
+ *   - 보조 라벨: `2026-04-18 09:12:03` 형태의 절대 시각. 작은 글자 + muted.
+ *     aria-label 과 title 에도 절대 시각을 함께 실어 스크린리더/호버에서
+ *     모호성이 생기지 않게 한다.
+ *
+ * 복사 버튼 배치:
+ *   - 해시/브랜치 칩의 바로 오른쪽에 ghost 톤 버튼. hover 에서 accent 톤,
+ *     클릭 직후 1.8초간 success 톤(체크 글리프) 로 전환되어 "복사됨" 피드백.
+ *   - 복사 대상은 칩 본문(하이픈 포함 원문). 접근성 레이블은 "브랜치 복사",
+ *     "커밋 해시 복사" 로 단계 종류를 명시.
+ *
+ * 오류 펼침/접힘:
+ *   - <details><summary> 로 구현해 JS 없이 진입 가능. 기본은 접힘 상태.
+ *     summary 는 한 줄 라벨("자동화 실패 — git push ...") + 아이콘.
+ *     펼치면 stderr 전문 <pre> 가 나오며, 배경이 한 단계 진해지고
+ *     좌측 굵은 red 보더가 생겨 주의가 집중되도록 한다.
+ *   - 본문은 최대 6줄 + scroll (max-height: 9em) 로 레이아웃 점프 방지.
+ */
+
+.git-auto-log {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  background-color: var(--pixel-card);
+  border: 2px solid var(--pixel-border);
+  font-family: var(--font-game);
+}
+
+.git-auto-log__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.git-auto-log__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.git-auto-log__entry {
+  display: grid;
+  grid-template-columns: max-content max-content 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background-color: var(--git-log-row-bg);
+  border: 1px solid var(--git-log-divider);
+  transition: background-color 120ms ease-out;
+}
+
+.git-auto-log__entry:hover {
+  background-color: var(--git-log-row-hover-bg);
+}
+
+.git-auto-log__timestamp {
+  display: inline-flex;
+  flex-direction: column;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.git-auto-log__timestamp-rel {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--git-log-timestamp-fg);
+}
+
+.git-auto-log__timestamp-abs {
+  font-size: 9px;
+  color: var(--git-log-timestamp-abs-fg);
+}
+
+/* 단계 알약 — 배지와 동일 팔레트를 쓰되, 높이를 살짝 낮춰 로그 행에 맞춘다. */
+.git-auto-log__stage-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 2px solid var(--git-stage-idle-border);
+  background-color: var(--git-stage-idle-bg);
+  color: var(--git-stage-idle-fg);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1;
+}
+
+.git-auto-log__stage-pill[data-state="idle"] {
+  border-style: dashed;
+  border-color: var(--git-stage-idle-border);
+  background-color: var(--git-stage-idle-bg);
+  color: var(--git-stage-idle-fg);
+}
+
+.git-auto-log__stage-pill[data-state="running"] {
+  border-color: var(--git-stage-running-border);
+  background-color: var(--git-stage-running-bg);
+  color: var(--git-stage-running-fg);
+  animation: git-auto-log-pulse-run 1.4s ease-in-out infinite;
+}
+
+.git-auto-log__stage-pill[data-state="success"] {
+  border-color: var(--git-stage-success-border);
+  background-color: var(--git-stage-success-bg);
+  color: var(--git-stage-success-fg);
+}
+
+.git-auto-log__stage-pill[data-state="failed"] {
+  border-color: var(--git-stage-failed-border);
+  background-color: var(--git-stage-failed-bg);
+  color: var(--git-stage-failed-fg);
+  animation: git-auto-log-pulse-fail 1.2s ease-in-out infinite;
+}
+
+.git-auto-log__meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.git-auto-log__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-family: var(--font-game);
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--git-log-divider);
+  background-color: rgba(0, 0, 0, 0.2);
+  color: rgba(255, 255, 255, 0.75);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-auto-log__chip--branch {
+  color: var(--git-log-branch-fg);
+  background-color: var(--git-log-branch-bg);
+  border-color: var(--git-log-branch-border);
+}
+
+.git-auto-log__chip--hash {
+  color: var(--git-log-hash-fg);
+  background-color: var(--git-log-hash-bg);
+  border-color: var(--git-log-hash-border);
+}
+
+.git-auto-log__copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: 2px;
+  padding: 0;
+  border: 1px solid var(--git-log-copy-border);
+  background: transparent;
+  color: var(--git-log-copy-fg);
+  font-size: 10px;
+  cursor: pointer;
+  transition: background-color 120ms ease-out, color 120ms ease-out,
+    border-color 120ms ease-out;
+}
+
+.git-auto-log__copy:hover {
+  background-color: var(--git-log-copy-hover-bg);
+  color: var(--git-log-copy-hover-fg);
+  border-color: var(--pixel-accent);
+}
+
+.git-auto-log__copy:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--pixel-accent);
+}
+
+.git-auto-log__copy[data-copied="true"] {
+  color: var(--git-log-copy-success-fg);
+  border-color: var(--git-log-copy-success-border);
+}
+
+/* <details> 기반 오류 펼침/접힘. summary 의 기본 marker 는 감추고,
+ * ▶/▼ 글리프는 data-state 로 CSS 에서 주입해 한·영 OS 마커 차이를 없앤다. */
+.git-auto-log__error {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  padding: 0;
+  border: 1px solid var(--git-log-error-border);
+  background-color: var(--git-log-error-collapsed-bg);
+  color: var(--git-log-error-fg);
+  font-family: var(--font-game);
+  font-size: 10px;
+}
+
+.git-auto-log__error[open] {
+  background-color: var(--git-log-error-expanded-bg);
+  border-left-width: 4px;
+}
+
+.git-auto-log__error > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  user-select: none;
+}
+
+.git-auto-log__error > summary::-webkit-details-marker { display: none; }
+
+.git-auto-log__error > summary::before {
+  content: "▶";
+  display: inline-block;
+  width: 8px;
+  font-size: 8px;
+  transition: transform 120ms ease-out;
+}
+
+.git-auto-log__error[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.git-auto-log__error > pre {
+  margin: 0;
+  padding: 6px 10px;
+  max-height: 9em;
+  overflow: auto;
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background-color: rgba(0, 0, 0, 0.35);
+  border-top: 1px solid var(--git-log-error-border);
+}
+
+@keyframes git-auto-log-pulse-run {
+  0%, 100% { box-shadow: 0 0 0 0 var(--git-stage-running-glow); }
+  50%      { box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15); }
+}
+
+@keyframes git-auto-log-pulse-fail {
+  0%, 100% { box-shadow: 0 0 0 0 var(--git-stage-failed-glow); }
+  50%      { box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.2); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .git-auto-log__stage-pill[data-state="running"],
+  .git-auto-log__stage-pill[data-state="failed"] {
+    animation: none;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Git 자동화 경고 배너 (2026-04-18 디자이너 정의)
+ *
+ * 목적: 사용자가 "커밋이 안 됐다" 는 사실을 단계 배지 색만 살피지 않고도
+ * 즉시 인지하게 하는 최상단 배너. AgentStatusPanel 에서는 파이프라인 헤더
+ * 바로 아래에, AgentContextBubble 에서는 단계 뱃지 스트립 위에 인라인 한 줄로
+ * 얹는다. 두 표면 모두 같은 셀렉터를 써 CSS 계약을 단일화한다.
+ *
+ *   data-tone="failure"       — 실패. red 경보 + 좌측 강조 테두리.
+ *   data-tone="not-triggered" — 트리거 없음. amber 안내. 아이콘·문구만 다르다.
+ *
+ * --inline 변형은 컨텍스트 버블 안에서 쓸 때만 붙이며, 글자 크기/패딩을
+ * 한 단계 줄여 9px 본문 라인에 녹아들게 한다.
+ */
+.git-auto-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 2px solid var(--git-alert-failure-border);
+  border-left-width: 6px;
+  background-color: var(--git-alert-failure-bg);
+  color: var(--git-alert-failure-fg);
+  font-family: var(--font-kr);
+  font-size: 11px;
+  line-height: 1.45;
+  box-shadow: 0 0 0 0 var(--git-alert-failure-glow);
+  animation: git-auto-alert-pulse 1.6s ease-in-out infinite;
+}
+
+.git-auto-alert[data-tone="not-triggered"] {
+  border-color: var(--git-alert-not-triggered-border);
+  background-color: var(--git-alert-not-triggered-bg);
+  color: var(--git-alert-not-triggered-fg);
+  animation: none; /* 안내 톤은 펄스하지 않는다 — 경고와 심각도 구분. */
+}
+
+.git-auto-alert__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  border: 2px solid currentColor;
+  background-color: rgba(0, 0, 0, 0.25);
+  color: var(--git-alert-failure-icon);
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-game);
+  line-height: 1;
+}
+
+.git-auto-alert[data-tone="not-triggered"] .git-auto-alert__icon {
+  color: var(--git-alert-not-triggered-icon);
+}
+
+.git-auto-alert__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.git-auto-alert__title {
+  font-weight: 700;
+  letter-spacing: -0.005em;
+}
+
+.git-auto-alert__reason {
+  font-size: 10px;
+  opacity: 0.9;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* 머리 위 버블 내부 인라인 변형 — 공간이 좁아 한 줄로만 표시. */
+.git-auto-alert--inline {
+  padding: 3px 6px;
+  gap: 5px;
+  font-size: 9px;
+  line-height: 1.3;
+  border-left-width: 4px;
+  animation: none; /* 버블은 이미 움직임이 많아 여기선 펄스 생략. */
+}
+
+.git-auto-alert--inline .git-auto-alert__icon {
+  width: 12px;
+  height: 12px;
+  font-size: 8px;
+  margin-top: 0;
+  border-width: 1px;
+}
+
+.git-auto-alert--inline .git-auto-alert__title {
+  font-family: var(--font-game);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes git-auto-alert-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--git-alert-failure-glow); }
+  50%      { box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.18); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .git-auto-alert {
+    animation: none;
+  }
+}
+
+/* ── 오피스 플로어 사이드바 "현재 프로젝트" 영역 (2026-04-18 디자이너 정의) ─
+ * 목적: 사이드바 상단(워크스페이스 섹션 라벨 직하)에 "지금 어떤 프로젝트의
+ *       오피스 플로어를 보고 있는가" 를 한 눈에 식별할 수 있도록 단일 블록을
+ *       고정한다. 프로젝트 이름이 사라지면 사용자가 `selectedProjectId` 복원
+ *       직후 스켈레톤이 걷힌 찰나에 "어디에 있는지" 를 다시 찾게 된다.
+ *
+ * 시각 위계(위→아래):
+ *   1) "워크스페이스" 섹션 라벨 — 10px / tracking-wider / 약한 accent (현 구현 유지)
+ *   2) .sidebar-project__name — 14px / 700 / accent + 좌측 Briefcase 아이콘
+ *      ← "지금 위치" 를 알려주는 가장 뚜렷한 텍스트.
+ *   3) .sidebar-nav 버튼 (오피스 플로어 / 프로젝트 / 작업 / …) — 13px / 700 / border-2
+ *      탐색 메뉴. 프로젝트명 대비 -1px, accent 는 선택된 탭 테두리로만 사용.
+ *
+ * 즉 "프로젝트명 > 메뉴 버튼 > 섹션 라벨" 순으로 강조한다. font-weight 는
+ * 메뉴 버튼과 동일한 700 을 유지하되 색상·아이콘 pairing 으로 주목도를 더한다
+ * (사이즈를 너무 키우면 타이틀 카드처럼 보여 탐색 단위가 무너진다).
+ *
+ * 여백 규약: 사이드바 padding (p-4 = 16px) 기준으로 좌우 12px padding + 2px
+ * 테두리 = 좌우 14px inner offset. 메뉴 버튼의 p-3(=12px) 와 동일 hug 폭을
+ * 유지해 사이드바 리듬이 깨지지 않는다.
+ *
+ * 말줄임 규약: 사이드바 내부 가용 폭은 약 184px(220 - 16*2 - 4border). 한글
+ * 14px 기준 10~12자가 한 줄에 들어가며 그 이상은 ellipsis. title 속성으로
+ * 전체 이름을 hover 시 확인 가능하게 한다(스크린리더는 aria-label 로 별도 노출).
+ */
+.sidebar-project {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background-color: rgba(0, 210, 255, 0.06);
+  border: 2px solid rgba(0, 210, 255, 0.30);
+  border-left-width: 4px;
+  min-height: 40px;
+}
+
+.sidebar-project[data-state="empty"] {
+  background-color: transparent;
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.sidebar-project__icon {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--pixel-accent);
+}
+
+.sidebar-project[data-state="empty"] .sidebar-project__icon {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.sidebar-project__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sidebar-project__label {
+  font-family: var(--font-game);
+  font-size: 9px;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.sidebar-project__name {
+  font-family: var(--font-game);
+  font-size: 14px;
+  line-height: 1.15;
+  font-weight: 700;
+  color: var(--pixel-accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-project[data-state="empty"] .sidebar-project__name {
+  color: rgba(255, 255, 255, 0.55);
+  font-style: italic;
+  font-weight: 500;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * SharedGoalForm · 공동 목표 입력 폼 (2026-04-18 UI 시안)
+ * 참조: tests/shared-goal-form-mockup.md · tests/shared-goal-form-mockup.svg
+ *
+ * 토글 잠금 UX 의 핵심: data-goal-state 를 폼 컨테이너와 자동 개발 토글에
+ * 공통으로 달아, 같은 규칙으로 테두리/배경/cursor 를 일괄 제어한다.
+ * 실제 리액트 구현 전이라도 이 규칙이 SSOT 로 먼저 자리잡아 있어야
+ * 구현자(Thanos)가 JSX 에서 data-attribute 만 올바르게 세팅하면 된다.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+.shared-goal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  background: var(--shared-goal-bg-empty);
+  border: 2px dashed var(--shared-goal-border-empty);
+  transition: border-color 180ms ease-out, background-color 180ms ease-out;
+}
+
+.shared-goal-form[data-goal-state="editing"] {
+  border-style: solid;
+  border-color: var(--shared-goal-border-editing);
+  background: var(--shared-goal-bg-editing);
+  animation: shared-goal-editing-pulse 1.4s ease-in-out infinite;
+}
+
+.shared-goal-form[data-goal-state="saved"] {
+  border-style: solid;
+  border-color: var(--shared-goal-border-saved);
+  background: var(--shared-goal-bg-saved);
+}
+
+.shared-goal-form[data-goal-state="running"] {
+  border-style: solid;
+  border-color: var(--shared-goal-border-running);
+  background: var(--shared-goal-bg-running);
+  animation: shared-goal-running-pulse 1.6s ease-in-out infinite;
+}
+
+.shared-goal-form[data-goal-state="running"] input,
+.shared-goal-form[data-goal-state="running"] textarea,
+.shared-goal-form[data-goal-state="running"] [role="radiogroup"] {
+  pointer-events: none;
+  opacity: 0.72;
+}
+
+.shared-goal-form__hint {
+  font-family: var(--font-kr);
+  font-size: 11px;
+  color: var(--shared-goal-hint-fg);
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+.shared-goal-form[data-goal-state="editing"] .shared-goal-form__hint,
+.shared-goal-form[data-goal-state="saved"] .shared-goal-form__hint,
+.shared-goal-form[data-goal-state="running"] .shared-goal-form__hint {
+  display: none;
+}
+
+/* 자동 개발 토글 — 공동 목표 저장 전까지 🔒 잠금 */
+.shared-goal-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.40);
+  font-family: var(--font-game);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: border-color 180ms ease-out, color 180ms ease-out;
+}
+
+.shared-goal-toggle[data-goal-state="empty"],
+.shared-goal-toggle[data-goal-state="editing"] {
+  cursor: not-allowed;
+  color: var(--shared-goal-lock-fg);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.shared-goal-toggle[data-goal-state="empty"] .shared-goal-toggle__lock,
+.shared-goal-toggle[data-goal-state="editing"] .shared-goal-toggle__lock {
+  display: inline-block;
+  color: var(--shared-goal-lock-fg);
+}
+
+.shared-goal-toggle[data-goal-state="saved"],
+.shared-goal-toggle[data-goal-state="running"] {
+  cursor: pointer;
+}
+
+.shared-goal-toggle[data-goal-state="saved"] {
+  color: #bef4dd;
+  border-color: var(--shared-goal-border-saved);
+}
+
+.shared-goal-toggle[data-goal-state="running"] {
+  color: #cfe4ff;
+  border-color: var(--shared-goal-border-running);
+  animation: shared-goal-running-pulse 1.6s ease-in-out infinite;
+}
+
+.shared-goal-toggle[aria-disabled="true"]:focus-visible {
+  outline: 2px solid var(--pixel-accent);
+  outline-offset: 2px;
+}
+
+/* 잠금 상태에서 클릭 시도 시 1회 shake — JS 가 data-shake="1" 토글 */
+.shared-goal-toggle[data-shake="1"] {
+  animation: shared-goal-shake 200ms ease-in-out 1;
+}
+
+/* 우선순위 배지(P1/P2/P3) — 라디오/배지 공용 */
+.shared-goal-priority {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-width: 2px;
+  border-style: solid;
+  font-family: var(--font-game);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.shared-goal-priority[data-priority="p1"] {
+  color: var(--shared-goal-priority-p1);
+  border-color: var(--shared-goal-priority-p1);
+  background: rgba(248, 113, 113, 0.14);
+}
+
+.shared-goal-priority[data-priority="p2"] {
+  color: var(--shared-goal-priority-p2);
+  border-color: var(--shared-goal-priority-p2);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.shared-goal-priority[data-priority="p3"] {
+  color: var(--shared-goal-priority-p3);
+  border-color: var(--shared-goal-priority-p3);
+  background: rgba(127, 212, 255, 0.12);
+}
+
+@keyframes shared-goal-editing-pulse {
+  0%, 100% { border-color: var(--shared-goal-border-editing); }
+  50% { border-color: rgba(251, 191, 36, 0.55); }
+}
+
+@keyframes shared-goal-running-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.45); }
+  50% { box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15); }
+}
+
+@keyframes shared-goal-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shared-goal-form[data-goal-state="editing"],
+  .shared-goal-form[data-goal-state="running"],
+  .shared-goal-toggle[data-goal-state="running"],
+  .shared-goal-toggle[data-shake="1"] {
+    animation: none;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * ProjectSettingsPanel · 프로젝트 관리 옵션 패널 (2026-04-18 UI 시안)
+ * 참조: tests/project-settings-panel-mockup.md · tests/project-settings-panel-mockup.svg
+ *
+ * 구현자(Kai 인계)는 JSX 에서 `data-save-status` 와 `data-kind` 속성만 올바르게
+ * 세팅하면 헤더 배지 / 필드 스트립 / 토글 잠금이 본 규칙으로 일괄 렌더된다.
+ * 저장 상태 전이와 계단식 토글 잠금은 모두 순수 CSS 로 표현된다.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+.project-settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  background: var(--project-settings-panel-bg);
+  border: 2px solid var(--pixel-border);
+}
+
+.project-settings-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--project-settings-divider);
+}
+
+.project-settings-panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--project-settings-section-bg);
+  border: 2px solid var(--pixel-border);
+}
+
+.project-settings-panel__section--danger {
+  border-color: var(--project-settings-save-error);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+/* 헤더 저장 상태 배지 — data-save-status 로 색·아이콘·애니메이션 스위칭 */
+.project-settings-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-width: 2px;
+  border-style: solid;
+  font-family: var(--font-game);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.project-settings-status[data-save-status="idle"] {
+  color: var(--project-settings-save-idle);
+  border-color: var(--project-settings-save-idle);
+  background: rgba(52, 211, 153, 0.15);
+}
+
+.project-settings-status[data-save-status="saving"] {
+  color: var(--project-settings-save-saving);
+  border-color: var(--project-settings-save-saving);
+  background: rgba(96, 165, 250, 0.14);
+  animation: project-settings-saving-pulse 1.2s ease-in-out infinite;
+}
+
+.project-settings-status[data-save-status="error"] {
+  color: var(--project-settings-save-error);
+  border-color: var(--project-settings-save-error);
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.project-settings-status[data-save-status="dirty"] {
+  color: var(--project-settings-save-dirty);
+  border-color: var(--project-settings-save-dirty);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+/* 각 input 의 오른쪽 끝 4px 세로 스트립 — 개별 필드의 저장 상태 */
+.project-settings-field {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.project-settings-field__strip {
+  position: absolute;
+  right: 0;
+  top: 24px;
+  bottom: 0;
+  width: 4px;
+  background: var(--project-settings-save-idle);
+  transition: background-color 180ms ease-out;
+}
+
+.project-settings-field[data-save-status="saving"] .project-settings-field__strip {
+  background: var(--project-settings-save-saving);
+  animation: project-settings-saving-pulse 1.2s ease-in-out infinite;
+}
+
+.project-settings-field[data-save-status="error"] .project-settings-field__strip {
+  background: var(--project-settings-save-error);
+}
+
+.project-settings-field[data-save-status="dirty"] .project-settings-field__strip {
+  background: var(--project-settings-save-dirty);
+}
+
+/* 3-토글 계단식 연결선 */
+.project-settings-toggles {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.project-settings-toggles::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--project-settings-toggle-chain);
+}
+
+.project-settings-toggle[data-kind="autoPush"][aria-disabled="true"] {
+  cursor: not-allowed;
+  color: var(--project-settings-lock-fg);
+  opacity: 0.65;
+}
+
+@keyframes project-settings-saving-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.45); }
+  50% { box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-settings-status[data-save-status="saving"],
+  .project-settings-field[data-save-status="saving"] .project-settings-field__strip {
+    animation: none;
+  }
+}
+
+/* 반응형 편입 규칙 — ≥1280px 사이드바 / 768–1279 탭 / <768 세로 적층 */
+@media (min-width: 1280px) {
+  .project-settings-panel--docked {
+    position: sticky;
+    top: 72px;
+    max-height: calc(100vh - 96px);
+    width: 360px;
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 767px) {
+  .project-settings-panel .project-settings-panel__section {
+    padding: 10px;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * BranchStrategySection · Git 브랜치 전략 선택 (2026-04-18 UI 시안)
+ * 참조: tests/branch-strategy-mockup.md · tests/branch-strategy-mockup.svg
+ *
+ * 구현자(Joker 인계)는 JSX 에서 `data-strategy`(라디오 그룹 전체의 선택값)
+ * 와 각 카드의 `data-kind` 를 올바르게 세팅하면 활성/비활성 스타일이 자동 적용된다.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+.branch-strategy {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.branch-strategy__card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: rgba(0, 0, 0, 0.30);
+  border: 2px solid var(--branch-strategy-card-idle-border);
+  transition: border-color 180ms ease-out, background-color 180ms ease-out;
+}
+
+/* 선택된 전략 카드만 accent 로 두드러짐 */
+.branch-strategy[data-strategy="per-commit"] .branch-strategy__card[data-kind="per-commit"],
+.branch-strategy[data-strategy="per-task"] .branch-strategy__card[data-kind="per-task"],
+.branch-strategy[data-strategy="per-session"] .branch-strategy__card[data-kind="per-session"],
+.branch-strategy[data-strategy="fixed"] .branch-strategy__card[data-kind="fixed"] {
+  border-color: var(--branch-strategy-card-active-border);
+  background: var(--branch-strategy-card-active-bg);
+}
+
+/* 비활성 카드는 조건부 입력을 숨김 */
+.branch-strategy__body {
+  display: none;
+}
+
+.branch-strategy[data-strategy="per-commit"] .branch-strategy__card[data-kind="per-commit"] .branch-strategy__body,
+.branch-strategy[data-strategy="per-task"] .branch-strategy__card[data-kind="per-task"] .branch-strategy__body,
+.branch-strategy[data-strategy="per-session"] .branch-strategy__card[data-kind="per-session"] .branch-strategy__body,
+.branch-strategy[data-strategy="fixed"] .branch-strategy__card[data-kind="fixed"] .branch-strategy__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 변수 칩 */
+.branch-strategy__chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  padding: 3px 8px;
+  background: var(--branch-strategy-chip-bg);
+  border: 2px solid rgba(255, 255, 255, 0.30);
+  font-family: var(--font-game);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+}
+
+.branch-strategy__chip[data-required="1"] {
+  border-color: var(--branch-strategy-chip-required);
+  color: var(--branch-strategy-chip-required);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.branch-strategy__chip[data-warn="1"] {
+  border-style: dashed;
+  border-color: rgba(251, 191, 36, 0.60);
+  color: var(--branch-strategy-chip-required);
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.branch-strategy__chip:focus-visible {
+  outline: 2px solid var(--pixel-accent);
+  outline-offset: 2px;
+}
+
+/* 실시간 미리보기 줄 */
+.branch-strategy__preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(52, 211, 153, 0.15);
+  border: 2px solid var(--branch-strategy-preview-fg);
+  color: var(--branch-strategy-preview-fg);
+  font-family: 'Consolas', 'Noto Sans Mono CJK KR', monospace;
+  font-size: 12px;
+}
+
+.branch-strategy__preview[data-preview-state="error"] {
+  background: var(--branch-strategy-danger-banner);
+  border-color: var(--branch-strategy-preview-error);
+  color: var(--branch-strategy-preview-error);
+}
+
+/* main 고정 경고 배너 — fixed 전략에서 fixedBranch === 'main' | 'master' 일 때 */
+.branch-strategy__danger-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--branch-strategy-danger-banner);
+  border: 2px solid var(--branch-strategy-preview-error);
+  color: var(--branch-strategy-preview-error);
+}
+
+.branch-strategy__hold-button {
+  align-self: flex-end;
+  padding: 6px 14px;
+  background: rgba(248, 113, 113, 0.20);
+  border: 2px solid var(--branch-strategy-preview-error);
+  color: var(--branch-strategy-preview-error);
+  font-family: var(--font-game);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+/* hold 동작: data-holding="1" 인 동안 progress 를 background gradient 로 시각화 */
+.branch-strategy__hold-button[data-holding="1"] {
+  background: linear-gradient(to right,
+    rgba(248, 113, 113, 0.55) 0%,
+    rgba(248, 113, 113, 0.55) var(--hold-progress, 0%),
+    rgba(248, 113, 113, 0.20) var(--hold-progress, 0%),
+    rgba(248, 113, 113, 0.20) 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .branch-strategy__card {
+    transition: none;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * GitAutomationPanel · 브랜치 전략 2모드 라디오 (2026-04-19 UI 시안 · A안)
+ * 참조: tests/branch-mode-mockup.md
+ *
+ * 4전략(.branch-strategy) 카드 시안과 병존하는 **단순화 A안** — 팀이 2모드로
+ * 충분하다고 판단하면 이 블록만 유지하고 4전략은 롤백 대상이 된다.
+ *
+ * JSX 는 `data-mode` 로 라디오 그룹의 선택값을, 각 카드의 `data-kind` 로
+ * 자신의 모드(`new` | `continue`) 를 선언한다. 활성 모드의 조건부 입력 블록
+ * (`.branch-mode__body`) 만 노출된다.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+.branch-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.branch-mode__card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.30);
+  border: 2px solid var(--branch-mode-card-idle-border);
+  transition: border-color 180ms ease-out, background-color 180ms ease-out;
+}
+
+.branch-mode[data-mode="new"] .branch-mode__card[data-kind="new"],
+.branch-mode[data-mode="continue"] .branch-mode__card[data-kind="continue"] {
+  border-color: var(--branch-mode-card-active-border);
+  background: var(--branch-mode-card-active-bg);
+}
+
+.branch-mode__card[data-kind="continue"][data-active="1"] {
+  border-color: var(--branch-mode-continue-accent);
+}
+
+.branch-mode__body {
+  display: none;
+}
+
+.branch-mode[data-mode="new"] .branch-mode__card[data-kind="new"] .branch-mode__body,
+.branch-mode[data-mode="continue"] .branch-mode__card[data-kind="continue"] .branch-mode__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.branch-mode__hint {
+  color: var(--branch-mode-hint-fg);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.branch-mode__prefix-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  background: var(--branch-mode-prefix-chip-bg);
+  border: 1px solid var(--branch-mode-prefix-chip-border);
+  color: var(--branch-mode-prefix-chip-fg);
+  font-family: var(--font-game);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.branch-mode__prefix-chip:focus-visible {
+  outline: 2px solid var(--pixel-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .branch-mode__card {
+    transition: none;
+  }
 }

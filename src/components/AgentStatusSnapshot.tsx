@@ -15,6 +15,12 @@ import {
   type PipelineRole,
 } from '../utils/workspaceInsights';
 import { useReducedMotion } from '../utils/useReducedMotion';
+import {
+  classifyLeaderMessage,
+  LEADER_MESSAGE_KIND_LABEL,
+  LEADER_MESSAGE_KIND_TOOLTIP,
+} from '../utils/leaderMessage';
+import { getLeaderMessageIcon } from './AgentContextBubble';
 
 type Props = {
   agents: Agent[];
@@ -61,6 +67,20 @@ export function AgentStatusSnapshot({
   );
 
   const pipelineRoles = useMemo(() => summarizePipelineRoles(agents), [agents]);
+  // 리더 에이전트의 최근 메시지를 "분배 vs 답변" 두 축으로 집계한다.
+  // 스냅샷 한 줄에서 "리더가 지시를 팀 전체로 흘려보냈는지" 와 "단답으로만 끝냈는지" 를
+  // 즉시 구분할 수 있도록, AgentContextBubble·AgentStatusPanel 과 같은 팔레트/아이콘을 공유한다.
+  const leaderMessageMix = useMemo(() => {
+    let delegate = 0;
+    let reply = 0;
+    for (const agent of agents) {
+      if (agent.role !== 'Leader' || !agent.lastMessage) continue;
+      const kind = classifyLeaderMessage(agent.lastMessage);
+      if (kind === 'delegate') delegate += 1;
+      else if (kind === 'reply') reply += 1;
+    }
+    return { delegate, reply };
+  }, [agents]);
 
   const freshness = formatFreshness(lastSyncedAt, now);
   const workloadConcentration = useMemo(() => computeWorkloadConcentration(agents), [agents]);
@@ -69,7 +89,7 @@ export function AgentStatusSnapshot({
       contentionFiles,
       isolated: isolatedIds.size,
       total: agents.length,
-      staleSec: lastSyncedAt ? Math.max(0, Math.floor((now - lastSyncedAt) / 1000)) : Infinity,
+      staleSec: computeStaleSec(lastSyncedAt, now),
       workloadConcentration,
     }),
     [contentionFiles, isolatedIds.size, agents.length, lastSyncedAt, now, workloadConcentration],
@@ -85,11 +105,11 @@ export function AgentStatusSnapshot({
       data-stale-since={lastSyncedAt ?? ''}
     >
       <header className="flex items-center justify-between text-[10px] uppercase tracking-wider text-white/70">
-        <span className="flex items-center gap-1">
+        <span className="kr-label flex items-center gap-1">
           <FreshnessDot lastSyncedAt={lastSyncedAt} now={now} reducedMotion={reducedMotion} />
           팀 스냅샷
         </span>
-        <span title="마지막 서버 동기화 이후 경과 시간">{freshness}</span>
+        <span className="kr-label" title="마지막 서버 동기화 이후 경과 시간">{freshness}</span>
       </header>
       <div className="flex flex-wrap items-center gap-2 text-[10px]">
         <Pill
@@ -133,7 +153,10 @@ export function AgentStatusSnapshot({
         />
       </div>
       {activeFileNames.length > 0 && (
-        <div className="text-[10px] text-white/80 truncate" title={activeFileNames.join(', ')}>
+        <div
+          className="kr-msg text-[10px] text-white/80 truncate"
+          title={activeFileNames.join(', ')}
+        >
           진행 중: {activeFileNames.slice(0, 3).join(', ')}
           {activeFileNames.length > 3 ? ` 외 ${activeFileNames.length - 3}` : ''}
         </div>
@@ -141,7 +164,39 @@ export function AgentStatusSnapshot({
       {agents.length > 0 && (
         <PipelineRoleChips breakdown={pipelineRoles} />
       )}
-      <ConcentrationBar ratio={workloadConcentration} />
+      {(leaderMessageMix.delegate > 0 || leaderMessageMix.reply > 0) && (
+        <div
+          className="leader-msg-mix"
+          role="group"
+          aria-label={`리더 최근 메시지 — ${LEADER_MESSAGE_KIND_LABEL.delegate} ${leaderMessageMix.delegate}건, ${LEADER_MESSAGE_KIND_LABEL.reply} ${leaderMessageMix.reply}건`}
+        >
+          <span className="leader-msg-mix__label">리더 메시지</span>
+          {/* 라벨/툴팁은 leaderMessage.ts 의 단일 출처를 재사용해 다른 패널과 표기를
+              일치시킨다. 이 곳의 title 을 직접 수정하면 패널 간 어휘 드리프트가
+              재발하므로, 문구 변경은 LEADER_MESSAGE_KIND_TOOLTIP 에서만 하라. */}
+          <span
+            className="leader-msg leader-msg--delegate leader-msg-mix__chip"
+            data-leader-kind="delegate"
+            title={LEADER_MESSAGE_KIND_TOOLTIP.delegate}
+          >
+            <span className="leader-msg__icon" aria-hidden>
+              {getLeaderMessageIcon('delegate')}
+            </span>
+            {LEADER_MESSAGE_KIND_LABEL.delegate} {leaderMessageMix.delegate}
+          </span>
+          <span
+            className="leader-msg leader-msg--reply leader-msg-mix__chip"
+            data-leader-kind="reply"
+            title={LEADER_MESSAGE_KIND_TOOLTIP.reply}
+          >
+            <span className="leader-msg__icon" aria-hidden>
+              {getLeaderMessageIcon('reply')}
+            </span>
+            {LEADER_MESSAGE_KIND_LABEL.reply} {leaderMessageMix.reply}
+          </span>
+        </div>
+      )}
+      <ConcentrationBar ratio={workloadConcentration} reducedMotion={reducedMotion} />
     </section>
   );
 }
@@ -149,12 +204,23 @@ export function AgentStatusSnapshot({
 // 활성 인력의 파일 쏠림 정도를 얇은 수평 바로 시각화.
 // 경보 임계치를 넘기면 색이 승급해 리뷰 병목을 눈으로 먼저 감지하게 한다.
 // 쏠림이 0이면 바 자체를 감춰 빈 공간으로 시선을 빼앗지 않는다.
-function ConcentrationBar({ ratio }: { ratio: number }) {
+// 0.95 이상(= 사실상 모든 활성 인력이 한 파일에 붙은 상태)에서는 'alert' 로 승급
+// 하여 Pill(품질) 계열과 같은 red-400 톤 + 펄스를 보여 주어, 실질적인 머지 충돌
+// 직전 상황임을 도트/펄스/Bar 삼중으로 겹쳐 알린다. reducedMotion 가드는 바깥에서
+// 주입해, prefers-reduced-motion 사용자에게는 펄스 없이 색만 유지한다.
+function ConcentrationBar({ ratio, reducedMotion = false }: { ratio: number; reducedMotion?: boolean }) {
   if (!Number.isFinite(ratio) || ratio <= 0) return null;
   const pct = Math.round(Math.min(1, Math.max(0, ratio)) * 100);
   const tone: PillTone =
-    ratio >= RISK_CONCENTRATION_WARN_THRESHOLD ? 'warn' : ratio >= 0.5 ? 'info' : 'muted';
+    ratio >= RISK_CONCENTRATION_ALERT_THRESHOLD
+      ? 'alert'
+      : ratio >= RISK_CONCENTRATION_WARN_THRESHOLD
+      ? 'warn'
+      : ratio >= 0.5
+      ? 'info'
+      : 'muted';
   const fillClass = CONCENTRATION_FILL[tone];
+  const pulse = !reducedMotion && tone === 'alert' ? ' animate-pulse' : '';
   return (
     <div
       className="h-1 w-full bg-white/10"
@@ -163,9 +229,10 @@ function ConcentrationBar({ ratio }: { ratio: number }) {
       aria-valuenow={pct}
       aria-valuemin={0}
       aria-valuemax={100}
+      data-tone={tone}
       title={`업무 쏠림 ${pct}%`}
     >
-      <div className={`h-full ${fillClass}`} style={{ width: `${pct}%` }} />
+      <div className={`h-full ${fillClass}${pulse}`} style={{ width: `${pct}%` }} />
     </div>
   );
 }
@@ -190,9 +257,7 @@ function FreshnessDot({
   now: number;
   reducedMotion: boolean;
 }) {
-  const staleSec = !lastSyncedAt || !Number.isFinite(lastSyncedAt) || now < lastSyncedAt
-    ? Infinity
-    : Math.floor((now - lastSyncedAt) / 1000);
+  const staleSec = computeStaleSec(lastSyncedAt, now);
   let cls = 'bg-white/30';
   if (staleSec === Infinity) cls = 'bg-white/20';
   else if (staleSec >= RISK_STALE_ALERT_SEC) cls = reducedMotion ? 'bg-red-400' : 'bg-red-400 animate-pulse';
@@ -240,10 +305,21 @@ function Pill({
       className={`inline-flex items-center gap-1 border px-1.5 py-0.5 uppercase tracking-wider ${TONE_CLASS[tone]}${pulse} ${emphasis}`}
       title={title}
     >
-      <span className="opacity-80">{label}</span>
+      <span className="kr-label opacity-80">{label}</span>
       <span className="font-bold">{value}</span>
     </span>
   );
+}
+
+// 동기화 신선도 계산의 단일 출처.
+// Pill(품질)·FreshnessDot·buildSnapshotDigest 가 각자 다른 분기로 구현했을 때
+// 미래 타임스탬프/NaN 처리가 어긋나 "정상 Pill + 빨간 도트" 같은 표시 드리프트가
+// 발생했다. 세 곳 모두 이 헬퍼를 경유하도록 통일한다.
+// 반환: 유효한 경과 초(0 이상) 또는 Infinity(미연결·미래·비정상 입력).
+export function computeStaleSec(lastSyncedAt: number | undefined, now: number): number {
+  if (!lastSyncedAt || !Number.isFinite(lastSyncedAt) || !Number.isFinite(now)) return Infinity;
+  if (now < lastSyncedAt) return Infinity;
+  return Math.floor((now - lastSyncedAt) / 1000);
 }
 
 // 마지막 동기화 이후 경과 시간을 사람이 읽기 쉬운 문자열로 변환.
@@ -277,6 +353,10 @@ export const RISK_STALE_ALERT_SEC = 300;
 // 한 파일에 활성 인력이 75% 이상 몰리면 리뷰 병목·머지 충돌 확률이 급격히 상승.
 // 경험적으로 이 이상은 "실수 한 번이 팀 전체를 막는" 구간이라 warn으로 승급한다.
 export const RISK_CONCENTRATION_WARN_THRESHOLD = 0.75;
+// 95% 이상이면 사실상 모든 활성 인력이 한 파일에 몰려 있어, 다음 커밋 한 번에
+// 전원이 머지 충돌을 맞을 확률이 사실상 확정적이다. 이 구간은 충돌 파일 경보와
+// 동급의 긴급도로 취급해 Pill·ConcentrationBar 양쪽에서 alert 톤으로 승급한다.
+export const RISK_CONCENTRATION_ALERT_THRESHOLD = 0.95;
 
 export type RiskLevel = 'ok' | 'warn' | 'alert';
 
@@ -388,9 +468,7 @@ export function buildSnapshotDigest(
   const edges = computeCollaborationEdges(agents, agentIdSet);
   const isolated = computeIsolatedAgentIds(agents, edges).size;
   const contentionFiles = computeContentionCounts(agents).size;
-  const staleSec = lastSyncedAt && Number.isFinite(lastSyncedAt) && now >= lastSyncedAt
-    ? Math.floor((now - lastSyncedAt) / 1000)
-    : Infinity;
+  const staleSec = computeStaleSec(lastSyncedAt, now);
   const workloadConcentration = computeWorkloadConcentration(agents);
   const risk = assessRisk({
     contentionFiles,
@@ -440,9 +518,13 @@ export function assessRisk(input: RiskInput): RiskSignal {
     Number.isFinite(workloadConcentration) &&
     workloadConcentration >= RISK_CONCENTRATION_WARN_THRESHOLD
   ) {
-    level = escalate(level, 'warn');
+    // 0.95 이상이면 "실제로 다음 커밋 한 번에 전원이 충돌할" 구간이라 alert 로 승급.
+    // 그 아래 0.75 이상은 아직 복구 가능한 리뷰 병목 수준이라 warn 을 유지한다.
+    const concentrationLevel: RiskLevel =
+      workloadConcentration >= RISK_CONCENTRATION_ALERT_THRESHOLD ? 'alert' : 'warn';
+    level = escalate(level, concentrationLevel);
     reasons.push({
-      level: 'warn',
+      level: concentrationLevel,
       text: `쏠림 ${Math.round(workloadConcentration * 100)}%`,
     });
   }

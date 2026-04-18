@@ -16,6 +16,7 @@ import {
   hasTemplateVariable,
   renderTemplate,
   shortCommitHash,
+  validateNewBranchName,
   type GitAutomationSettings,
   type GitFlowLevel,
 } from './GitAutomationPanel.tsx';
@@ -278,6 +279,63 @@ test('shortCommitHash: 앞 7자만 잘라 소문자로 정규화한다', () => {
 });
 
 // ---------------------------------------------------------------------------
+// QA: validateNewBranchName — 'fixed-branch'(새 브랜치명 지정) 전략의 입력 검증.
+// 패널 입력·저장 버튼 disabled·스케줄러 트리거 페이로드가 동일 결과를 공유하도록
+// 순수 함수로 잠근다. 회귀 시나리오(#e907cf04): 미입력·공백·연속 중복문자 거부.
+// ---------------------------------------------------------------------------
+
+test('validateNewBranchName: 빈 문자열은 empty 코드로 거부된다', () => {
+  const r = validateNewBranchName('');
+  assert.equal(r.ok, false);
+  if (r.ok === false) assert.equal(r.code, 'empty');
+});
+
+test('validateNewBranchName: 공백만 입력은 whitespace 코드로 거부된다', () => {
+  for (const raw of ['   ', '\t', '  \t '] as const) {
+    const r = validateNewBranchName(raw);
+    assert.equal(r.ok, false, `공백 "${raw}" 이(가) 통과됐다`);
+    if (r.ok === false) assert.equal(r.code, 'whitespace');
+  }
+});
+
+test('validateNewBranchName: 중간 공백은 whitespace 코드로 거부된다', () => {
+  const r = validateNewBranchName('feature/foo bar');
+  assert.equal(r.ok, false);
+  if (r.ok === false) assert.equal(r.code, 'whitespace');
+});
+
+test('validateNewBranchName: 연속된 `/`, `.`, `-` 는 duplicate 코드로 거부된다', () => {
+  for (const raw of ['feature//foo', 'foo..bar', 'foo--bar'] as const) {
+    const r = validateNewBranchName(raw);
+    assert.equal(r.ok, false, `중복문자 "${raw}" 이(가) 통과됐다`);
+    if (r.ok === false) assert.equal(r.code, 'duplicate');
+  }
+});
+
+test('validateNewBranchName: 선행·후행 구분자는 duplicate 코드로 거부된다', () => {
+  for (const raw of ['/feature', 'feature/', '.feature', 'feature.', '-feature', 'feature-'] as const) {
+    const r = validateNewBranchName(raw);
+    assert.equal(r.ok, false, `경계 문자 "${raw}" 이(가) 통과됐다`);
+    if (r.ok === false) assert.equal(r.code, 'duplicate');
+  }
+});
+
+test('validateNewBranchName: 허용되지 않은 문자(한글·특수기호)는 invalid 코드로 거부된다', () => {
+  for (const raw of ['feature/한글', 'feature/foo?bar', 'feature:foo', 'feature~foo'] as const) {
+    const r = validateNewBranchName(raw);
+    assert.equal(r.ok, false, `허용 외 문자 "${raw}" 이(가) 통과됐다`);
+    if (r.ok === false) assert.equal(r.code, 'invalid');
+  }
+});
+
+test('validateNewBranchName: 정상 입력은 ok=true 를 돌려준다', () => {
+  for (const raw of ['feature/foo', 'fix/LLM-123', 'chore/bump-deps', 'auto/dev', 'feature/foo_bar.v2'] as const) {
+    const r = validateNewBranchName(raw);
+    assert.equal(r.ok, true, `정상 입력 "${raw}" 이 거부됐다`);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // QA E2E: 옵션 토글 → 저장 → 새로고침 후 값 유지 시나리오.
 // 실제 브라우저 E2E 는 JSDOM harness 부재로 돌릴 수 없으므로, 저장 경로의
 // 계약(validate → persist → reload) 을 소켓/DB 대역 없이 in-memory 로 돌려
@@ -397,6 +455,8 @@ const SAMPLE_SETTINGS: GitAutomationSettings = {
   commitTemplate: '{type}: {branch}',
   prTitleTemplate: '[{ticket}] {type} — {branch}',
   enabled: true,
+  branchStrategy: 'per-session',
+  newBranchName: '',
 };
 
 test('TC-E2E-LOADING: 저장 중(saving) 구간이 반드시 존재하고 저장 버튼은 그 구간 동안 잠긴다', async () => {

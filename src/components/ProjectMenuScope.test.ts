@@ -102,6 +102,8 @@ const PANEL_A: GitAutomationSettings = {
   commitTemplate: '{type}({scope}): {summary}',
   prTitleTemplate: '[{ticket}] {type}: {summary}',
   enabled: true,
+  branchStrategy: 'per-session',
+  newBranchName: '',
 };
 
 const PANEL_B: GitAutomationSettings = {
@@ -110,6 +112,8 @@ const PANEL_B: GitAutomationSettings = {
   commitTemplate: 'release: {version}',
   prTitleTemplate: 'release {version}',
   enabled: false,
+  branchStrategy: 'per-session',
+  newBranchName: '',
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1427,12 +1431,12 @@ test('TC-MENU-INIT8: socket git-automation:updated 수신은 기존 localStorage
 
 // enabled/flow/템플릿 3축이 동시에 흔들려도 왕복이 깨지지 않는지 확인하는 행렬.
 const PANEL_SAVE_MATRIX: ReadonlyArray<readonly [string, GitAutomationSettings]> = [
-  ['commit-only-enabled',   { flow: 'commit',      branchPattern: 'feat/{ticket}',  commitTemplate: 'feat: {branch}',  prTitleTemplate: '[{ticket}] feat',   enabled: true }],
-  ['commit-only-disabled',  { flow: 'commit',      branchPattern: 'feat/{ticket}',  commitTemplate: 'feat: {branch}',  prTitleTemplate: '[{ticket}] feat',   enabled: false }],
-  ['push-enabled',          { flow: 'commit-push', branchPattern: 'fix/{slug}',     commitTemplate: 'fix({scope}): x', prTitleTemplate: 'fix: {summary}',    enabled: true }],
-  ['push-disabled',         { flow: 'commit-push', branchPattern: 'fix/{slug}',     commitTemplate: 'fix({scope}): x', prTitleTemplate: 'fix: {summary}',    enabled: false }],
-  ['full-pr-enabled',       { flow: 'full-pr',     branchPattern: 'release/{v}',    commitTemplate: 'release: {v}',    prTitleTemplate: 'release {v}',       enabled: true }],
-  ['full-pr-disabled',      { flow: 'full-pr',     branchPattern: 'release/{v}',    commitTemplate: 'release: {v}',    prTitleTemplate: 'release {v}',       enabled: false }],
+  ['commit-only-enabled',   { flow: 'commit',      branchPattern: 'feat/{ticket}',  commitTemplate: 'feat: {branch}',  prTitleTemplate: '[{ticket}] feat',   enabled: true,  branchStrategy: 'per-session', newBranchName: '' }],
+  ['commit-only-disabled',  { flow: 'commit',      branchPattern: 'feat/{ticket}',  commitTemplate: 'feat: {branch}',  prTitleTemplate: '[{ticket}] feat',   enabled: false, branchStrategy: 'per-session', newBranchName: '' }],
+  ['push-enabled',          { flow: 'commit-push', branchPattern: 'fix/{slug}',     commitTemplate: 'fix({scope}): x', prTitleTemplate: 'fix: {summary}',    enabled: true,  branchStrategy: 'per-session', newBranchName: '' }],
+  ['push-disabled',         { flow: 'commit-push', branchPattern: 'fix/{slug}',     commitTemplate: 'fix({scope}): x', prTitleTemplate: 'fix: {summary}',    enabled: false, branchStrategy: 'per-session', newBranchName: '' }],
+  ['full-pr-enabled',       { flow: 'full-pr',     branchPattern: 'release/{v}',    commitTemplate: 'release: {v}',    prTitleTemplate: 'release {v}',       enabled: true,  branchStrategy: 'per-session', newBranchName: '' }],
+  ['full-pr-disabled',      { flow: 'full-pr',     branchPattern: 'release/{v}',    commitTemplate: 'release: {v}',    prTitleTemplate: 'release {v}',       enabled: false, branchStrategy: 'per-session', newBranchName: '' }],
 ];
 
 test('TC-MENU-SAVE1: 모든 옵션 조합이 save→load 왕복에서 byte-identical 로 persist 된다', () => {
@@ -2528,6 +2532,8 @@ test('TC-PM-MANUAL-D: 3-way 고속 전환(A→B→C→A)에서 스코프 격리�
       commitTemplate: 'chore: {summary}',
       prTitleTemplate: 'chore: {summary}',
       enabled: false,
+      branchStrategy: 'per-session',
+      newBranchName: '',
     };
     // A → B → C 순으로 각자 저장 — 연타 중에도 스코프 키는 서로 섞이지 않아야 한다.
     saveGitAutomationSettings(PANEL_A, 'proj-A');

@@ -1,0 +1,433 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1680" font-family="ui-monospace, 'Segoe UI Mono', 'Noto Sans Mono CJK KR', monospace">
+  <rect width="1200" height="1680" fill="#16213e"/>
+
+  <defs>
+    <style>
+      .px-border { stroke: #4fc3f7; stroke-width: 2; fill: none; }
+      .px-border-dim { stroke: #385b7c; stroke-width: 2; fill: none; }
+      .px-border-dash { stroke: rgba(255,255,255,0.25); stroke-width: 2; stroke-dasharray: 5 4; fill: none; }
+      .panel-bg { fill: #0f3460; }
+      .deep-bg { fill: rgba(0,0,0,0.30); }
+      .input-bg { fill: rgba(0,0,0,0.45); }
+      .accent { fill: #7fd4ff; }
+      .accent-fill { fill: #00d4ff; }
+      .white { fill: #ffffff; }
+      .mute { fill: rgba(255,255,255,0.60); }
+      .dim { fill: rgba(255,255,255,0.38); }
+      .lock { fill: rgba(255,255,255,0.45); }
+      .emerald { fill: #34d399; }
+      .emerald-bg { fill: rgba(52,211,153,0.15); stroke: #34d399; stroke-width: 2; }
+      .amber { fill: #fbbf24; }
+      .amber-bg { fill: rgba(251,191,36,0.12); stroke: #fbbf24; stroke-width: 2; }
+      .red { fill: #f87171; }
+      .red-bg { fill: rgba(248,113,113,0.12); stroke: #f87171; stroke-width: 2; }
+      .sky { fill: #60a5fa; }
+      .sky-bg { fill: rgba(96,165,250,0.14); stroke: #60a5fa; stroke-width: 2; }
+      .title { font-size: 15px; font-weight: bold; letter-spacing: 0.1em; text-transform: uppercase; }
+      .h2 { font-size: 13px; font-weight: bold; letter-spacing: 0.08em; text-transform: uppercase; }
+      .label { font-size: 10px; font-weight: bold; letter-spacing: 0.08em; text-transform: uppercase; }
+      .small { font-size: 10px; }
+      .tiny { font-size: 9px; letter-spacing: 0.04em; }
+      .input-txt { font-size: 12px; font-family: 'Consolas', 'Noto Sans Mono CJK KR', monospace; }
+      .code { font-size: 11px; font-family: 'Consolas', 'Noto Sans Mono CJK KR', monospace; fill: #bef4dd; }
+    </style>
+  </defs>
+
+  <!-- 전체 헤더 -->
+  <text x="32" y="36" class="accent title">BranchStrategySection · Git 브랜치 전략 UI 시안</text>
+  <text x="32" y="56" class="mute small">2026-04-18 · ProjectSettingsPanel 편입 · 4 전략 라디오 + 조건부 입력 + 실시간 미리보기</text>
+
+  <!-- ══════════════════════════ ① per-task 펼침 상태 (대표) ══════════════════════════ -->
+  <g transform="translate(32, 88)">
+    <text x="0" y="0" class="accent label">① 기본 상태 — per-task 선택 · 나머지 3 전략은 축약</text>
+    <rect x="0" y="10" width="560" height="580" class="panel-bg"/>
+    <rect x="0" y="10" width="560" height="580" class="px-border"/>
+
+    <!-- 섹션 헤더 -->
+    <text x="16" y="36" class="white h2">🌿 브랜치 전략</text>
+    <rect x="400" y="22" width="140" height="18" class="emerald-bg"/>
+    <text x="408" y="35" class="emerald small">● 저장됨 · 방금 전</text>
+
+    <!-- per-commit 축약 -->
+    <rect x="16" y="52" width="528" height="52" class="deep-bg"/>
+    <rect x="16" y="52" width="528" height="52" stroke="rgba(255,255,255,0.18)" stroke-width="2" fill="none"/>
+    <circle cx="32" cy="78" r="7" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="2"/>
+    <text x="50" y="74" class="white small">매 커밋마다 새 브랜치</text>
+    <rect x="270" y="66" width="22" height="18" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.2)" stroke-width="2"/>
+    <text x="276" y="79" class="dim small">ⓘ</text>
+    <text x="50" y="92" class="dim tiny">커밋 1개 = 브랜치 1개 · 트렁크 기반 개발 · {sha6} 필수</text>
+
+    <!-- per-task 펼침 (선택) -->
+    <rect x="16" y="116" width="528" height="302" fill="rgba(0,210,255,0.08)"/>
+    <rect x="16" y="116" width="528" height="302" stroke="#00d4ff" stroke-width="2" fill="none"/>
+    <circle cx="32" cy="142" r="7" fill="#00d4ff"/>
+    <circle cx="32" cy="142" r="3" fill="#0f3460"/>
+    <text x="50" y="138" class="accent small">태스크별 브랜치</text>
+    <rect x="270" y="130" width="22" height="18" fill="rgba(0,210,255,0.12)" stroke="#00d4ff" stroke-width="2"/>
+    <text x="276" y="143" class="accent small">ⓘ</text>
+    <text x="50" y="156" class="mute tiny">리더 분배 1개 = 브랜치 1개 · 서브태스크가 뚜렷한 프로젝트에 권장</text>
+
+    <!-- 조건부 입력 블록 -->
+    <rect x="32" y="170" width="496" height="228" class="deep-bg"/>
+    <rect x="32" y="170" width="496" height="228" class="px-border-dim"/>
+
+    <text x="44" y="190" class="dim label">브랜치명 패턴</text>
+    <rect x="44" y="196" width="472" height="26" class="input-bg"/>
+    <text x="52" y="214" class="white input-txt">auto/{ticket}-{slug}-{date}</text>
+    <rect x="512" y="196" width="4" height="26" fill="#34d399"/>
+
+    <!-- 변수 칩 -->
+    <text x="44" y="244" class="dim label">변수 칩 (클릭 시 삽입)</text>
+    <g transform="translate(44, 250)">
+      <rect x="0" y="0" width="70" height="22" class="amber-bg"/>
+      <text x="35" y="15" class="amber small" text-anchor="middle">★ {ticket}</text>
+
+      <rect x="78" y="0" width="58" height="22" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+      <text x="107" y="15" class="white small" text-anchor="middle">{slug}</text>
+
+      <rect x="144" y="0" width="58" height="22" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+      <text x="173" y="15" class="white small" text-anchor="middle">{date}</text>
+
+      <rect x="210" y="0" width="58" height="22" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+      <text x="239" y="15" class="white small" text-anchor="middle">{sha6}</text>
+
+      <rect x="276" y="0" width="62" height="22" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+      <text x="307" y="15" class="white small" text-anchor="middle">{agent}</text>
+
+      <rect x="346" y="0" width="58" height="22" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+      <text x="375" y="15" class="white small" text-anchor="middle">{type}</text>
+    </g>
+    <text x="44" y="292" class="dim tiny">★ = 필수(고유성 변수) · 칩 hover 시 치환 예시 툴팁 표시</text>
+
+    <!-- main 자동 병합 -->
+    <rect x="44" y="306" width="14" height="14" class="input-bg"/>
+    <rect x="44" y="306" width="14" height="14" stroke="rgba(255,255,255,0.4)" stroke-width="2" fill="none"/>
+    <text x="66" y="318" class="mute small">main 자동 병합 (PR merge 후 브랜치 삭제)</text>
+
+    <!-- 미리보기 -->
+    <rect x="44" y="336" width="472" height="48" class="emerald-bg"/>
+    <text x="56" y="356" class="emerald small">미리보기 ▸</text>
+    <text x="128" y="356" class="emerald input-txt">auto/LT-142-payment-security-2026-04-18</text>
+    <text x="56" y="374" class="dim tiny">샘플: ticket=LT-142 · slug=payment-security · date=2026-04-18 · 샘플 변경 [▼]</text>
+
+    <!-- per-session 축약 (현 기본값 배지) -->
+    <rect x="16" y="430" width="528" height="52" class="deep-bg"/>
+    <rect x="16" y="430" width="528" height="52" stroke="rgba(255,255,255,0.18)" stroke-width="2" fill="none"/>
+    <circle cx="32" cy="456" r="7" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="2"/>
+    <text x="50" y="452" class="white small">세션별 단일 브랜치</text>
+    <rect x="190" y="442" width="78" height="18" class="emerald-bg"/>
+    <text x="200" y="455" class="emerald tiny">현 기본값</text>
+    <rect x="278" y="444" width="22" height="18" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.2)" stroke-width="2"/>
+    <text x="284" y="457" class="dim small">ⓘ</text>
+    <text x="50" y="470" class="dim tiny">리더 단일 브랜치 정책과 일치 · 4명 통합 커밋</text>
+
+    <!-- fixed 축약 -->
+    <rect x="16" y="494" width="528" height="52" class="deep-bg"/>
+    <rect x="16" y="494" width="528" height="52" stroke="rgba(255,255,255,0.18)" stroke-width="2" fill="none"/>
+    <circle cx="32" cy="520" r="7" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="2"/>
+    <text x="50" y="516" class="white small">고정 브랜치 재사용</text>
+    <rect x="260" y="508" width="22" height="18" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.2)" stroke-width="2"/>
+    <text x="266" y="521" class="dim small">ⓘ</text>
+    <text x="50" y="534" class="dim tiny">개인 샌드박스 / 데모 / develop 통합 · main·master 고정은 강력히 비권장</text>
+
+    <text x="16" y="572" class="dim tiny">전략 선택 변경 시 진행 중 자동화는 확인 모달 → "다음 세션부터 적용"</text>
+  </g>
+
+  <!-- ══════════════════════════ ② fixed 펼침 + main 경고 ══════════════════════════ -->
+  <g transform="translate(612, 88)">
+    <text x="0" y="0" class="red label">② fixed 펼침 · 고정 브랜치명 "main" 입력 시 경고</text>
+    <rect x="0" y="10" width="560" height="580" class="panel-bg"/>
+    <rect x="0" y="10" width="560" height="580" class="px-border"/>
+
+    <text x="16" y="36" class="white h2">🌿 브랜치 전략</text>
+    <rect x="400" y="22" width="140" height="18" class="amber-bg"/>
+    <text x="408" y="35" class="amber small">⚠ 저장되지 않음</text>
+
+    <!-- 3개 축약 -->
+    <rect x="16" y="52" width="528" height="40" class="deep-bg"/>
+    <rect x="16" y="52" width="528" height="40" stroke="rgba(255,255,255,0.18)" stroke-width="2" fill="none"/>
+    <circle cx="32" cy="72" r="7" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="2"/>
+    <text x="50" y="76" class="dim small">매 커밋마다 새 브랜치</text>
+
+    <rect x="16" y="100" width="528" height="40" class="deep-bg"/>
+    <rect x="16" y="100" width="528" height="40" stroke="rgba(255,255,255,0.18)" stroke-width="2" fill="none"/>
+    <circle cx="32" cy="120" r="7" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="2"/>
+    <text x="50" y="124" class="dim small">태스크별 브랜치</text>
+
+    <rect x="16" y="148" width="528" height="40" class="deep-bg"/>
+    <rect x="16" y="148" width="528" height="40" stroke="rgba(255,255,255,0.18)" stroke-width="2" fill="none"/>
+    <circle cx="32" cy="168" r="7" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="2"/>
+    <text x="50" y="172" class="dim small">세션별 단일 브랜치</text>
+    <rect x="190" y="160" width="78" height="18" class="emerald-bg"/>
+    <text x="200" y="173" class="emerald tiny">현 기본값</text>
+
+    <!-- fixed 펼침 (선택) -->
+    <rect x="16" y="200" width="528" height="360" fill="rgba(0,210,255,0.08)"/>
+    <rect x="16" y="200" width="528" height="360" stroke="#00d4ff" stroke-width="2" fill="none"/>
+    <circle cx="32" cy="226" r="7" fill="#00d4ff"/>
+    <circle cx="32" cy="226" r="3" fill="#0f3460"/>
+    <text x="50" y="222" class="accent small">고정 브랜치 재사용</text>
+    <text x="50" y="240" class="mute tiny">지정 브랜치 1개에 계속 커밋 · main/master 는 강력히 비권장</text>
+
+    <!-- 조건부 입력 -->
+    <rect x="32" y="256" width="496" height="120" class="deep-bg"/>
+    <rect x="32" y="256" width="496" height="120" class="px-border-dim"/>
+
+    <text x="44" y="276" class="dim label">고정 브랜치명</text>
+    <rect x="44" y="282" width="288" height="26" class="input-bg"/>
+    <text x="52" y="300" class="red input-txt">main</text>
+    <rect x="328" y="282" width="4" height="26" fill="#f87171"/>
+
+    <!-- red 경고 인라인 -->
+    <rect x="44" y="316" width="472" height="48" class="red-bg"/>
+    <text x="56" y="334" class="red small">⚠ 프로덕션 브랜치를 직접 수정하는 구성입니다.</text>
+    <text x="56" y="350" class="red tiny">강력히 비권장 · 계속하려면 아래 버튼을 2초 홀드해 확인하세요</text>
+    <rect x="400" y="324" width="104" height="30" fill="rgba(248,113,113,0.20)" stroke="#f87171" stroke-width="2"/>
+    <text x="452" y="342" class="red small" text-anchor="middle">🔒 2초 홀드</text>
+
+    <!-- main 자동 병합 (활성 시 병합 주기 노출) -->
+    <rect x="44" y="392" width="14" height="14" fill="#00d4ff"/>
+    <text x="50" y="403" class="dim tiny" text-anchor="middle">✓</text>
+    <text x="66" y="404" class="white small">main 자동 병합</text>
+
+    <text x="44" y="428" class="dim label">병합 주기</text>
+    <rect x="44" y="434" width="200" height="24" class="input-bg"/>
+    <text x="52" y="450" class="white input-txt">on-green-ci  ▼</text>
+    <text x="256" y="450" class="dim tiny">off / daily / on-green-ci</text>
+
+    <!-- 미리보기 -->
+    <rect x="44" y="478" width="472" height="48" class="red-bg"/>
+    <text x="56" y="498" class="red small">미리보기 ▸</text>
+    <text x="128" y="498" class="red input-txt">main</text>
+    <text x="56" y="516" class="red tiny">치환 불가 — 프로덕션 브랜치 직접 지정 · 변경 권장</text>
+
+    <text x="44" y="546" class="dim tiny">※ llm-sandbox 또는 develop/{username} 같은 샌드박스 브랜치를 권장합니다.</text>
+  </g>
+
+  <!-- ══════════════════════════ ③ per-commit 펼침 ══════════════════════════ -->
+  <g transform="translate(32, 610)">
+    <text x="0" y="0" class="accent label">③ per-commit 펼침 — sha6 필수 변수</text>
+    <rect x="0" y="10" width="560" height="240" class="panel-bg"/>
+    <rect x="0" y="10" width="560" height="240" stroke="#00d4ff" stroke-width="2" fill="none"/>
+
+    <circle cx="32" cy="40" r="7" fill="#00d4ff"/>
+    <circle cx="32" cy="40" r="3" fill="#0f3460"/>
+    <text x="50" y="36" class="accent small">매 커밋마다 새 브랜치</text>
+    <text x="50" y="54" class="mute tiny">커밋 1개 = 브랜치 1개 · {sha6} 포함 필수 · 트렁크 기반 개발 권장</text>
+
+    <rect x="20" y="72" width="520" height="158" class="deep-bg"/>
+    <rect x="20" y="72" width="520" height="158" class="px-border-dim"/>
+
+    <text x="32" y="90" class="dim label">브랜치명 패턴</text>
+    <rect x="32" y="96" width="496" height="26" class="input-bg"/>
+    <text x="40" y="114" class="white input-txt">auto/{date}-{sha6}</text>
+
+    <text x="32" y="142" class="dim label">변수 칩</text>
+    <g transform="translate(32, 148)">
+      <rect x="0" y="0" width="58" height="22" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+      <text x="29" y="15" class="white small" text-anchor="middle">{date}</text>
+
+      <rect x="66" y="0" width="70" height="22" class="amber-bg"/>
+      <text x="101" y="15" class="amber small" text-anchor="middle">★ {sha6}</text>
+
+      <rect x="144" y="0" width="62" height="22" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+      <text x="175" y="15" class="white small" text-anchor="middle">{agent}</text>
+
+      <rect x="214" y="0" width="58" height="22" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+      <text x="243" y="15" class="white small" text-anchor="middle">{type}</text>
+    </g>
+
+    <rect x="32" y="186" width="496" height="36" class="emerald-bg"/>
+    <text x="44" y="206" class="emerald small">미리보기 ▸</text>
+    <text x="116" y="206" class="emerald input-txt">auto/2026-04-18-3fa9b2</text>
+    <text x="400" y="214" class="dim tiny">샘플 sha 는 커밋 후 실제 값으로 치환</text>
+  </g>
+
+  <!-- ══════════════════════════ ④ per-session + {agent} 경고 ══════════════════════════ -->
+  <g transform="translate(612, 610)">
+    <text x="0" y="0" class="amber label">④ per-session 펼침 — {agent} 선택 시 amber 경고</text>
+    <rect x="0" y="10" width="560" height="240" class="panel-bg"/>
+    <rect x="0" y="10" width="560" height="240" stroke="#00d4ff" stroke-width="2" fill="none"/>
+
+    <circle cx="32" cy="40" r="7" fill="#00d4ff"/>
+    <circle cx="32" cy="40" r="3" fill="#0f3460"/>
+    <text x="50" y="36" class="accent small">세션별 단일 브랜치</text>
+    <rect x="190" y="28" width="78" height="18" class="emerald-bg"/>
+    <text x="200" y="41" class="emerald tiny">현 기본값</text>
+    <text x="50" y="54" class="mute tiny">4명이 같은 세션에서 협업 · 리더 단일 브랜치 정책과 일치</text>
+
+    <rect x="20" y="72" width="520" height="158" class="deep-bg"/>
+    <rect x="20" y="72" width="520" height="158" class="px-border-dim"/>
+
+    <text x="32" y="90" class="dim label">브랜치명 패턴</text>
+    <rect x="32" y="96" width="496" height="26" class="input-bg"/>
+    <text x="40" y="114" class="white input-txt">auto/{date}-session-{session6}-{agent}</text>
+    <rect x="524" y="96" width="4" height="26" fill="#fbbf24"/>
+
+    <rect x="32" y="130" width="496" height="24" class="amber-bg"/>
+    <text x="44" y="146" class="amber tiny">⚠ {agent} 포함 — 리더 단일 브랜치 정책과 상충 · 세션 분기 가능성</text>
+
+    <text x="32" y="172" class="dim label">변수 칩</text>
+    <g transform="translate(32, 178)">
+      <rect x="0" y="0" width="58" height="22" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+      <text x="29" y="15" class="white small" text-anchor="middle">{date}</text>
+
+      <rect x="66" y="0" width="78" height="22" class="amber-bg"/>
+      <text x="105" y="15" class="amber small" text-anchor="middle">★ {session6}</text>
+
+      <rect x="152" y="0" width="58" height="22" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+      <text x="181" y="15" class="white small" text-anchor="middle">{type}</text>
+
+      <rect x="218" y="0" width="68" height="22" fill="rgba(251,191,36,0.06)" stroke="rgba(251,191,36,0.6)" stroke-width="2" stroke-dasharray="3 2"/>
+      <text x="252" y="15" class="amber small" text-anchor="middle">{agent}</text>
+    </g>
+
+    <rect x="32" y="210" width="496" height="18" class="emerald-bg"/>
+    <text x="44" y="224" class="emerald small">미리보기 ▸</text>
+    <text x="116" y="224" class="emerald input-txt">auto/2026-04-18-session-a7b3c9-joker</text>
+  </g>
+
+  <!-- ══════════════════════════ ⑤ 전략 전환 확인 모달 ══════════════════════════ -->
+  <g transform="translate(32, 870)">
+    <text x="0" y="0" class="sky label">⑤ 전략 전환 확인 모달 — 진행 중 자동화가 있을 때</text>
+    <rect x="0" y="10" width="560" height="260" class="panel-bg"/>
+    <rect x="0" y="10" width="560" height="260" class="px-border"/>
+
+    <!-- 백드롭 -->
+    <rect x="20" y="30" width="520" height="224" fill="rgba(0,0,0,0.75)"/>
+
+    <!-- 모달 -->
+    <rect x="80" y="60" width="400" height="180" class="panel-bg"/>
+    <rect x="80" y="60" width="400" height="180" stroke="#60a5fa" stroke-width="2" fill="none"/>
+    <rect x="80" y="60" width="400" height="6" fill="#60a5fa"/>
+
+    <text x="96" y="94" class="sky h2">⚠ 브랜치 전략을 변경할까요?</text>
+    <text x="96" y="118" class="white small">현재 자동화가 4명 에이전트와 함께 실행 중입니다.</text>
+    <text x="96" y="138" class="mute small">변경은 <tspan class="accent">다음 세션</tspan> 부터 반영됩니다.</text>
+    <text x="96" y="158" class="mute small">현재 세션은 기존 전략(per-session · 단일 브랜치) 을 유지합니다.</text>
+
+    <text x="96" y="182" class="dim tiny">• 현재 전략: 세션별 단일 브랜치</text>
+    <text x="96" y="198" class="dim tiny">• 요청 전략: 태스크별 브랜치 (auto/{ticket}-{slug}-{date})</text>
+
+    <!-- 버튼 -->
+    <rect x="300" y="212" width="70" height="24" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+    <text x="335" y="227" class="white small" text-anchor="middle">취소</text>
+    <rect x="380" y="212" width="90" height="24" fill="rgba(96,165,250,0.25)" stroke="#60a5fa" stroke-width="2"/>
+    <text x="425" y="227" class="sky small" text-anchor="middle">다음 세션부터</text>
+  </g>
+
+  <!-- ══════════════════════════ ⑥ 저장 스키마 설명 ══════════════════════════ -->
+  <g transform="translate(612, 870)">
+    <text x="0" y="0" class="accent label">⑥ settingsJson.branchStrategy 저장 스키마</text>
+    <rect x="0" y="10" width="560" height="260" class="panel-bg"/>
+    <rect x="0" y="10" width="560" height="260" class="px-border-dim"/>
+
+    <rect x="20" y="24" width="520" height="224" fill="#0a1d36"/>
+    <rect x="20" y="24" width="520" height="224" stroke="rgba(255,255,255,0.12)" stroke-width="2" fill="none"/>
+
+    <text x="32" y="46" class="code">// useProjectOptions.update({ settingsJson: { branchStrategy } })</text>
+    <text x="32" y="68" class="code">settingsJson.branchStrategy = {</text>
+    <text x="48" y="86" class="code">kind: 'per-task',</text>
+    <text x="48" y="104" class="code">pattern: 'auto/{ticket}-{slug}-{date}',</text>
+    <text x="48" y="122" class="code">autoMergeMain: false,</text>
+    <text x="48" y="140" class="code">// kind === 'fixed' 일 때만:</text>
+    <text x="48" y="158" class="code">// fixedBranch: 'llm-sandbox',</text>
+    <text x="48" y="176" class="code">// mergeCadence: 'off' | 'daily' | 'on-green-ci'</text>
+    <text x="32" y="196" class="code">}</text>
+
+    <text x="32" y="220" class="mute tiny">서버 src/utils/projectOptions.ts 는 settingsJson 을 객체로만 검증 — </text>
+    <text x="32" y="236" class="mute tiny">kind 열거형·필수 필드는 클라이언트 가드(branchStrategy.ts) 에서 1차 방어</text>
+  </g>
+
+  <!-- ══════════════════════════ ⑦ 색상 토큰 ══════════════════════════ -->
+  <g transform="translate(32, 1150)">
+    <text x="0" y="0" class="accent label">⑦ 색상 토큰 (index.css --branch-strategy-*)</text>
+    <rect x="0" y="10" width="1140" height="160" class="panel-bg"/>
+    <rect x="0" y="10" width="1140" height="160" class="px-border-dim"/>
+
+    <g transform="translate(24, 30)">
+      <rect x="0" y="0" width="160" height="46" fill="rgba(0,0,0,0.30)" stroke="rgba(255,255,255,0.18)" stroke-width="2"/>
+      <text x="80" y="20" class="white tiny" text-anchor="middle">card-idle-border</text>
+      <text x="80" y="36" class="dim tiny" text-anchor="middle">white/18%</text>
+
+      <rect x="176" y="0" width="160" height="46" fill="rgba(0,210,255,0.08)" stroke="#00d4ff" stroke-width="2"/>
+      <text x="256" y="20" class="accent tiny" text-anchor="middle">card-active-border</text>
+      <text x="256" y="36" class="accent tiny" text-anchor="middle">#00d4ff</text>
+
+      <rect x="352" y="0" width="160" height="46" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.3)" stroke-width="2"/>
+      <text x="432" y="20" class="white tiny" text-anchor="middle">chip-bg</text>
+      <text x="432" y="36" class="dim tiny" text-anchor="middle">white/6%</text>
+
+      <rect x="528" y="0" width="160" height="46" fill="rgba(251,191,36,0.12)" stroke="#fbbf24" stroke-width="2"/>
+      <text x="608" y="20" class="amber tiny" text-anchor="middle">chip-required</text>
+      <text x="608" y="36" class="amber tiny" text-anchor="middle">#fbbf24</text>
+
+      <rect x="704" y="0" width="160" height="46" fill="rgba(52,211,153,0.15)" stroke="#34d399" stroke-width="2"/>
+      <text x="784" y="20" class="emerald tiny" text-anchor="middle">preview-fg</text>
+      <text x="784" y="36" class="emerald tiny" text-anchor="middle">#34d399</text>
+
+      <rect x="880" y="0" width="160" height="46" fill="rgba(248,113,113,0.12)" stroke="#f87171" stroke-width="2"/>
+      <text x="960" y="20" class="red tiny" text-anchor="middle">preview-error</text>
+      <text x="960" y="36" class="red tiny" text-anchor="middle">#f87171</text>
+    </g>
+
+    <g transform="translate(24, 92)">
+      <rect x="0" y="0" width="160" height="46" fill="rgba(248,113,113,0.12)" stroke="#f87171" stroke-width="2"/>
+      <text x="80" y="20" class="red tiny" text-anchor="middle">danger-banner</text>
+      <text x="80" y="36" class="red tiny" text-anchor="middle">main 고정 경고</text>
+    </g>
+
+    <text x="24" y="156" class="mute tiny">색각 이상 대응: 필수 변수 ★ + amber · 경고 ⚠ + red · 미리보기 ▸ 기호로 상태 구분.</text>
+  </g>
+
+  <!-- ══════════════════════════ ⑧ 접근성 + 구현 경로 ══════════════════════════ -->
+  <g transform="translate(32, 1330)">
+    <text x="0" y="0" class="accent label">⑧ 접근성(a11y) 체크</text>
+    <rect x="0" y="10" width="560" height="180" class="panel-bg"/>
+    <rect x="0" y="10" width="560" height="180" class="px-border-dim"/>
+
+    <text x="20" y="34" class="mute small">• role="radiogroup" + aria-labelledby="branch-strategy-heading"</text>
+    <text x="20" y="54" class="mute small">• 방향키 순환 + Home/End 로 처음·끝 이동 · Enter 로 선택 확정</text>
+    <text x="20" y="74" class="mute small">• 변수 칩 role="button" · Enter/Space 로 캐럿 위치에 삽입</text>
+    <text x="20" y="94" class="mute small">• 미리보기 role="status" aria-live="polite" — 전략/변수 변경 시 낭독</text>
+    <text x="20" y="114" class="mute small">• main 고정 경고 role="alert" · 2초 홀드 버튼 aria-describedby 로 의미 전달</text>
+    <text x="20" y="134" class="mute small">• 색 + 아이콘(★ ⚠ ▸) + 텍스트 3중 인코딩 — 색각 이상 대응</text>
+    <text x="20" y="154" class="mute small">• 포커스 링 2px #00d2ff · offset 2px (라디오·칩·버튼 공통)</text>
+    <text x="20" y="174" class="dim tiny">prefers-reduced-motion: 전환 애니메이션 180ms → 즉시</text>
+  </g>
+
+  <g transform="translate(612, 1330)">
+    <text x="0" y="0" class="accent label">⑨ 구현 경로 (Joker 인계용)</text>
+    <rect x="0" y="10" width="560" height="180" class="panel-bg"/>
+    <rect x="0" y="10" width="560" height="180" class="px-border"/>
+
+    <text x="20" y="34" class="white small">1. src/utils/branchStrategy.ts 신규 — renderBranchName(kind, pattern, ctx)</text>
+    <text x="20" y="54" class="white small">2. src/components/BranchStrategySection.tsx 신규 — 4 라디오 카드 + 조건부</text>
+    <text x="20" y="74" class="white small">3. GitAutomationPanel.tsx 기존 branchPattern 자유 입력을 본 섹션으로 교체</text>
+    <text x="20" y="94" class="white small">4. useProjectOptions 로 settingsJson.branchStrategy 저장 · 낙관 갱신 없음</text>
+    <text x="20" y="114" class="white small">5. 서버 projectOptions.ts 에 kind 열거형 클라 가드 결과를 추가 검증</text>
+    <text x="20" y="134" class="accent small">→ 회귀 테스트: tests/branch-strategy-regression.md (전략 × 저장/경고/전환)</text>
+    <text x="20" y="164" class="dim tiny">단위 테스트 8 케이스: 전략 4종 × (필수 변수 만족 · 누락) — branchStrategy.test.ts</text>
+  </g>
+
+  <!-- ══════════════════════════ ⑩ 마이크로카피 ══════════════════════════ -->
+  <g transform="translate(32, 1530)">
+    <text x="0" y="0" class="accent label">⑩ 전략별 마이크로카피 (ⓘ 툴팁 · 권장 상황)</text>
+    <rect x="0" y="10" width="1140" height="130" class="panel-bg"/>
+    <rect x="0" y="10" width="1140" height="130" class="px-border-dim"/>
+
+    <text x="24" y="34" class="accent label">매 커밋마다 새 브랜치</text>
+    <text x="24" y="52" class="mute small">트렁크 기반 개발 팀 · 커밋 1개를 즉시 작은 PR 로 올리고 싶을 때 · {sha6} 필수</text>
+
+    <text x="600" y="34" class="accent label">태스크별 브랜치</text>
+    <text x="600" y="52" class="mute small">리더가 분배하는 서브태스크가 뚜렷한 프로젝트 · 태스크 종료 시 PR 승격이 편리</text>
+
+    <text x="24" y="84" class="accent label">세션별 단일 브랜치 (현 기본값)</text>
+    <text x="24" y="102" class="mute small">4명이 같은 세션에서 협업 · 리더 단일 브랜치 정책과 일치 · 통합 커밋을 쌓는 구성</text>
+
+    <text x="600" y="84" class="accent label">고정 브랜치 재사용</text>
+    <text x="600" y="102" class="mute small">개인 샌드박스 · 데모 환경 · develop 통합 · main/master 고정은 강력히 비권장</text>
+
+    <text x="24" y="128" class="dim tiny">툴팁은 ⓘ 아이콘 호버 또는 포커스에서 표시되며, 스크린리더에는 aria-describedby 로 전달됩니다.</text>
+  </g>
+</svg>
