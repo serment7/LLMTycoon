@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2, Download, Github, GitBranch, RefreshCw, FolderGit2, Link2Off, Server, BarChart3, Search, AlertTriangle, GitPullRequest, Check, Clock, FileDown, Sparkles, ClipboardCopy, Pin, Pencil } from 'lucide-react';
-import type { SourceIntegration, ManagedProject, SourceProvider, UserPreferences, GitAutomationPreference } from '../types';
-import { USER_PREFERENCES_KEY } from '../types';
+import type { SourceIntegration, ManagedProject, SourceProvider, UserPreferences, GitAutomationPreference, BranchStrategy } from '../types';
+import { USER_PREFERENCES_KEY, BRANCH_STRATEGY_VALUES } from '../types';
 import { GitAutomationPanel, DEFAULT_AUTOMATION, type GitAutomationSettings, type GitFlowLevel } from './GitAutomationPanel';
 import { GitCredentialsSection } from './GitCredentialsSection';
 import { startGitAutomationScheduler } from '../utils/gitAutomation';
@@ -107,7 +107,10 @@ const SERVER_TO_FLOW: Record<string, GitFlowLevel> = {
   commitPushPR: 'full-pr',
 };
 
-// UI 패널의 GitAutomationSettings → 서버 DB 형식 변환
+// UI 패널의 GitAutomationSettings → 서버 DB 형식 변환. branchStrategy·newBranchName
+// 은 서버 `git_automation_settings` 레코드 밖(프로젝트 옵션 레벨)에서 쓰이는 값이지만,
+// /api/git-automation/tick 트리거 페이로드가 settings 객체를 그대로 서버에 넘기므로
+// 여기서 함께 직렬화해 자동화 파이프라인이 전략·고정 브랜치명을 동시에 읽을 수 있게 한다.
 function toServerSettings(ui: GitAutomationSettings): Record<string, unknown> {
   let branchTemplate = ui.branchPattern;
   if (!branchTemplate.includes('{slug}')) {
@@ -115,7 +118,7 @@ function toServerSettings(ui: GitAutomationSettings): Record<string, unknown> {
       ? branchTemplate.replace('{branch}', '{slug}')
       : branchTemplate + '/{slug}';
   }
-  return {
+  const payload: Record<string, unknown> = {
     enabled: ui.enabled,
     flowLevel: FLOW_TO_SERVER[ui.flow] || 'commitOnly',
     branchTemplate,
@@ -123,7 +126,13 @@ function toServerSettings(ui: GitAutomationSettings): Record<string, unknown> {
     commitScope: '',
     prTitleTemplate: ui.prTitleTemplate,
     reviewers: [],
+    branchStrategy: ui.branchStrategy,
   };
+  if (ui.branchStrategy === 'fixed-branch' && ui.newBranchName.trim()) {
+    payload.fixedBranchName = ui.newBranchName.trim();
+    payload.newBranchName = ui.newBranchName.trim();
+  }
+  return payload;
 }
 
 // 서버 DB 형식 → UI 패널의 GitAutomationSettings 변환
@@ -132,12 +141,21 @@ function fromServerSettings(server: Record<string, unknown>): GitAutomationSetti
   let branchPattern = (server.branchTemplate as string) || DEFAULT_AUTOMATION.branchPattern;
   // 서버의 {slug} → UI의 {branch} 로 역변환
   branchPattern = branchPattern.replace('{slug}', '{branch}');
+  const rawStrategy = server.branchStrategy;
+  const branchStrategy: BranchStrategy = typeof rawStrategy === 'string'
+    && (BRANCH_STRATEGY_VALUES as readonly string[]).includes(rawStrategy)
+      ? rawStrategy as BranchStrategy
+      : DEFAULT_AUTOMATION.branchStrategy;
+  const rawNewBranch = server.newBranchName ?? server.fixedBranchName;
+  const newBranchName = typeof rawNewBranch === 'string' ? rawNewBranch : '';
   return {
     flow,
     branchPattern,
     commitTemplate: DEFAULT_AUTOMATION.commitTemplate,
     prTitleTemplate: (server.prTitleTemplate as string) || DEFAULT_AUTOMATION.prTitleTemplate,
     enabled: server.enabled !== false,
+    branchStrategy,
+    newBranchName,
   };
 }
 
@@ -699,10 +717,15 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
       intervalMs: 120_000,
       isEnabled: () => gitAutomationSettings.enabled && !serverMissing,
       run: async () => {
+        // trigger_git_automation 페이로드에 선택한 브랜치 전략과 'fixed-branch' 의
+        // newBranchName 이 함께 직렬화되도록 서버 포맷으로 변환해 보낸다.
         const res = await fetch('/api/git-automation/tick', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ projectId: selectedProjectId, settings: gitAutomationSettings }),
+          body: JSON.stringify({
+            projectId: selectedProjectId,
+            settings: toServerSettings(gitAutomationSettings),
+          }),
         }).catch(() => null);
         if (!res) return;
         if (res.status === 404) { serverMissing = true; return; }

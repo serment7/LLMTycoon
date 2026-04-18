@@ -231,6 +231,20 @@ export interface GitAutomationLogEntry {
   errorMessage?: string;
 }
 
+// MCP `trigger_git_automation` / GET `get_git_automation_settings` 단에서만 쓰이는
+// "브랜치 분기 모드". Project.branchStrategy(`per-commit` 등 네이밍 정책)와는 축이
+// 다르다 — 여기서는 "checkout 단계를 어떻게 내보낼지" 만 결정한다:
+//   - 'new'    : branchName 을 대상으로 `git checkout -B` 로 새 브랜치를 만들고 커밋.
+//   - 'current': checkout 단계를 건너뛰고 현재 HEAD 브랜치에 그대로 커밋/푸시.
+// 과거 값이 유실된(Row 가 이 필드를 모르는) 레거시 프로젝트는 server.ts 의
+// withDefaultSettings 가 env 기본값으로 보정해 응답한다.
+export type GitAutomationBranchStrategy = 'new' | 'current';
+
+export const GIT_AUTOMATION_BRANCH_STRATEGY_VALUES: readonly GitAutomationBranchStrategy[] = [
+  'new',
+  'current',
+] as const;
+
 // 서버 DB(git_automation_settings) 에 프로젝트별로 1:1 저장되는 레코드.
 // projectId 가 주키. enabled=false 면 리더가 자동 실행을 건너뛴다.
 export interface GitAutomationSettings {
@@ -242,6 +256,14 @@ export interface GitAutomationSettings {
   commitScope: string;
   prTitleTemplate: string;
   reviewers: string[];
+  // 'new' 면 branchName 으로 `checkout -B`, 'current' 면 HEAD 에 그대로 커밋.
+  // optional 인 이유: 저장 row 가 이 필드를 모르는 레거시 프로젝트, 그리고 기존 설정
+  // 입력 픽스처(둘 다 이 필드를 몰랐음)와의 구조적 호환. server withDefaultSettings 가
+  // 응답 직전 env 기본값으로 반드시 채워서 UI/리더는 항상 값 하나를 받게 된다.
+  branchStrategy?: GitAutomationBranchStrategy;
+  // 'new' 모드에서 사용할 브랜치명. 빈/누락이면 server 가 Project.branchStrategy
+  // 기반 resolveBranch 로 폴백해 기존 네이밍 정책을 유지한다.
+  branchName?: string;
   updatedAt: string;
 }
 

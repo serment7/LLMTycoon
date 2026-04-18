@@ -54,12 +54,18 @@ function seedProject(db: FakeDb, project: Project): void {
   db.projects.set(project.id, project);
 }
 
-// server.ts:1039 `withDefaultSettings` 를 1:1 로 재현.
+// server.ts `withDefaultSettings` 를 1:1 로 재현. branchStrategy/branchName 은 env
+// 기본값을 모르는 단위 테스트 환경에서 각각 'new'/'' 로 폴백해 저장 row 가 필드를
+// 모르는 레거시 프로젝트 응답 형상을 그대로 재현한다.
 function withDefaultSettings(
   projectId: string,
   raw: Partial<GitAutomationSettings> | null,
 ): GitAutomationSettings {
   const base = { ...DEFAULT_GIT_AUTOMATION_CONFIG, ...(raw || {}) };
+  const branchStrategy = raw?.branchStrategy === 'current' || raw?.branchStrategy === 'new'
+    ? raw.branchStrategy
+    : 'new';
+  const branchName = typeof raw?.branchName === 'string' ? raw.branchName : '';
   return {
     projectId,
     enabled: raw?.enabled ?? false,
@@ -69,6 +75,8 @@ function withDefaultSettings(
     commitScope: base.commitScope,
     prTitleTemplate: base.prTitleTemplate,
     reviewers: base.reviewers,
+    branchStrategy,
+    branchName,
     updatedAt: raw?.updatedAt || new Date(0).toISOString(),
   };
 }
@@ -105,10 +113,26 @@ async function simulatePost(
   if (validation.ok !== true) {
     return { status: 400, body: { error: validation.error } };
   }
+  // validation.config 가 branchStrategy/branchName 까지 검증·머지해 두지만, 테스트
+  // 환경은 env 기본값이 주입되지 않으므로 여기서 한 번 더 enum/string 기본값을 채운다.
+  const persistedBranchStrategy =
+    validation.config.branchStrategy === 'new' || validation.config.branchStrategy === 'current'
+      ? validation.config.branchStrategy
+      : 'new';
+  const persistedBranchName = typeof validation.config.branchName === 'string'
+    ? validation.config.branchName
+    : '';
   const settings: GitAutomationSettings = {
     projectId,
     enabled: body.enabled !== false,
-    ...validation.config,
+    flowLevel: validation.config.flowLevel,
+    branchTemplate: validation.config.branchTemplate,
+    commitConvention: validation.config.commitConvention,
+    commitScope: validation.config.commitScope,
+    prTitleTemplate: validation.config.prTitleTemplate,
+    reviewers: validation.config.reviewers,
+    branchStrategy: persistedBranchStrategy,
+    branchName: persistedBranchName,
     updatedAt: now(),
   };
   // upsert: { projectId } 를 주키로 교체. 동일 키가 이미 있어도 $set 으로 완전 대체.

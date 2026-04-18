@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -9,7 +10,7 @@ import { tmpdir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { MongoClient, Db } from 'mongodb';
 import multer from 'multer';
-import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings, GitCredential, GitCredentialRedacted, SharedGoal, SharedGoalPriority, SharedGoalStatus, ProjectOptionsUpdate, PROJECT_OPTION_DEFAULTS } from './src/types';
+import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings, GitAutomationBranchStrategy, GIT_AUTOMATION_BRANCH_STRATEGY_VALUES, GitCredential, GitCredentialRedacted, SharedGoal, SharedGoalPriority, SharedGoalStatus, ProjectOptionsUpdate, PROJECT_OPTION_DEFAULTS } from './src/types';
 import { AgentWorkerRegistry } from './src/server/agentWorker';
 import { TaskRunner } from './src/server/taskRunner';
 import { processDirectiveFile } from './src/server/fileProcessor';
@@ -46,6 +47,15 @@ import { spawnSync } from 'child_process';
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const DEBUG_CLAUDE = process.env.DEBUG_CLAUDE === '1';
 const PORT = parseInt(process.env.PORT || '3000', 10);
+
+// Git 자동화 트리거의 기본 브랜치 분기 모드. 설정 row 가 이 필드를 모르는 레거시
+// 프로젝트 응답과, MCP/REST 에서 명시 값 없이 들어온 트리거 요청에 모두 이 기본값을
+// 적용한다. 환경변수로 운영팀이 배치 단위로 "new 브랜치로 발사" 대 "현재 HEAD 유지"
+// 를 뒤집을 수 있게 한다.
+const GIT_AUTO_DEFAULT_BRANCH_STRATEGY: GitAutomationBranchStrategy =
+  process.env.GIT_AUTO_BRANCH_STRATEGY === 'current' ? 'current' : 'new';
+const GIT_AUTO_DEFAULT_BRANCH_NAME: string =
+  typeof process.env.GIT_AUTO_BRANCH_NAME === 'string' ? process.env.GIT_AUTO_BRANCH_NAME : '';
 
 // 프로세스 단위 활성 브랜치 캐시. per-session 전략에서 resolveBranch 가 같은
 // 프로젝트의 연속 호출에 같은 이름을 돌려주도록 한다. 재기동 시에는
@@ -1182,6 +1192,13 @@ async function startServer() {
   // 구분해서 보여줄 수 있다.
   function withDefaultSettings(projectId: string, raw: Partial<GitAutomationSettings> | null): GitAutomationSettings {
     const base = { ...DEFAULT_GIT_AUTOMATION_CONFIG, ...(raw || {}) };
+    // branchStrategy 는 enum 두 값만 허용. 저장 row 가 이 필드를 모르면 env 기본값으로
+    // 보정해, UI/리더가 항상 유효한 값 하나를 받도록 한다.
+    const branchStrategy: GitAutomationBranchStrategy =
+      raw?.branchStrategy && GIT_AUTOMATION_BRANCH_STRATEGY_VALUES.includes(raw.branchStrategy)
+        ? raw.branchStrategy
+        : GIT_AUTO_DEFAULT_BRANCH_STRATEGY;
+    const branchName = typeof raw?.branchName === 'string' ? raw.branchName : GIT_AUTO_DEFAULT_BRANCH_NAME;
     return {
       projectId,
       enabled: raw?.enabled ?? false,
@@ -1191,6 +1208,8 @@ async function startServer() {
       commitScope: base.commitScope,
       prTitleTemplate: base.prTitleTemplate,
       reviewers: base.reviewers,
+      branchStrategy,
+      branchName,
       updatedAt: raw?.updatedAt || new Date(0).toISOString(),
     };
   }
@@ -1210,10 +1229,28 @@ async function startServer() {
     const body = req.body || {};
     const validation = validateGitAutomationConfig(body);
     if (validation.ok !== true) { res.status(400).json({ error: validation.error }); return; }
+    // validation.config 가 branchStrategy/branchName 을 이미 검증·머지해 둔 상태라
+    // withDefaultSettings 와 동일 경로로 env 기본값을 끼워 넣어 저장 row 에 항상
+    // 유효한 enum·string 쌍이 박히도록 한다.
+    const persistedBranchStrategy: GitAutomationBranchStrategy =
+      validation.config.branchStrategy
+        && GIT_AUTOMATION_BRANCH_STRATEGY_VALUES.includes(validation.config.branchStrategy)
+        ? validation.config.branchStrategy
+        : GIT_AUTO_DEFAULT_BRANCH_STRATEGY;
+    const persistedBranchName = typeof validation.config.branchName === 'string'
+      ? validation.config.branchName
+      : GIT_AUTO_DEFAULT_BRANCH_NAME;
     const settings: GitAutomationSettings = {
       projectId: id,
       enabled: body.enabled !== false,
-      ...validation.config,
+      flowLevel: validation.config.flowLevel,
+      branchTemplate: validation.config.branchTemplate,
+      commitConvention: validation.config.commitConvention,
+      commitScope: validation.config.commitScope,
+      prTitleTemplate: validation.config.prTitleTemplate,
+      reviewers: validation.config.reviewers,
+      branchStrategy: persistedBranchStrategy,
+      branchName: persistedBranchName,
       updatedAt: new Date().toISOString(),
     };
     await gitAutomationSettingsCol.updateOne(
@@ -1236,7 +1273,17 @@ async function startServer() {
     // 커밋 직후 바로 원격 push 까지 수행하도록 강제한다(긴급 수정 #a7b258fb).
     // 마스터 스위치 enabled=false 는 여전히 우선되므로, 사용자가 명시적으로 끈 자동화는
     // 이 플래그로 뚫리지 않는다.
-    ctxHint?: { type?: string; summary?: string; agent?: string; prBase?: string; forcePush?: boolean; taskId?: string },
+    ctxHint?: {
+      type?: string;
+      summary?: string;
+      agent?: string;
+      prBase?: string;
+      forcePush?: boolean;
+      taskId?: string;
+      // MCP/REST 트리거 1회 한정 오버라이드. 저장된 settings.branchStrategy 보다 우선.
+      branchStrategy?: GitAutomationBranchStrategy;
+      branchName?: string;
+    },
   ): Promise<GitAutomationRunResult> {
     try {
       const project = await projectsCol.findOne({ id: projectId });
@@ -1262,38 +1309,89 @@ async function startServer() {
       const settings = row as GitAutomationSettings;
       const cwd = resolveWorkspace(project.workspacePath);
       const projectWithBranch = project as Project;
-      // 리더 루프가 매 태스크마다 새 브랜치를 만들던 회귀(#91aeaf7a) 차단.
-      // resolveBranch 가 fixed → 메모리 캐시 → DB → 템플릿 순으로 해석하고,
-      // 반환된 persist=true 면 서버 캐시와 projects.currentAutoBranch 양쪽에 기록한다.
-      const resolution = resolveBranch({
-        strategy: projectWithBranch.branchStrategy,
-        fixedBranchName: projectWithBranch.fixedBranchName,
-        branchNamePattern: projectWithBranch.branchNamePattern,
-        cachedActiveBranch: activeBranchCache.get(projectId),
-        persistedActiveBranch: projectWithBranch.currentAutoBranch,
-        fallbackTemplate: settings.branchTemplate,
-        templateContext: {
-          type: ctxHint?.type || 'chore',
-          summary: ctxHint?.summary || 'auto',
-          agent: ctxHint?.agent,
-        },
-      });
-      const branch = resolution.branch;
-      if (resolution.persist) {
-        activeBranchCache.set(projectId, branch);
-        await projectsCol.updateOne(
-          { id: projectId },
-          { $set: { currentAutoBranch: branch } },
-        );
-      } else if (resolution.source === 'cache' || resolution.source === 'persisted') {
-        // 캐시 경로에서 DB 에 값이 빠진 경우(예: 다른 프로세스가 기록 전), 백필해 둔다.
-        if (!projectWithBranch.currentAutoBranch) {
+
+      // 트리거 1회 한정 오버라이드가 있으면 저장된 settings 보다 우선한다. env 기본값은
+      // withDefaultSettings 와 동일 규칙으로 끼워 넣어, row 가 이 필드를 모르는 레거시
+      // 프로젝트에서도 유효한 enum 쌍을 돌려받는다.
+      const effectiveStrategy: GitAutomationBranchStrategy =
+        (ctxHint?.branchStrategy && GIT_AUTOMATION_BRANCH_STRATEGY_VALUES.includes(ctxHint.branchStrategy))
+          ? ctxHint.branchStrategy
+          : (settings.branchStrategy && GIT_AUTOMATION_BRANCH_STRATEGY_VALUES.includes(settings.branchStrategy))
+            ? settings.branchStrategy
+            : GIT_AUTO_DEFAULT_BRANCH_STRATEGY;
+      const effectiveBranchName = (
+        typeof ctxHint?.branchName === 'string' ? ctxHint.branchName
+          : typeof settings.branchName === 'string' ? settings.branchName
+            : GIT_AUTO_DEFAULT_BRANCH_NAME
+      ).trim();
+
+      // 'current' 모드는 checkout 단계를 건너뛰어 현재 HEAD 에 그대로 커밋/푸시한다.
+      // 브랜치 이름은 rev-parse 로 조회해 UI/구조화 로그 소비자가 "어느 브랜치에
+      // 박혔는지" 를 동일 계약(branch 필드)으로 읽도록 한다. detached HEAD 는 이름
+      // 대신 'HEAD' 를 돌려주므로 조기 실패시키고, 사용자가 수동 전환하도록 한다.
+      let branch: string;
+      let skipCheckout = false;
+      // 'new' 모드에서 explicit branchName 대신 resolveBranch 폴백을 썼을 때만 기존
+      // 재사용 경로(cache/persisted/fixed)를 그대로 유지해 `checkout <branch>` 로 전환.
+      // explicit branchName 경로는 항상 `-B` 로 힘 있게 생성/재설정한다.
+      let forceFreshCheckout = false;
+      if (effectiveStrategy === 'current') {
+        const head = spawnSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+          encoding: 'utf8',
+          windowsHide: true,
+        });
+        const headName = (head.stdout || '').trim();
+        if (head.status !== 0 || !headName || headName === 'HEAD') {
+          console.error(
+            `[git-automation] branchStrategy=current 실패 project=${projectId}: HEAD rev-parse code=${head.status ?? 'null'} name='${headName}' — detached 이거나 작업 디렉터리에 git 저장소가 없음`,
+          );
+          return {
+            ok: false,
+            error: 'branchStrategy=current 에서 HEAD 이름을 확인할 수 없습니다 (detached HEAD 또는 저장소 누락)',
+            results: [],
+          };
+        }
+        branch = headName;
+        skipCheckout = true;
+      } else if (effectiveBranchName) {
+        // 'new' + 명시 branchName — Project 측 네이밍 정책(per-session 등)을 우회해
+        // 이 이름으로 `checkout -B` 를 발사한다. cache/persisted 갱신은 건너뛴다.
+        branch = effectiveBranchName;
+        forceFreshCheckout = true;
+      } else {
+        // 'new' + branchName 미지정 — 기존 resolveBranch 폴백. 리더 루프가 매
+        // 태스크마다 새 브랜치를 만들던 회귀(#91aeaf7a) 를 그대로 차단.
+        const resolution = resolveBranch({
+          strategy: projectWithBranch.branchStrategy,
+          fixedBranchName: projectWithBranch.fixedBranchName,
+          branchNamePattern: projectWithBranch.branchNamePattern,
+          cachedActiveBranch: activeBranchCache.get(projectId),
+          persistedActiveBranch: projectWithBranch.currentAutoBranch,
+          fallbackTemplate: settings.branchTemplate,
+          templateContext: {
+            type: ctxHint?.type || 'chore',
+            summary: ctxHint?.summary || 'auto',
+            agent: ctxHint?.agent,
+          },
+        });
+        branch = resolution.branch;
+        forceFreshCheckout = resolution.source === 'fresh';
+        if (resolution.persist) {
+          activeBranchCache.set(projectId, branch);
           await projectsCol.updateOne(
             { id: projectId },
             { $set: { currentAutoBranch: branch } },
           );
+        } else if (resolution.source === 'cache' || resolution.source === 'persisted') {
+          // 캐시 경로에서 DB 에 값이 빠진 경우(예: 다른 프로세스가 기록 전), 백필해 둔다.
+          if (!projectWithBranch.currentAutoBranch) {
+            await projectsCol.updateOne(
+              { id: projectId },
+              { $set: { currentAutoBranch: branch } },
+            );
+          }
+          activeBranchCache.set(projectId, branch);
         }
-        activeBranchCache.set(projectId, branch);
       }
       const commitMessage = formatCommitMessage(settings, {
         type: ctxHint?.type || 'chore',
@@ -1339,14 +1437,18 @@ async function startServer() {
         return { ok, results, branch, commitMessage, prTitle };
       };
 
-      // autoCommit: checkout → add → commit. 재사용 경로(cache/persisted/fixed)는
-      // 기존 로컬 브랜치로 전환만 하고, 새로 생성된(fresh) 경우에만 `-B` 로 만들어
-      // "매 태스크마다 새 브랜치" 회귀를 차단한다.
+      // autoCommit: checkout → add → commit.
+      //   - branchStrategy='current' (skipCheckout=true): checkout 생략, 현재 HEAD 에 커밋.
+      //   - branchStrategy='new' + 명시 branchName: 항상 `checkout -B` 로 덮어써 생성/전환.
+      //   - branchStrategy='new' + 폴백(resolveBranch): 신규(fresh)면 -B, 재사용(cache/persisted/fixed)은
+      //     전환만 해 "매 태스크마다 새 브랜치" 회귀(#91aeaf7a)를 계속 차단.
       if (shouldAutoCommit(settings)) {
-        const checkoutCmd = resolution.source === 'fresh'
-          ? ['git', '-C', cwd, 'checkout', '-B', branch]
-          : ['git', '-C', cwd, 'checkout', branch];
-        if (!runStep('checkout', checkoutCmd)) return finalize(false);
+        if (!skipCheckout) {
+          const checkoutCmd = forceFreshCheckout
+            ? ['git', '-C', cwd, 'checkout', '-B', branch]
+            : ['git', '-C', cwd, 'checkout', branch];
+          if (!runStep('checkout', checkoutCmd)) return finalize(false);
+        }
         if (!runStep('add', ['git', '-C', cwd, 'add', '-A'])) return finalize(false);
         if (!runStep('commit', ['git', '-C', cwd, 'commit', '-m', commitMessage])) return finalize(false);
       }
@@ -1481,7 +1583,24 @@ async function startServer() {
 
   app.post('/api/projects/:id/git-automation/run', async (req, res) => {
     const { id } = req.params;
-    const out = await executeGitAutomation(id, req.body || {});
+    const body = (req.body || {}) as Record<string, unknown>;
+    // 트리거 1회 한정 오버라이드 — MCP `trigger_git_automation` 이 이 경로로 흘러든다.
+    // enum 이외 값은 executeGitAutomation 안에서 무시되지만, 로그/에러 가시성을 위해
+    // 서버 경계에서도 가볍게 normalize 한다.
+    const rawStrategy = body.branchStrategy;
+    const branchStrategy =
+      rawStrategy === 'new' || rawStrategy === 'current' ? rawStrategy : undefined;
+    const branchName = typeof body.branchName === 'string' ? body.branchName : undefined;
+    const out = await executeGitAutomation(id, {
+      type: typeof body.type === 'string' ? body.type : undefined,
+      summary: typeof body.summary === 'string' ? body.summary : undefined,
+      agent: typeof body.agent === 'string' ? body.agent : undefined,
+      prBase: typeof body.prBase === 'string' ? body.prBase : undefined,
+      forcePush: body.forcePush === true,
+      taskId: typeof body.taskId === 'string' ? body.taskId : undefined,
+      branchStrategy,
+      branchName,
+    });
     if (!out.ok && out.skipped === 'no-project') { res.status(404).json(out); return; }
     res.json(out);
   });

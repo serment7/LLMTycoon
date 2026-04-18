@@ -211,6 +211,11 @@ const FULL_PR_CONFIG: GitAutomationConfig = {
   commitScope: 'game-ui',
   prTitleTemplate: '[{branch}] {type}: {summary}',
   reviewers: ['alpha', 'beta'],
+  // validateGitAutomationConfig 가 DEFAULT_GIT_AUTOMATION_CONFIG 와 머지하므로
+  // round-trip 비교 대상에도 동일 기본값을 미리 포함시킨다. 이 두 필드는
+  // MCP `trigger_git_automation` 단계에서 'new' | 'current' 분기를 결정한다.
+  branchStrategy: 'new',
+  branchName: '',
 };
 
 test('TC-DB1: 전체 설정을 저장→로드 왕복해도 필드가 손실되지 않는다', () => {

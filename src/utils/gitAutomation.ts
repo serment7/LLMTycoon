@@ -3,7 +3,9 @@ import type {
   GitAutomationLogEntry,
   GitAutomationLogStage,
   BranchStrategy,
+  GitAutomationBranchStrategy,
 } from '../types';
+import { GIT_AUTOMATION_BRANCH_STRATEGY_VALUES } from '../types';
 
 // 커밋 → 푸시 → PR 의 어디까지 자동으로 실행할지. UI 토글과 일대일로 매핑된다.
 export type FlowLevel = 'commitOnly' | 'commitPush' | 'commitPushPR';
@@ -29,6 +31,14 @@ export interface GitAutomationConfig {
   prTitleTemplate: string;
   // 리뷰어 자동 지정에 쓰이는 GitHub/GitLab 핸들 목록. 현재는 UI 기록용.
   reviewers: string[];
+  // MCP trigger_git_automation / GET get_git_automation_settings 에 노출되는
+  // "checkout 분기 모드". 'new' 는 branchName 으로 `git checkout -B`,
+  // 'current' 는 checkout 단계를 건너뛰고 현재 HEAD 에 커밋/푸시한다.
+  // 옵셔널로 둔 이유: 과거 row·픽스처가 이 필드를 모른 채 저장돼도 withDefaultSettings
+  // 가 env 기본값으로 보정하므로, 계약이 깨진 채 가드가 통과되지 않는다.
+  branchStrategy?: GitAutomationBranchStrategy;
+  // 'new' 모드에서 사용할 브랜치명. 빈 값이면 호출 측이 기존 resolveBranch 폴백.
+  branchName?: string;
 }
 
 export const DEFAULT_GIT_AUTOMATION_CONFIG: GitAutomationConfig = {
@@ -38,6 +48,10 @@ export const DEFAULT_GIT_AUTOMATION_CONFIG: GitAutomationConfig = {
   commitScope: '',
   prTitleTemplate: '{type}: {summary}',
   reviewers: [],
+  // branchStrategy/branchName 은 "전체 파이프라인 설정의 일부" 라기보다 "이번 트리거
+  // 분기 모드" 에 가까워, 기본값은 호출 측(server.ts withDefaultSettings / 트리거
+  // 오버라이드 정규화)에서 env 로 주입한다. 여기서 값을 고정하면 기존 round-trip
+  // 픽스처·검증 머지가 이 두 필드를 강제로 포함시켜 UI 입력 흐름이 어긋난다.
 };
 
 export interface TemplateContext {
@@ -610,6 +624,15 @@ export function validateGitAutomationConfig(
   // 풀려 실제로 자동화가 도는 사고가 난다. 타입 가드를 여기서 단일 출처로 강제한다.
   if (merged.enabled !== undefined && typeof merged.enabled !== 'boolean') {
     return { ok: false, error: `invalid enabled: ${String(merged.enabled)}` };
+  }
+  if (
+    merged.branchStrategy !== undefined
+    && !GIT_AUTOMATION_BRANCH_STRATEGY_VALUES.includes(merged.branchStrategy)
+  ) {
+    return { ok: false, error: `invalid branchStrategy: ${String(merged.branchStrategy)}` };
+  }
+  if (merged.branchName !== undefined && typeof merged.branchName !== 'string') {
+    return { ok: false, error: `invalid branchName: ${String(merged.branchName)}` };
   }
   return { ok: true, config: merged };
 }
