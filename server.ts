@@ -9,13 +9,19 @@ import { tmpdir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { MongoClient, Db } from 'mongodb';
 import multer from 'multer';
-import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings, GitCredential, GitCredentialRedacted, SharedGoal, SharedGoalPriority, SharedGoalStatus } from './src/types';
+import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings, GitCredential, GitCredentialRedacted, SharedGoal, SharedGoalPriority, SharedGoalStatus, ProjectOptionsUpdate, PROJECT_OPTION_DEFAULTS } from './src/types';
 import { AgentWorkerRegistry } from './src/server/agentWorker';
 import { TaskRunner } from './src/server/taskRunner';
 import { processDirectiveFile } from './src/server/fileProcessor';
 import { ProjectCompletionTracker } from './src/server/completionWatcher';
 import { parseEntry, type LedgerEntry } from './src/utils/handoffLedger';
 import { inferFileType, isExcludedFromCodeGraph, normalizeCodeGraphPath } from './src/utils/codeGraphFilter';
+import {
+  ProjectOptionsValidationError,
+  hasAnyUpdate,
+  projectOptionsView,
+  updateProjectOptionsSchema,
+} from './src/utils/projectOptions';
 import {
   DEFAULT_GIT_AUTOMATION_CONFIG,
   formatCommitMessage,
@@ -441,11 +447,140 @@ async function startServer() {
       workspacePath: finalPath,
       status: 'active',
       agents: leader ? [leader.id] : [],
+      // 프로젝트 관리 옵션 기본값 주입. MongoDB 는 스키마리스라 이 필드들이
+      // 문서에 없어도 읽기는 가능하지만, 생성 시 한 번에 채워 넣어 후속 PATCH /
+      // UI 로직이 undefined 폴백을 반복하지 않도록 한다.
+      autoDevEnabled: PROJECT_OPTION_DEFAULTS.autoDevEnabled,
+      autoCommitEnabled: PROJECT_OPTION_DEFAULTS.autoCommitEnabled,
+      autoPushEnabled: PROJECT_OPTION_DEFAULTS.autoPushEnabled,
+      defaultBranch: PROJECT_OPTION_DEFAULTS.defaultBranch,
+      settingsJson: { ...PROJECT_OPTION_DEFAULTS.settingsJson },
     };
     await projectsCol.insertOne(project);
 
     io.emit('state:updated', await getGameState());
     res.json(project);
+  });
+
+  // 프로젝트 관리 옵션 부분 업데이트. 스키마리스 저장이라 null 로 명시된 필드는
+  // $unset 으로 제거하고, 지정되지 않은 필드는 건드리지 않는다. sharedGoalId 가
+  // 제공되면 동일 프로젝트 스코프의 활성/보관 목표를 실제로 가리키는지 검증한다.
+  app.patch('/api/projects/:id', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+    const body = (req.body || {}) as ProjectOptionsUpdate;
+
+    const $set: Record<string, unknown> = {};
+    const $unset: Record<string, ''> = {};
+
+    const assignBool = (key: keyof ProjectOptionsUpdate) => {
+      if (body[key] === undefined) return;
+      if (typeof body[key] !== 'boolean') {
+        throw new Error(`${key} 는 boolean 이어야 합니다`);
+      }
+      $set[key] = body[key];
+    };
+    try {
+      assignBool('autoDevEnabled');
+      assignBool('autoCommitEnabled');
+      assignBool('autoPushEnabled');
+
+      if (body.defaultBranch !== undefined) {
+        if (typeof body.defaultBranch !== 'string' || !body.defaultBranch.trim()) {
+          throw new Error('defaultBranch 는 비어있지 않은 문자열이어야 합니다');
+        }
+        $set.defaultBranch = body.defaultBranch.trim();
+      }
+      if (body.gitRemoteUrl !== undefined) {
+        if (body.gitRemoteUrl === null) $unset.gitRemoteUrl = '';
+        else if (typeof body.gitRemoteUrl === 'string') $set.gitRemoteUrl = body.gitRemoteUrl.trim();
+        else throw new Error('gitRemoteUrl 은 문자열 또는 null 이어야 합니다');
+      }
+      if (body.sharedGoalId !== undefined) {
+        if (body.sharedGoalId === null) $unset.sharedGoalId = '';
+        else if (typeof body.sharedGoalId === 'string') {
+          const goal = await sharedGoalsCol.findOne({ id: body.sharedGoalId, projectId: id });
+          if (!goal) throw new Error('지정한 sharedGoalId 가 이 프로젝트에 존재하지 않습니다');
+          $set.sharedGoalId = body.sharedGoalId;
+        } else throw new Error('sharedGoalId 는 문자열 또는 null 이어야 합니다');
+      }
+      if (body.settingsJson !== undefined) {
+        if (!body.settingsJson || typeof body.settingsJson !== 'object' || Array.isArray(body.settingsJson)) {
+          throw new Error('settingsJson 은 객체여야 합니다');
+        }
+        $set.settingsJson = body.settingsJson;
+      }
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message || 'invalid payload' });
+      return;
+    }
+
+    if (Object.keys($set).length === 0 && Object.keys($unset).length === 0) {
+      res.status(400).json({ error: '갱신할 필드가 없습니다' });
+      return;
+    }
+    const update: Record<string, unknown> = {};
+    if (Object.keys($set).length > 0) update.$set = $set;
+    if (Object.keys($unset).length > 0) update.$unset = $unset;
+    await projectsCol.updateOne({ id }, update);
+    const saved = await projectsCol.findOne({ id }, { projection: { _id: 0 } });
+    io.emit('state:updated', await getGameState());
+    res.json(saved);
+  });
+
+  // 프로젝트 관리 옵션 전용 조회. PATCH /api/projects/:id 와 달리 옵션 필드만
+  // 노출해 클라이언트 훅(useProjectOptions)이 GameState 전체를 수신하지 않고도
+  // 새로고침/재로그인 직후 권위값을 복원할 수 있다.
+  app.get('/api/projects/:id/options', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id }, { projection: { _id: 0 } });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+    res.json(projectOptionsView(project));
+  });
+
+  // 프로젝트 관리 옵션 부분 업데이트. 검증은 updateProjectOptionsSchema 가 담당하고,
+  // 저장은 projectsCol.updateOne 에 위임한다(별도 storage 모듈이 없음). sharedGoalId
+  // 는 해당 프로젝트 스코프의 목표를 가리키는지 DB 조회로 교차 검증한다.
+  app.patch('/api/projects/:id/options', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+
+    let validated;
+    try {
+      validated = updateProjectOptionsSchema(req.body);
+    } catch (e) {
+      if (e instanceof ProjectOptionsValidationError) {
+        res.status(400).json({ error: e.message, field: e.field });
+        return;
+      }
+      res.status(400).json({ error: (e as Error).message || 'invalid payload' });
+      return;
+    }
+
+    if (!hasAnyUpdate(validated)) {
+      res.status(400).json({ error: '갱신할 필드가 없습니다' });
+      return;
+    }
+
+    if (typeof validated.$set.sharedGoalId === 'string') {
+      const goal = await sharedGoalsCol.findOne({ id: validated.$set.sharedGoalId, projectId: id });
+      if (!goal) {
+        res.status(400).json({ error: '지정한 sharedGoalId 가 이 프로젝트에 존재하지 않습니다', field: 'sharedGoalId' });
+        return;
+      }
+    }
+
+    const update: Record<string, unknown> = {};
+    if (Object.keys(validated.$set).length > 0) update.$set = validated.$set;
+    if (Object.keys(validated.$unset).length > 0) update.$unset = validated.$unset;
+    await projectsCol.updateOne({ id }, update);
+    const saved = await projectsCol.findOne({ id }, { projection: { _id: 0 } });
+    if (!saved) { res.status(404).json({ error: 'project not found' }); return; }
+    io.emit('state:updated', await getGameState());
+    io.emit('project-options:updated', { projectId: id, options: projectOptionsView(saved) });
+    res.json(projectOptionsView(saved));
   });
 
   app.delete('/api/projects/:id', async (req, res) => {

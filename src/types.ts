@@ -46,7 +46,42 @@ export interface Project {
   workspacePath: string;
   agents: string[]; // Agent IDs
   status: 'active' | 'completed' | 'on-hold';
+  // 프로젝트 관리 옵션. 스키마리스 저장(MongoDB) 환경이라 필드 누락을 허용하되,
+  // 서버는 POST /api/projects 에서 기본값을 채워 넣고 읽기 경로에서는 누락된
+  // 필드를 undefined 로 노출해 클라이언트가 기본값 폴백을 수행한다.
+  autoDevEnabled?: boolean;
+  autoCommitEnabled?: boolean;
+  autoPushEnabled?: boolean;
+  defaultBranch?: string;
+  gitRemoteUrl?: string;
+  // 활성 공동 목표(SharedGoal) 의 id. 프로젝트는 단일 목표를 가리키며, 서버가
+  // setAutoDev / autoDevTick 에서 이 포인터 또는 최신 active goal 을 사용한다.
+  sharedGoalId?: string;
+  // 관리 UI 가 자유롭게 저장하는 키-값 묶음. Jsonb 대체 — MongoDB 문서 필드에
+  // 그대로 포함되며, 클라이언트 변경은 PATCH /api/projects/:id 를 통해 저장한다.
+  settingsJson?: Record<string, unknown>;
 }
+
+// 프로젝트 옵션 부분 업데이트(PATCH /api/projects/:id) 입력. Zod 가 설치돼 있지
+// 않은 저장소라 서버가 직접 필드별 타입·열거값을 검사한다. 지정하지 않은 필드는
+// 기존 값을 유지하며, null 명시는 "해제"(미설정) 의도로 해석된다.
+export interface ProjectOptionsUpdate {
+  autoDevEnabled?: boolean;
+  autoCommitEnabled?: boolean;
+  autoPushEnabled?: boolean;
+  defaultBranch?: string;
+  gitRemoteUrl?: string | null;
+  sharedGoalId?: string | null;
+  settingsJson?: Record<string, unknown>;
+}
+
+export const PROJECT_OPTION_DEFAULTS = {
+  autoDevEnabled: false,
+  autoCommitEnabled: false,
+  autoPushEnabled: false,
+  defaultBranch: 'main',
+  settingsJson: {} as Record<string, unknown>,
+} as const;
 
 export interface GameState {
   projects: Project[];

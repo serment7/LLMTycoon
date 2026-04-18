@@ -90,6 +90,35 @@
   --shared-goal-priority-p2: #fbbf24;
   --shared-goal-priority-p3: #7fd4ff;
 
+  /* ── ProjectSettingsPanel · 프로젝트 관리 옵션 패널 디자인 토큰 (2026-04-18) ─
+   * 대상: src/components/ProjectSettingsPanel.tsx (신규) — 상세 페이지의
+   * 우측 사이드바(≥1280px) 또는 탭(<1280px) 으로 편입.
+   * 시안 문서: tests/project-settings-panel-mockup.md ·
+   * 정적 미리보기: tests/project-settings-panel-mockup.svg
+   *
+   * 설계 의도:
+   *   1) saveStatus(idle/saving/error/dirty) 를 4색 계열로 동시 관리해 헤더 배지와
+   *      각 필드 오른쪽 4px 스트립이 동일한 팔레트를 쓴다. 사용자는 "어떤 필드가
+   *      지금 저장 대기 중인지" 를 스트립 색만으로 즉시 구분할 수 있다.
+   *   2) 자동화 3-토글의 계단식 연결선(toggle-chain) 은 sky-accent 로 낮춘 톤을
+   *      사용해 "의존 관계" 는 보이되 전경 콘텐츠(토글 자체) 를 가리지 않는다.
+   *   3) lock-fg 는 SharedGoalForm 의 동일 변수와 숫자 일치(white/45%) — 두 패널
+   *      사이 잠금 UX 가 시각적으로 이어진다.
+   *
+   * 대비: 모든 배지의 전경/배경은 패널 배경(#0f3460) 기준 4.5:1 이상을 만족
+   * (AA 본문). 색각 이상 대응을 위해 실제 구현에서는 아이콘 + 텍스트를 함께 넣어
+   * 색에만 의존하지 않도록 한다.
+   */
+  --project-settings-panel-bg: #0f3460;
+  --project-settings-section-bg: rgba(0, 0, 0, 0.30);
+  --project-settings-divider: rgba(255, 255, 255, 0.10);
+  --project-settings-save-idle: #34d399;
+  --project-settings-save-saving: #60a5fa;
+  --project-settings-save-error: #f87171;
+  --project-settings-save-dirty: #fbbf24;
+  --project-settings-lock-fg: rgba(255, 255, 255, 0.45);
+  --project-settings-toggle-chain: rgba(127, 212, 255, 0.35);
+
   /* ── Git 자동화 파이프라인·로그 뷰어 디자인 토큰 (2026-04-18) ─────────────
    * 목적: AgentStatusPanel 의 `.git-auto-stages*` 배지와 신규 Git 자동화 로그
    * 뷰어(`.git-auto-log*`) 가 동일한 단계 팔레트를 공유하게 한다. 기존
@@ -3927,5 +3956,168 @@ body {
   .shared-goal-toggle[data-goal-state="running"],
   .shared-goal-toggle[data-shake="1"] {
     animation: none;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * ProjectSettingsPanel · 프로젝트 관리 옵션 패널 (2026-04-18 UI 시안)
+ * 참조: tests/project-settings-panel-mockup.md · tests/project-settings-panel-mockup.svg
+ *
+ * 구현자(Kai 인계)는 JSX 에서 `data-save-status` 와 `data-kind` 속성만 올바르게
+ * 세팅하면 헤더 배지 / 필드 스트립 / 토글 잠금이 본 규칙으로 일괄 렌더된다.
+ * 저장 상태 전이와 계단식 토글 잠금은 모두 순수 CSS 로 표현된다.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+.project-settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+  background: var(--project-settings-panel-bg);
+  border: 2px solid var(--pixel-border);
+}
+
+.project-settings-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--project-settings-divider);
+}
+
+.project-settings-panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--project-settings-section-bg);
+  border: 2px solid var(--pixel-border);
+}
+
+.project-settings-panel__section--danger {
+  border-color: var(--project-settings-save-error);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+/* 헤더 저장 상태 배지 — data-save-status 로 색·아이콘·애니메이션 스위칭 */
+.project-settings-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-width: 2px;
+  border-style: solid;
+  font-family: var(--font-game);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.project-settings-status[data-save-status="idle"] {
+  color: var(--project-settings-save-idle);
+  border-color: var(--project-settings-save-idle);
+  background: rgba(52, 211, 153, 0.15);
+}
+
+.project-settings-status[data-save-status="saving"] {
+  color: var(--project-settings-save-saving);
+  border-color: var(--project-settings-save-saving);
+  background: rgba(96, 165, 250, 0.14);
+  animation: project-settings-saving-pulse 1.2s ease-in-out infinite;
+}
+
+.project-settings-status[data-save-status="error"] {
+  color: var(--project-settings-save-error);
+  border-color: var(--project-settings-save-error);
+  background: rgba(248, 113, 113, 0.12);
+}
+
+.project-settings-status[data-save-status="dirty"] {
+  color: var(--project-settings-save-dirty);
+  border-color: var(--project-settings-save-dirty);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+/* 각 input 의 오른쪽 끝 4px 세로 스트립 — 개별 필드의 저장 상태 */
+.project-settings-field {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.project-settings-field__strip {
+  position: absolute;
+  right: 0;
+  top: 24px;
+  bottom: 0;
+  width: 4px;
+  background: var(--project-settings-save-idle);
+  transition: background-color 180ms ease-out;
+}
+
+.project-settings-field[data-save-status="saving"] .project-settings-field__strip {
+  background: var(--project-settings-save-saving);
+  animation: project-settings-saving-pulse 1.2s ease-in-out infinite;
+}
+
+.project-settings-field[data-save-status="error"] .project-settings-field__strip {
+  background: var(--project-settings-save-error);
+}
+
+.project-settings-field[data-save-status="dirty"] .project-settings-field__strip {
+  background: var(--project-settings-save-dirty);
+}
+
+/* 3-토글 계단식 연결선 */
+.project-settings-toggles {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.project-settings-toggles::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--project-settings-toggle-chain);
+}
+
+.project-settings-toggle[data-kind="autoPush"][aria-disabled="true"] {
+  cursor: not-allowed;
+  color: var(--project-settings-lock-fg);
+  opacity: 0.65;
+}
+
+@keyframes project-settings-saving-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.45); }
+  50% { box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-settings-status[data-save-status="saving"],
+  .project-settings-field[data-save-status="saving"] .project-settings-field__strip {
+    animation: none;
+  }
+}
+
+/* 반응형 편입 규칙 — ≥1280px 사이드바 / 768–1279 탭 / <768 세로 적층 */
+@media (min-width: 1280px) {
+  .project-settings-panel--docked {
+    position: sticky;
+    top: 72px;
+    max-height: calc(100vh - 96px);
+    width: 360px;
+    overflow-y: auto;
+  }
+}
+
+@media (max-width: 767px) {
+  .project-settings-panel .project-settings-panel__section {
+    padding: 10px;
   }
 }
