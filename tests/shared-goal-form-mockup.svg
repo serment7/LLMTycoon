@@ -1,0 +1,372 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1160 1480" font-family="ui-monospace, 'Segoe UI Mono', 'Noto Sans Mono CJK KR', monospace">
+  <rect width="1160" height="1480" fill="#16213e"/>
+
+  <defs>
+    <style>
+      .px-border { stroke: #4fc3f7; stroke-width: 2; fill: none; }
+      .px-border-dim { stroke: #385b7c; stroke-width: 2; fill: none; }
+      .px-border-dash { stroke: rgba(255,255,255,0.25); stroke-width: 2; stroke-dasharray: 5 4; fill: none; }
+      .panel-bg { fill: #0f3460; }
+      .deep-bg { fill: rgba(0,0,0,0.40); }
+      .input-bg { fill: rgba(0,0,0,0.45); }
+      .accent { fill: #7fd4ff; }
+      .accent-fill { fill: #00d4ff; }
+      .white { fill: #ffffff; }
+      .mute { fill: rgba(255,255,255,0.60); }
+      .dim { fill: rgba(255,255,255,0.38); }
+      .lock { fill: rgba(255,255,255,0.45); }
+      .emerald { fill: #34d399; }
+      .emerald-bg { fill: rgba(52,211,153,0.15); stroke: #34d399; stroke-width: 2; }
+      .amber { fill: #fbbf24; }
+      .amber-bg { fill: rgba(251,191,36,0.12); stroke: #fbbf24; stroke-width: 2; }
+      .red { fill: #f87171; }
+      .sky { fill: #60a5fa; }
+      .sky-bg { fill: rgba(96,165,250,0.14); stroke: #60a5fa; stroke-width: 2; }
+      .title { font-size: 15px; font-weight: bold; letter-spacing: 0.1em; text-transform: uppercase; }
+      .h2 { font-size: 13px; font-weight: bold; letter-spacing: 0.08em; text-transform: uppercase; }
+      .label { font-size: 10px; font-weight: bold; letter-spacing: 0.08em; text-transform: uppercase; }
+      .small { font-size: 10px; }
+      .tiny { font-size: 9px; letter-spacing: 0.04em; }
+      .input-txt { font-size: 12px; font-family: 'Consolas', 'Noto Sans Mono CJK KR', monospace; }
+    </style>
+  </defs>
+
+  <!-- 전체 헤더 -->
+  <text x="32" y="36" class="accent title">SharedGoalForm · 공동 목표 입력 폼 UI 시안</text>
+  <text x="32" y="56" class="mute small">2026-04-18 · GitAutomationPanel 확장 · 자동 개발 ON 전제조건 · 4 상태(미입력·입력중·저장됨·실행중)</text>
+
+  <!-- ══════════════════════════ ① empty : 미입력 ══════════════════════════ -->
+  <g transform="translate(32, 88)">
+    <text x="0" y="0" class="accent label">① EMPTY — 목표 미입력 · 자동 개발 토글 잠김(회색)</text>
+    <rect x="0" y="10" width="540" height="300" class="panel-bg"/>
+    <rect x="0" y="10" width="540" height="300" class="px-border"/>
+
+    <!-- 상단 헤더 바 -->
+    <text x="16" y="36" class="white h2">GIT 자동화</text>
+    <rect x="380" y="22" width="70" height="18" class="deep-bg"/>
+    <text x="390" y="35" class="dim small">⓪ 목표 미입력</text>
+    <rect x="460" y="22" width="60" height="18" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.22)" stroke-width="2"/>
+    <text x="470" y="35" class="dim small">🔒 잠김</text>
+
+    <!-- 공동 목표 점선 영역 -->
+    <rect x="16" y="52" width="508" height="170" class="deep-bg"/>
+    <rect x="16" y="52" width="508" height="170" class="px-border-dash"/>
+    <text x="28" y="78" class="dim label">공동 목표</text>
+    <text x="270" y="142" class="dim small" text-anchor="middle">📝 공동 목표를 먼저 입력해주세요.</text>
+    <text x="270" y="160" class="dim small" text-anchor="middle">목표 없이는 자동 개발이 시작되지 않습니다.</text>
+    <rect x="196" y="178" width="148" height="26" class="input-bg"/>
+    <rect x="196" y="178" width="148" height="26" stroke="rgba(255,255,255,0.25)" stroke-width="2" fill="none"/>
+    <text x="270" y="196" class="dim small" text-anchor="middle">＋ 목표 입력 시작</text>
+
+    <!-- 토글 영역 (잠금) -->
+    <rect x="16" y="240" width="508" height="52" class="deep-bg"/>
+    <rect x="16" y="240" width="508" height="52" stroke="rgba(255,255,255,0.12)" stroke-width="2" fill="none"/>
+    <text x="28" y="262" class="lock small">🔒</text>
+    <text x="50" y="262" class="dim label">자동 개발</text>
+    <!-- 스위치(OFF 회색) -->
+    <rect x="140" y="252" width="40" height="16" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.22)" stroke-width="2"/>
+    <rect x="144" y="256" width="10" height="8" fill="rgba(255,255,255,0.30)"/>
+    <text x="190" y="264" class="dim small">OFF · 조작 불가</text>
+    <text x="28" y="282" class="dim tiny">툴팁: "공동 목표를 먼저 저장해야 자동 개발을 시작할 수 있어요"</text>
+  </g>
+
+  <!-- ══════════════════════════ ② editing : 입력중 ══════════════════════════ -->
+  <g transform="translate(588, 88)">
+    <text x="0" y="0" class="amber label">② EDITING — 입력 변경 있음 · 저장 전까지 토글 잠김</text>
+    <rect x="0" y="10" width="540" height="300" class="panel-bg"/>
+    <rect x="0" y="10" width="540" height="300" class="px-border"/>
+
+    <text x="16" y="36" class="white h2">GIT 자동화</text>
+    <rect x="360" y="22" width="90" height="18" class="amber-bg"/>
+    <text x="370" y="35" class="amber small">⚠ 미저장 변경</text>
+    <rect x="460" y="22" width="60" height="18" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.22)" stroke-width="2"/>
+    <text x="470" y="35" class="dim small">🔒 잠김</text>
+
+    <!-- amber 강조 폼 -->
+    <rect x="16" y="52" width="508" height="170" class="deep-bg"/>
+    <rect x="16" y="52" width="508" height="170" stroke="#fbbf24" stroke-width="2" fill="none"/>
+
+    <text x="28" y="72" class="dim label">제목</text>
+    <rect x="28" y="78" width="380" height="22" class="input-bg"/>
+    <text x="36" y="94" class="white input-txt">결제 모듈 보안 강화</text>
+    <text x="490" y="94" class="dim tiny" text-anchor="end">12 / 80</text>
+
+    <text x="28" y="118" class="dim label">설명</text>
+    <rect x="28" y="124" width="484" height="36" class="input-bg"/>
+    <text x="36" y="138" class="white input-txt">토큰 검증·AES 암호화·PCI 감사로그</text>
+    <text x="36" y="154" class="mute tiny">▌</text>
+
+    <text x="28" y="178" class="dim label">우선순위</text>
+    <circle cx="96" cy="188" r="6" fill="#f87171"/>
+    <text x="106" y="192" class="red small">● P1-긴급</text>
+    <circle cx="180" cy="188" r="6" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="2"/>
+    <text x="190" y="192" class="dim small">P2-중요</text>
+    <circle cx="258" cy="188" r="6" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="2"/>
+    <text x="268" y="192" class="dim small">P3-일반</text>
+    <text x="350" y="192" class="dim small">기한 [ 2026-04-25 ]</text>
+
+    <text x="28" y="212" class="amber tiny">⚠ 저장하지 않으면 자동 개발을 시작할 수 없습니다. (Ctrl+Enter)</text>
+
+    <!-- 토글 영역 (여전히 잠김) -->
+    <rect x="16" y="240" width="508" height="52" class="deep-bg"/>
+    <rect x="16" y="240" width="508" height="52" stroke="rgba(255,255,255,0.12)" stroke-width="2" fill="none"/>
+    <text x="28" y="262" class="lock small">🔒</text>
+    <text x="50" y="262" class="dim label">자동 개발</text>
+    <rect x="140" y="252" width="40" height="16" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.22)" stroke-width="2"/>
+    <rect x="144" y="256" width="10" height="8" fill="rgba(255,255,255,0.30)"/>
+    <text x="190" y="264" class="dim small">OFF · 저장 후 해제</text>
+    <rect x="320" y="248" width="198" height="22" class="amber-bg"/>
+    <text x="330" y="263" class="amber small">💾 목표 저장 먼저 필요</text>
+  </g>
+
+  <!-- ══════════════════════════ ③ saved : 저장됨 ══════════════════════════ -->
+  <g transform="translate(32, 420)">
+    <text x="0" y="0" class="emerald label">③ SAVED — 서버 DB 저장 완료 · 토글 조작 가능</text>
+    <rect x="0" y="10" width="540" height="320" class="panel-bg"/>
+    <rect x="0" y="10" width="540" height="320" class="px-border"/>
+
+    <text x="16" y="36" class="white h2">GIT 자동화</text>
+    <rect x="360" y="22" width="90" height="18" class="emerald-bg"/>
+    <text x="370" y="35" class="emerald small">✓ 목표 저장됨</text>
+    <rect x="460" y="22" width="60" height="18" fill="rgba(52,211,153,0.10)" stroke="#34d399" stroke-width="2"/>
+    <text x="472" y="35" class="emerald small">⚡ 가능</text>
+
+    <!-- emerald 폼 (저장된 읽기 표시) -->
+    <rect x="16" y="52" width="508" height="192" class="deep-bg"/>
+    <rect x="16" y="52" width="508" height="192" stroke="#34d399" stroke-width="2" fill="none"/>
+
+    <text x="28" y="72" class="dim label">제목</text>
+    <text x="28" y="92" class="white input-txt">결제 모듈 보안 강화</text>
+
+    <text x="28" y="112" class="dim label">설명</text>
+    <text x="28" y="130" class="mute input-txt">토큰 검증·AES 암호화·PCI 감사로그 추가.</text>
+
+    <rect x="28" y="142" width="56" height="18" fill="rgba(248,113,113,0.15)" stroke="#f87171" stroke-width="2"/>
+    <text x="36" y="155" class="red tiny">● P1-긴급</text>
+    <text x="100" y="155" class="mute small">기한 2026-04-25 (D-7)</text>
+
+    <!-- 리더 미리보기 emerald 박스 -->
+    <rect x="28" y="172" width="484" height="48" class="emerald-bg"/>
+    <text x="40" y="190" class="emerald small">🤖 리더 미리보기</text>
+    <text x="40" y="208" class="white small">"결제 모듈 보안 강화" (P1, ~4/25) 를 4명에게 분배 예정</text>
+
+    <text x="28" y="234" class="mute tiny">마지막 저장 · 방금 전 · 서버 기록 ✓</text>
+
+    <!-- 토글 영역 (활성 가능) -->
+    <rect x="16" y="258" width="508" height="58" class="deep-bg"/>
+    <rect x="16" y="258" width="508" height="58" stroke="#34d399" stroke-width="2" fill="none"/>
+    <text x="28" y="282" class="emerald small">⚡</text>
+    <text x="50" y="282" class="white label">자동 개발</text>
+    <rect x="140" y="272" width="40" height="16" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.25)" stroke-width="2"/>
+    <rect x="144" y="276" width="10" height="8" fill="rgba(255,255,255,0.55)"/>
+    <text x="190" y="284" class="mute small">OFF · 클릭해서 시작</text>
+    <rect x="340" y="268" width="178" height="24" class="emerald-bg"/>
+    <text x="350" y="284" class="emerald small">▶ 클릭하면 리더가 4명에게 분배</text>
+    <text x="28" y="306" class="dim tiny">수정이 필요하면 먼저 토글 OFF → 편집 → 저장 순서를 지켜 주세요.</text>
+  </g>
+
+  <!-- ══════════════════════════ ④ running : 실행중 ══════════════════════════ -->
+  <g transform="translate(588, 420)">
+    <text x="0" y="0" class="sky label">④ RUNNING — 자동 개발 ON · 리더 분배 진행 중</text>
+    <rect x="0" y="10" width="540" height="320" class="panel-bg"/>
+    <rect x="0" y="10" width="540" height="320" class="px-border"/>
+
+    <text x="16" y="36" class="white h2">GIT 자동화</text>
+    <rect x="340" y="22" width="110" height="18" class="sky-bg"/>
+    <text x="350" y="35" class="sky small">◔ 분배 중 · 4명</text>
+    <rect x="460" y="22" width="60" height="18" fill="rgba(52,211,153,0.10)" stroke="#34d399" stroke-width="2"/>
+    <text x="472" y="35" class="emerald small">● 활성</text>
+
+    <!-- sky 폼 (readOnly 잠금 표시) -->
+    <rect x="16" y="52" width="508" height="192" class="deep-bg"/>
+    <rect x="16" y="52" width="508" height="192" stroke="#60a5fa" stroke-width="2" fill="none"/>
+
+    <text x="28" y="72" class="dim label">제목 · 읽기전용</text>
+    <text x="430" y="72" class="sky tiny">🔒 실행 중 변경 차단</text>
+    <text x="28" y="92" class="white input-txt">결제 모듈 보안 강화</text>
+
+    <text x="28" y="112" class="dim label">설명</text>
+    <text x="28" y="130" class="mute input-txt">토큰 검증·AES 암호화·PCI 감사로그 추가.</text>
+
+    <rect x="28" y="142" width="56" height="18" fill="rgba(248,113,113,0.15)" stroke="#f87171" stroke-width="2"/>
+    <text x="36" y="155" class="red tiny">● P1-긴급</text>
+    <text x="100" y="155" class="mute small">기한 2026-04-25 (D-7)</text>
+
+    <!-- 진행 배너 -->
+    <rect x="28" y="172" width="484" height="48" class="sky-bg"/>
+    <text x="40" y="190" class="sky small">🚀 리더 분배 진행</text>
+    <text x="40" y="208" class="white small">Joker → Thanos → Scarecrow → Harley  (3 / 4 전달 완료)</text>
+    <rect x="336" y="196" width="160" height="4" fill="rgba(96,165,250,0.2)"/>
+    <rect x="336" y="196" width="120" height="4" fill="#60a5fa"/>
+
+    <text x="28" y="234" class="dim tiny">시작 · 방금 전 · 서버 스트림 open · completion watcher 활성</text>
+
+    <!-- 토글 영역 (ON 실행 중) -->
+    <rect x="16" y="258" width="508" height="58" class="deep-bg"/>
+    <rect x="16" y="258" width="508" height="58" stroke="#60a5fa" stroke-width="2" fill="none"/>
+    <text x="28" y="282" class="sky small">●</text>
+    <text x="50" y="282" class="white label">자동 개발</text>
+    <!-- 스위치 ON -->
+    <rect x="140" y="272" width="40" height="16" fill="rgba(96,165,250,0.25)" stroke="#60a5fa" stroke-width="2"/>
+    <rect x="166" y="276" width="10" height="8" fill="#7fd4ff"/>
+    <text x="190" y="284" class="sky small">ON · 분배 중</text>
+    <rect x="340" y="268" width="178" height="24" fill="rgba(248,113,113,0.10)" stroke="#f87171" stroke-width="2"/>
+    <text x="350" y="284" class="red small">⏹ 정지 · 목표 편집 해제</text>
+    <text x="28" y="306" class="dim tiny">정지하면 4명에게 WAIT 신호가 전송되고 현재 작업은 현 위치에서 저장됩니다.</text>
+  </g>
+
+  <!-- ══════════════════════════ 상태 전이 다이어그램 ══════════════════════════ -->
+  <g transform="translate(32, 760)">
+    <text x="0" y="0" class="accent label">⑤ 상태 전이 다이어그램 (ChatGPT 체크리스트의 상태 머신)</text>
+    <rect x="0" y="10" width="1096" height="140" class="panel-bg"/>
+    <rect x="0" y="10" width="1096" height="140" class="px-border-dim"/>
+
+    <!-- empty 노드 -->
+    <rect x="40" y="50" width="140" height="60" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.3)" stroke-width="2" stroke-dasharray="5 4"/>
+    <text x="110" y="78" class="dim small" text-anchor="middle">EMPTY</text>
+    <text x="110" y="96" class="dim tiny" text-anchor="middle">목표 미입력 · 🔒</text>
+
+    <!-- editing 노드 -->
+    <rect x="260" y="50" width="140" height="60" class="amber-bg"/>
+    <text x="330" y="78" class="amber small" text-anchor="middle">EDITING</text>
+    <text x="330" y="96" class="amber tiny" text-anchor="middle">⚠ 미저장 · 🔒</text>
+
+    <!-- saved 노드 -->
+    <rect x="480" y="50" width="140" height="60" class="emerald-bg"/>
+    <text x="550" y="78" class="emerald small" text-anchor="middle">SAVED</text>
+    <text x="550" y="96" class="emerald tiny" text-anchor="middle">✓ 저장됨 · ⚡</text>
+
+    <!-- running 노드 -->
+    <rect x="700" y="50" width="140" height="60" class="sky-bg"/>
+    <text x="770" y="78" class="sky small" text-anchor="middle">RUNNING</text>
+    <text x="770" y="96" class="sky tiny" text-anchor="middle">◔ 분배 중 · ●</text>
+
+    <!-- 화살표 -->
+    <line x1="180" y1="80" x2="260" y2="80" stroke="#7fd4ff" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="220" y="72" class="mute tiny" text-anchor="middle">입력 시작</text>
+    <line x1="400" y1="80" x2="480" y2="80" stroke="#7fd4ff" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="440" y="72" class="mute tiny" text-anchor="middle">저장</text>
+    <line x1="620" y1="80" x2="700" y2="80" stroke="#7fd4ff" stroke-width="2" marker-end="url(#arr)"/>
+    <text x="660" y="72" class="mute tiny" text-anchor="middle">토글 ON</text>
+
+    <!-- 되돌림 -->
+    <path d="M 770 110 Q 770 135 110 135 L 110 112" fill="none" stroke="rgba(248,113,113,0.6)" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+    <text x="440" y="130" class="red tiny" text-anchor="middle">목표 삭제 / 정지 → EMPTY 로 복귀</text>
+
+    <defs>
+      <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#7fd4ff"/>
+      </marker>
+    </defs>
+
+    <!-- 시나리오 안내 -->
+    <text x="40" y="25" class="mute tiny">자동 개발 토글은 SAVED 또는 RUNNING 상태에서만 조작 가능. 그 외 상태에서 클릭 시 폼 shake + focus 이동.</text>
+  </g>
+
+  <!-- ══════════════════════════ 색상·배지 팔레트 ══════════════════════════ -->
+  <g transform="translate(32, 920)">
+    <text x="0" y="0" class="accent label">⑥ 색상 토큰 · 상태 배지 팔레트 (index.css --shared-goal-*)</text>
+    <rect x="0" y="10" width="1096" height="220" class="panel-bg"/>
+    <rect x="0" y="10" width="1096" height="220" class="px-border-dim"/>
+
+    <!-- 토큰 5칸 -->
+    <g transform="translate(24, 36)">
+      <rect x="0" y="0" width="140" height="60" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.25)" stroke-width="2" stroke-dasharray="5 4"/>
+      <text x="70" y="28" class="dim tiny" text-anchor="middle">--shared-goal-</text>
+      <text x="70" y="42" class="white small" text-anchor="middle">border-empty</text>
+      <text x="70" y="80" class="dim tiny" text-anchor="middle">rgba(255,255,255,.25)</text>
+      <text x="70" y="92" class="dim tiny" text-anchor="middle">dashed 2px</text>
+    </g>
+    <g transform="translate(184, 36)">
+      <rect x="0" y="0" width="140" height="60" stroke="#fbbf24" stroke-width="2" fill="rgba(251,191,36,0.08)"/>
+      <text x="70" y="28" class="amber tiny" text-anchor="middle">--shared-goal-</text>
+      <text x="70" y="42" class="amber small" text-anchor="middle">border-editing</text>
+      <text x="70" y="80" class="amber tiny" text-anchor="middle">#fbbf24</text>
+      <text x="70" y="92" class="amber tiny" text-anchor="middle">solid 2px</text>
+    </g>
+    <g transform="translate(344, 36)">
+      <rect x="0" y="0" width="140" height="60" stroke="#34d399" stroke-width="2" fill="rgba(52,211,153,0.08)"/>
+      <text x="70" y="28" class="emerald tiny" text-anchor="middle">--shared-goal-</text>
+      <text x="70" y="42" class="emerald small" text-anchor="middle">border-saved</text>
+      <text x="70" y="80" class="emerald tiny" text-anchor="middle">#34d399</text>
+      <text x="70" y="92" class="emerald tiny" text-anchor="middle">solid 2px</text>
+    </g>
+    <g transform="translate(504, 36)">
+      <rect x="0" y="0" width="140" height="60" stroke="#60a5fa" stroke-width="2" fill="rgba(96,165,250,0.1)"/>
+      <text x="70" y="28" class="sky tiny" text-anchor="middle">--shared-goal-</text>
+      <text x="70" y="42" class="sky small" text-anchor="middle">border-running</text>
+      <text x="70" y="80" class="sky tiny" text-anchor="middle">#60a5fa pulse</text>
+      <text x="70" y="92" class="sky tiny" text-anchor="middle">1.6s ease-in-out</text>
+    </g>
+    <g transform="translate(664, 36)">
+      <rect x="0" y="0" width="140" height="60" fill="rgba(0,0,0,0.4)" stroke="rgba(255,255,255,0.25)" stroke-width="2"/>
+      <text x="70" y="36" class="lock small" text-anchor="middle">🔒</text>
+      <text x="70" y="52" class="lock tiny" text-anchor="middle">lock-fg</text>
+      <text x="70" y="80" class="dim tiny" text-anchor="middle">rgba(255,255,255,.45)</text>
+      <text x="70" y="92" class="dim tiny" text-anchor="middle">토글 잠금·필드 readOnly</text>
+    </g>
+
+    <!-- 우선순위 배지 3종 -->
+    <g transform="translate(824, 36)">
+      <rect x="0" y="0" width="76" height="24" fill="rgba(248,113,113,0.15)" stroke="#f87171" stroke-width="2"/>
+      <text x="38" y="16" class="red small" text-anchor="middle">● P1-긴급</text>
+      <rect x="0" y="32" width="76" height="24" fill="rgba(251,191,36,0.12)" stroke="#fbbf24" stroke-width="2"/>
+      <text x="38" y="48" class="amber small" text-anchor="middle">● P2-중요</text>
+      <rect x="0" y="64" width="76" height="24" fill="rgba(127,212,255,0.12)" stroke="#7fd4ff" stroke-width="2"/>
+      <text x="38" y="80" class="accent small" text-anchor="middle">● P3-일반</text>
+    </g>
+    <text x="920" y="50" class="mute tiny">priority-p1/p2/p3 : 라디오·배지 공용</text>
+    <text x="920" y="70" class="mute tiny">--shared-goal-priority-{p1,p2,p3}</text>
+
+    <!-- 배지 매트릭스 -->
+    <g transform="translate(24, 114)">
+      <text x="0" y="0" class="accent label">상태 배지 매트릭스</text>
+      <rect x="0" y="10" width="200" height="22" fill="rgba(255,255,255,0.05)"/>
+      <text x="10" y="25" class="dim small">⓪ 목표 미입력</text>
+      <rect x="210" y="10" width="200" height="22" class="amber-bg"/>
+      <text x="220" y="25" class="amber small">⚠ 미저장 변경</text>
+      <rect x="420" y="10" width="200" height="22" class="emerald-bg"/>
+      <text x="430" y="25" class="emerald small">✓ 목표 저장됨</text>
+      <rect x="630" y="10" width="200" height="22" class="sky-bg"/>
+      <text x="640" y="25" class="sky small">◔ 리더 분배 중 · 4명</text>
+      <rect x="840" y="10" width="200" height="22" fill="rgba(248,113,113,0.12)" stroke="#f87171" stroke-width="2"/>
+      <text x="850" y="25" class="red small">✕ 저장 실패(재시도)</text>
+    </g>
+
+    <text x="24" y="196" class="mute tiny">모든 배지는 색 + 아이콘(⓪ ⚠ ✓ ◔ ✕) + 텍스트 3중 인코딩으로 색각 이상 대응.</text>
+    <text x="24" y="212" class="mute tiny">애니메이션: EDITING 의 amber 1.4s pulse, RUNNING 의 sky 1.6s pulse (prefers-reduced-motion 시 중지).</text>
+  </g>
+
+  <!-- ══════════════════════════ 접근성 · 키보드 ══════════════════════════ -->
+  <g transform="translate(32, 1160)">
+    <text x="0" y="0" class="accent label">⑦ 접근성(a11y) · 키보드 단축</text>
+    <rect x="0" y="10" width="1096" height="120" class="panel-bg"/>
+    <rect x="0" y="10" width="1096" height="120" class="px-border-dim"/>
+
+    <text x="24" y="36" class="mute small">• role="group" + aria-labelledby="shared-goal-heading"  — 폼 그룹 식별</text>
+    <text x="24" y="56" class="mute small">• 필수 필드 aria-required="true" / 에러 aria-describedby — 스크린리더 낭독</text>
+    <text x="24" y="76" class="mute small">• 토글 잠금 aria-disabled="true" + #shared-goal-lock-hint 로 "공동 목표 저장 후 사용 가능" 안내</text>
+    <text x="24" y="96" class="mute small">• 상태 배지 role="status" aria-live="polite" — empty → saved 전이 시 1회 낭독</text>
+    <text x="24" y="116" class="mute small">• 키보드: Ctrl+Enter 저장 · Esc 편집 취소(=마지막 저장본 복원) · 라디오 방향키 순환</text>
+
+    <text x="600" y="36" class="mute small">• prefers-reduced-motion 존중 — pulse/shake 비활성</text>
+    <text x="600" y="56" class="mute small">• 포커스 링: 2px outline #00d2ff · offset 2px (모든 인터랙티브)</text>
+    <text x="600" y="76" class="mute small">• 색 + 아이콘 + 텍스트 3중 인코딩 — 색각 이상 대응</text>
+    <text x="600" y="96" class="mute small">• 잠금 토글 클릭 시 shake 200ms + focus 이동 → 첫 빈 필드로 이동</text>
+    <text x="600" y="116" class="mute small">• 최소 터치 영역 32×32 (모바일 고려, 초기 데스크톱 폭 기준)</text>
+  </g>
+
+  <!-- ══════════════════════════ 후속 단계 ══════════════════════════ -->
+  <g transform="translate(32, 1310)">
+    <text x="0" y="0" class="accent label">⑧ 구현 경로 (Thanos 인계용)</text>
+    <rect x="0" y="10" width="1096" height="140" class="panel-bg"/>
+    <rect x="0" y="10" width="1096" height="140" class="px-border"/>
+
+    <text x="24" y="36" class="white small">1. src/components/SharedGoalForm.tsx 신규 — props: { goal, status, onSave, onClear, onLog }</text>
+    <text x="24" y="56" class="white small">2. GitAutomationPanel.tsx 헤더 우측에 마운트 · enabled 토글 onChange 진입 가드: status !== 'saved' 이면 shake</text>
+    <text x="24" y="76" class="white small">3. 서버: POST /api/projects/:id/shared-goal · 테이블 sharedGoals(프로젝트당 1행) + sharedGoalHistory(이력)</text>
+    <text x="24" y="96" class="white small">4. src/server/prompts.ts — 공동 목표 블록을 리더 시스템 프롬프트 상단에 고정 주입</text>
+    <text x="24" y="116" class="white small">5. src/utils/leaderMessage.ts — 분배 메시지에 {title}/{priority}/{dueDate} 템플릿 치환</text>
+    <text x="24" y="136" class="accent small">→ 회귀 테스트: tests/shared-goal-form-regression.md (후속) · 4 상태 전이와 잠금 동작을 모두 커버</text>
+  </g>
+</svg>

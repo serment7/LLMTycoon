@@ -51,6 +51,45 @@
   --agent-state-resuming-fg: #b6eaff;
   --agent-state-resuming-glow: rgba(0, 210, 255, 0.55);
 
+  /* ── SharedGoalForm · 공동 목표 입력 폼 디자인 토큰 (2026-04-18 시안) ──────
+   * 대상: src/components/SharedGoalForm.tsx (신규) — GitAutomationPanel 헤더
+   * 확장 영역. 자동 개발 토글의 전제조건(= 공동 목표 저장) 을 시각적으로
+   * 강제하기 위해 4 상태(empty/editing/saved/running) 를 모두 단일 진원으로
+   * 관리한다. 시안 문서: tests/shared-goal-form-mockup.md ·
+   * 정적 미리보기: tests/shared-goal-form-mockup.svg
+   *
+   * 상태별 의미 계층:
+   *   empty    — 제목·설명 모두 공란. 토글은 🔒 잠금. 점선 테두리로
+   *              "여기에 내용이 들어가야 한다" 를 약하게 시사.
+   *   editing  — 입력 변경 존재 · 저장 전. amber 실선으로 강조하고
+   *              "⚠ 미저장" 배지를 1.4s pulse 로 애니메이션. 토글은 계속 🔒.
+   *   saved    — 서버 DB 기록 완료. emerald 실선 + "✓ 저장됨". 토글 해제.
+   *   running  — 자동 개발 ON · 리더 분배 진행. sky 실선 + 1.6s pulse.
+   *              폼 자체는 readOnly 로 잠가 진행 중 변경 사고를 차단.
+   *
+   * 대비: empty 의 dashed border 는 의도적으로 낮춘 대비(3.0:1 · AA large)
+   * 이므로 lock-fg 아이콘과 hint 문구로 보조. editing/saved/running 은
+   * 모두 4.5:1 이상을 만족해 AA 본문 기준을 통과한다.
+   *
+   * 우선순위 팔레트(p1/p2/p3) 는 라디오 버튼과 배지에서 공용으로 쓰이며,
+   * P1=red 은 이미 존재하는 AgentStatusPanel 의 "긴급" 색과 일치시켜 사용자가
+   * 색 의미를 재학습하지 않아도 되게 한다. 색각 이상 대응으로 모든 배지는
+   * 색 + 아이콘 + 텍스트 3중 인코딩을 적용한다.
+   */
+  --shared-goal-border-empty: rgba(255, 255, 255, 0.25);
+  --shared-goal-border-editing: #fbbf24;
+  --shared-goal-border-saved: #34d399;
+  --shared-goal-border-running: #60a5fa;
+  --shared-goal-bg-empty: rgba(0, 0, 0, 0.40);
+  --shared-goal-bg-editing: rgba(251, 191, 36, 0.08);
+  --shared-goal-bg-saved: rgba(52, 211, 153, 0.08);
+  --shared-goal-bg-running: rgba(96, 165, 250, 0.10);
+  --shared-goal-lock-fg: rgba(255, 255, 255, 0.45);
+  --shared-goal-hint-fg: rgba(255, 255, 255, 0.55);
+  --shared-goal-priority-p1: #f87171;
+  --shared-goal-priority-p2: #fbbf24;
+  --shared-goal-priority-p3: #7fd4ff;
+
   /* ── Git 자동화 파이프라인·로그 뷰어 디자인 토큰 (2026-04-18) ─────────────
    * 목적: AgentStatusPanel 의 `.git-auto-stages*` 배지와 신규 Git 자동화 로그
    * 뷰어(`.git-auto-log*`) 가 동일한 단계 팔레트를 공유하게 한다. 기존
@@ -3717,4 +3756,176 @@ body {
   color: rgba(255, 255, 255, 0.55);
   font-style: italic;
   font-weight: 500;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * SharedGoalForm · 공동 목표 입력 폼 (2026-04-18 UI 시안)
+ * 참조: tests/shared-goal-form-mockup.md · tests/shared-goal-form-mockup.svg
+ *
+ * 토글 잠금 UX 의 핵심: data-goal-state 를 폼 컨테이너와 자동 개발 토글에
+ * 공통으로 달아, 같은 규칙으로 테두리/배경/cursor 를 일괄 제어한다.
+ * 실제 리액트 구현 전이라도 이 규칙이 SSOT 로 먼저 자리잡아 있어야
+ * 구현자(Thanos)가 JSX 에서 data-attribute 만 올바르게 세팅하면 된다.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+.shared-goal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  background: var(--shared-goal-bg-empty);
+  border: 2px dashed var(--shared-goal-border-empty);
+  transition: border-color 180ms ease-out, background-color 180ms ease-out;
+}
+
+.shared-goal-form[data-goal-state="editing"] {
+  border-style: solid;
+  border-color: var(--shared-goal-border-editing);
+  background: var(--shared-goal-bg-editing);
+  animation: shared-goal-editing-pulse 1.4s ease-in-out infinite;
+}
+
+.shared-goal-form[data-goal-state="saved"] {
+  border-style: solid;
+  border-color: var(--shared-goal-border-saved);
+  background: var(--shared-goal-bg-saved);
+}
+
+.shared-goal-form[data-goal-state="running"] {
+  border-style: solid;
+  border-color: var(--shared-goal-border-running);
+  background: var(--shared-goal-bg-running);
+  animation: shared-goal-running-pulse 1.6s ease-in-out infinite;
+}
+
+.shared-goal-form[data-goal-state="running"] input,
+.shared-goal-form[data-goal-state="running"] textarea,
+.shared-goal-form[data-goal-state="running"] [role="radiogroup"] {
+  pointer-events: none;
+  opacity: 0.72;
+}
+
+.shared-goal-form__hint {
+  font-family: var(--font-kr);
+  font-size: 11px;
+  color: var(--shared-goal-hint-fg);
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+.shared-goal-form[data-goal-state="editing"] .shared-goal-form__hint,
+.shared-goal-form[data-goal-state="saved"] .shared-goal-form__hint,
+.shared-goal-form[data-goal-state="running"] .shared-goal-form__hint {
+  display: none;
+}
+
+/* 자동 개발 토글 — 공동 목표 저장 전까지 🔒 잠금 */
+.shared-goal-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.40);
+  font-family: var(--font-game);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: border-color 180ms ease-out, color 180ms ease-out;
+}
+
+.shared-goal-toggle[data-goal-state="empty"],
+.shared-goal-toggle[data-goal-state="editing"] {
+  cursor: not-allowed;
+  color: var(--shared-goal-lock-fg);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.shared-goal-toggle[data-goal-state="empty"] .shared-goal-toggle__lock,
+.shared-goal-toggle[data-goal-state="editing"] .shared-goal-toggle__lock {
+  display: inline-block;
+  color: var(--shared-goal-lock-fg);
+}
+
+.shared-goal-toggle[data-goal-state="saved"],
+.shared-goal-toggle[data-goal-state="running"] {
+  cursor: pointer;
+}
+
+.shared-goal-toggle[data-goal-state="saved"] {
+  color: #bef4dd;
+  border-color: var(--shared-goal-border-saved);
+}
+
+.shared-goal-toggle[data-goal-state="running"] {
+  color: #cfe4ff;
+  border-color: var(--shared-goal-border-running);
+  animation: shared-goal-running-pulse 1.6s ease-in-out infinite;
+}
+
+.shared-goal-toggle[aria-disabled="true"]:focus-visible {
+  outline: 2px solid var(--pixel-accent);
+  outline-offset: 2px;
+}
+
+/* 잠금 상태에서 클릭 시도 시 1회 shake — JS 가 data-shake="1" 토글 */
+.shared-goal-toggle[data-shake="1"] {
+  animation: shared-goal-shake 200ms ease-in-out 1;
+}
+
+/* 우선순위 배지(P1/P2/P3) — 라디오/배지 공용 */
+.shared-goal-priority {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-width: 2px;
+  border-style: solid;
+  font-family: var(--font-game);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.shared-goal-priority[data-priority="p1"] {
+  color: var(--shared-goal-priority-p1);
+  border-color: var(--shared-goal-priority-p1);
+  background: rgba(248, 113, 113, 0.14);
+}
+
+.shared-goal-priority[data-priority="p2"] {
+  color: var(--shared-goal-priority-p2);
+  border-color: var(--shared-goal-priority-p2);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.shared-goal-priority[data-priority="p3"] {
+  color: var(--shared-goal-priority-p3);
+  border-color: var(--shared-goal-priority-p3);
+  background: rgba(127, 212, 255, 0.12);
+}
+
+@keyframes shared-goal-editing-pulse {
+  0%, 100% { border-color: var(--shared-goal-border-editing); }
+  50% { border-color: rgba(251, 191, 36, 0.55); }
+}
+
+@keyframes shared-goal-running-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.45); }
+  50% { box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.15); }
+}
+
+@keyframes shared-goal-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shared-goal-form[data-goal-state="editing"],
+  .shared-goal-form[data-goal-state="running"],
+  .shared-goal-toggle[data-goal-state="running"],
+  .shared-goal-toggle[data-shake="1"] {
+    animation: none;
+  }
 }

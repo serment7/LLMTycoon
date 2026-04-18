@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
 import { mkdirSync } from 'fs';
 
-import type { Agent, CodeFile, GameState, Project, Task, AutoDevSettings } from '../types';
+import type { Agent, CodeFile, GameState, Project, Task, AutoDevSettings, SharedGoal } from '../types';
 import { AgentWorkerRegistry } from './agentWorker';
 import {
   buildSystemPrompt,
@@ -74,6 +74,7 @@ export class TaskRunner {
   private tasksCol: Collection<Task>;
   private filesCol: Collection<CodeFile>;
   private settingsCol: Collection<{ key: string; value: any }>;
+  private sharedGoalsCol: Collection<SharedGoal>;
 
   private autoDevTimer: NodeJS.Timeout | null = null;
   // auto-dev 는 서버 메모리 + DB 영속화. 기동 시 DB 에서 복원한다.
@@ -98,6 +99,17 @@ export class TaskRunner {
     this.tasksCol = this.db.collection<Task>('tasks');
     this.filesCol = this.db.collection<CodeFile>('files');
     this.settingsCol = this.db.collection<{ key: string; value: any }>('settings');
+    this.sharedGoalsCol = this.db.collection<SharedGoal>('shared_goals');
+  }
+
+  // 프로젝트의 활성 공동 목표를 반환. 자동 개발 루프와 리더 프롬프트 조립 양쪽에서
+  // 사용하며, 없으면 null 을 돌려 호출자가 "목표 없음" 분기로 처리할 수 있게 한다.
+  async getActiveSharedGoal(projectId: string): Promise<SharedGoal | null> {
+    const goal = await this.sharedGoalsCol.findOne(
+      { projectId, status: 'active' },
+      { projection: { _id: 0 }, sort: { createdAt: -1 } },
+    );
+    return (goal as SharedGoal | null) || null;
   }
 
   async init() {
@@ -246,6 +258,17 @@ export class TaskRunner {
       projectId: 'projectId' in next ? next.projectId : this.autoDev.projectId,
       updatedAt: new Date().toISOString(),
     };
+    // "목표 없으면 자동 개발을 시작하지 않는다" 규약: projectId 를 지정해 활성화하는
+    // 경우, 해당 프로젝트에 활성 공동 목표가 없으면 거부한다. projectId 를 생략한
+    // 전역 활성화는 tick 단계에서 프로젝트별로 개별 스킵하므로 여기서는 통과시킨다.
+    if (merged.enabled && merged.projectId) {
+      const goal = await this.getActiveSharedGoal(merged.projectId);
+      if (!goal) {
+        const err = new Error('이 프로젝트에는 활성 공동 목표가 없어 자동 개발을 시작할 수 없습니다.');
+        (err as Error & { code?: string }).code = 'SHARED_GOAL_REQUIRED';
+        throw err;
+      }
+    }
     this.autoDev = merged;
     await this.settingsCol.updateOne(
       { key: TaskRunner.SETTINGS_KEY },
@@ -272,6 +295,13 @@ export class TaskRunner {
     // "idle" 기준: DB 상 status=idle 이고 현재 워커 큐가 비어있음(중복 enqueue 방지).
     for (const project of projects) {
       if (!project.agents || project.agents.length === 0) continue;
+      // 활성 공동 목표가 없는 프로젝트는 tick 을 건너뛴다. 목표 없이 합성 태스크를
+      // 생성하면 리더가 맥락 없는 분배를 하게 되어 불필요한 모델 호출만 쌓인다.
+      const goal = await this.getActiveSharedGoal(project.id);
+      if (!goal) {
+        console.warn(`[auto-dev] project ${project.id} 활성 공동 목표 없음 — 스킵`);
+        continue;
+      }
       const members = await this.agentsCol
         .find({ id: { $in: project.agents } }, { projection: { _id: 0 } })
         .toArray();
@@ -334,12 +364,18 @@ export class TaskRunner {
       teamPeers = (await this.agentsCol
         .find({ id: { $in: project.agents || [] } }, { projection: { _id: 0 } })
         .toArray()).filter(p => p.id !== agent.id);
+      // 리더 분배 프롬프트에 활성 공동 목표를 주입해 팀 전체가 동일한 방향을
+      // 지향하도록 한다. auto-dev 가 tick 에서 이미 목표 존재를 검증했지만,
+      // 사용자 커맨드로 리더가 호출되는 경우에도 목표 컨텍스트가 유용하므로
+      // 조회는 trigger 에 무관하게 수행한다.
+      const sharedGoal = await this.getActiveSharedGoal(project.id);
       prompt = buildLeaderPlanPrompt({
         agent,
         project,
         peers: teamPeers,
         trigger: task.source === 'auto-dev' ? 'auto-dev' : 'user-command',
         userCommand: task.description,
+        sharedGoal,
       });
       isLeaderPlanning = true;
     } else {

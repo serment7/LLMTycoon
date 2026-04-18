@@ -1,4 +1,4 @@
-import type { Agent, AgentRole, CodeFile, Project, Task } from '../types';
+import type { Agent, AgentRole, CodeFile, Project, Task, SharedGoal } from '../types';
 
 // 프롬프트 생성 로직은 기존에 클라이언트(App.tsx)에 있었다. 워커 아키텍처로
 // 전환하면서 서버가 태스크를 직접 dispatch 하게 되므로, 같은 규칙을 서버에서
@@ -99,12 +99,36 @@ interface LeaderPlanPromptInput {
   peers: Agent[];
   trigger: 'auto-dev' | 'user-command';
   userCommand?: string;
+  // 프로젝트 전체가 지향하는 활성 공동 목표. 존재하면 리더 프롬프트 상단에
+  // "공동 목표" 블록으로 주입되어 분배 판단의 기준점이 된다.
+  sharedGoal?: SharedGoal | null;
+}
+
+function priorityLabel(priority: SharedGoal['priority']): string {
+  switch (priority) {
+    case 'high': return '높음';
+    case 'low': return '낮음';
+    default: return '보통';
+  }
+}
+
+function renderSharedGoalBlock(goal: SharedGoal | null | undefined): string[] {
+  if (!goal) return [];
+  const lines: string[] = [];
+  lines.push('[공동 목표]');
+  lines.push(`- 제목: ${goal.title}`);
+  if (goal.description) lines.push(`- 설명: ${goal.description}`);
+  lines.push(`- 우선순위: ${priorityLabel(goal.priority)}`);
+  if (goal.deadline) lines.push(`- 마감: ${goal.deadline}`);
+  lines.push('모든 분배는 위 목표를 향해 수렴해야 한다. 목표와 어긋나는 작업은 배제하라.');
+  lines.push('');
+  return lines;
 }
 
 // 리더가 팀원에게 업무를 분배하기 위해 사용하는 프롬프트. 출력은 엄격한 JSON.
 // JSON 파싱 로직은 dispatcher 측에서 처리한다.
 export function buildLeaderPlanPrompt(input: LeaderPlanPromptInput): string {
-  const { agent, project, peers, trigger, userCommand } = input;
+  const { agent, project, peers, trigger, userCommand, sharedGoal } = input;
   const memberList = peers
     .filter(p => p.id !== agent.id)
     .map(p => `- ${p.name} (${translateRole(p.role)}, id: ${p.id}, 상태: ${p.status})`)
@@ -116,6 +140,7 @@ export function buildLeaderPlanPrompt(input: LeaderPlanPromptInput): string {
   lines.push(`당신은 팀 리더 "${agent.name}" 입니다. ${agent.persona?.trim() ? `페르소나: ${agent.persona.trim()}` : ''}`.trim());
   lines.push(`프로젝트: ${project.name} — ${project.description || ''}`);
   lines.push('');
+  for (const l of renderSharedGoalBlock(sharedGoal)) lines.push(l);
   lines.push('팀원 목록:');
   lines.push(memberList);
   lines.push('');

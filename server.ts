@@ -9,7 +9,7 @@ import { tmpdir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { MongoClient, Db } from 'mongodb';
 import multer from 'multer';
-import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings, GitCredential, GitCredentialRedacted } from './src/types';
+import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings, GitCredential, GitCredentialRedacted, SharedGoal, SharedGoalPriority, SharedGoalStatus } from './src/types';
 import { AgentWorkerRegistry } from './src/server/agentWorker';
 import { TaskRunner } from './src/server/taskRunner';
 import { processDirectiveFile } from './src/server/fileProcessor';
@@ -216,6 +216,11 @@ async function startServer() {
   // 리더 에이전트가 태스크 완료 이벤트마다 이 컬렉션을 조회해 auto-commit/push/PR 여부를 판정.
   const gitAutomationSettingsCol = db.collection<GitAutomationSettings>('git_automation_settings');
   await gitAutomationSettingsCol.createIndex({ projectId: 1 }, { unique: true });
+  // 프로젝트별 공동 목표(sharedGoal). projectId 당 활성 1건 원칙이며, 새 목표를
+  // insert 할 때 기존 active 를 archived 로 내려 불변식을 유지한다. 자동 개발
+  // 루프는 활성 목표가 있는 프로젝트만 돌린다.
+  const sharedGoalsCol = db.collection<SharedGoal>('shared_goals');
+  await sharedGoalsCol.createIndex({ projectId: 1, status: 1, createdAt: -1 });
   // 관리 메뉴(연동·가져온 저장소)는 프로젝트별로 격리한다. 전역 컬렉션을 공유하면
   // 한 프로젝트가 PR 대상으로 지정한 외부 저장소가 다른 프로젝트 화면에 섞여 나와
   // "어느 게임 프로젝트에 속한 것인지" 구분이 흐려진다. projectId 필드를 필수 키로
@@ -554,11 +559,22 @@ async function startServer() {
 
   app.patch('/api/auto-dev', async (req, res) => {
     const { enabled, projectId } = req.body || {};
-    const next = await taskRunner.setAutoDev({
-      enabled: typeof enabled === 'boolean' ? enabled : undefined,
-      projectId: projectId === null ? undefined : (typeof projectId === 'string' ? projectId : undefined),
-    });
-    res.json(next);
+    try {
+      const next = await taskRunner.setAutoDev({
+        enabled: typeof enabled === 'boolean' ? enabled : undefined,
+        projectId: projectId === null ? undefined : (typeof projectId === 'string' ? projectId : undefined),
+      });
+      res.json(next);
+    } catch (e: any) {
+      // 활성 공동 목표 미설정은 운영자가 UI 에서 즉시 복구 가능한 사용자 오류이므로
+      // 400 으로 내려보내 토스트·배지로 안내한다. 다른 오류는 기존 5xx 경로로 승격.
+      if (e?.code === 'SHARED_GOAL_REQUIRED') {
+        res.status(400).json({ error: e.message, code: 'SHARED_GOAL_REQUIRED' });
+        return;
+      }
+      console.error('[auto-dev] setAutoDev failed:', e?.message);
+      res.status(500).json({ error: e?.message || 'auto-dev update failed' });
+    }
   });
 
   // --- MCP-backed endpoints ---
@@ -760,6 +776,54 @@ async function startServer() {
     const { tokenEncrypted, ...rest } = c;
     return { ...rest, hasToken: typeof tokenEncrypted === 'string' && tokenEncrypted.length > 0 };
   };
+
+  // 프로젝트 공동 목표(sharedGoal) 조회·갱신. 활성 1건만 조회해 내려주며, 없으면
+  // null 을 반환해 UI 가 "목표 미설정" 배지를 띄울 수 있게 한다.
+  app.get('/api/projects/:id/shared-goal', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+    const goal = await sharedGoalsCol.findOne(
+      { projectId: id, status: 'active' },
+      { projection: { _id: 0 }, sort: { createdAt: -1 } },
+    );
+    res.json(goal || null);
+  });
+
+  app.post('/api/projects/:id/shared-goal', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+    const { title, description, priority, deadline, status } = req.body || {};
+    const trimmedTitle = typeof title === 'string' ? title.trim() : '';
+    if (!trimmedTitle) {
+      res.status(400).json({ error: 'title required' });
+      return;
+    }
+    const normalizedPriority: SharedGoalPriority =
+      priority === 'low' || priority === 'high' ? priority : 'normal';
+    const normalizedStatus: SharedGoalStatus =
+      status === 'archived' || status === 'completed' ? status : 'active';
+    const goal: SharedGoal = {
+      id: uuidv4(),
+      projectId: id,
+      title: trimmedTitle,
+      description: typeof description === 'string' ? description.trim() : '',
+      priority: normalizedPriority,
+      deadline: typeof deadline === 'string' && deadline.trim() ? deadline.trim() : undefined,
+      status: normalizedStatus,
+      createdAt: new Date().toISOString(),
+    };
+    // "활성 1건" 불변식: 새 목표가 active 로 들어오면 기존 활성은 archived 로 내린다.
+    if (goal.status === 'active') {
+      await sharedGoalsCol.updateMany(
+        { projectId: id, status: 'active' },
+        { $set: { status: 'archived' } },
+      );
+    }
+    await sharedGoalsCol.insertOne(goal);
+    res.json(goal);
+  });
 
   app.get('/api/projects/:id/git-credentials', async (req, res) => {
     const projectId = String(req.params.id || '').trim();

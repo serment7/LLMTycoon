@@ -203,6 +203,26 @@ export type GitCredentialRedacted = Omit<GitCredential, 'tokenEncrypted'> & { ha
 
 export const USER_PREFERENCES_KEY = 'llm-tycoon:user-preferences';
 
+// 자동 개발 루프 전체가 공유하는 "공동 목표(sharedGoal)". 리더 에이전트가 분배
+// 프롬프트를 조립할 때 주입되어 팀원들이 한 방향으로 움직이도록 가이드한다.
+// 한 프로젝트에 동시에 활성인 목표는 1개로 한정(서버가 upsert 시 기존 active 를
+// archived 로 내린다). 활성 목표가 없으면 /api/auto-dev 가 enabled=true 로
+// 전환되는 것을 서버가 거부하고, auto-dev tick 도 해당 프로젝트를 건너뛴다.
+export type SharedGoalPriority = 'low' | 'normal' | 'high';
+export type SharedGoalStatus = 'active' | 'archived' | 'completed';
+
+export interface SharedGoal {
+  id: string;
+  projectId: string;
+  title: string;
+  description: string;
+  priority: SharedGoalPriority;
+  // ISO 문자열(YYYY-MM-DD 또는 전체 timestamp). 비우면 마감 미정.
+  deadline?: string;
+  status: SharedGoalStatus;
+  createdAt: string;
+}
+
 export interface ManagedProject {
   id: string;
   // 관리 메뉴 데이터는 게임 프로젝트별로 격리된다. 동일한 remote 저장소라도 다른
