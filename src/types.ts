@@ -179,6 +179,28 @@ export interface GitAutomationSettings {
   updatedAt: string;
 }
 
+// 프로젝트 단위 Git 자격증명. 기존 SourceIntegration 은 "저장소 임포트" 용으로
+// 공급자별 여러 건을 허용하지만, 프로젝트 설정 화면의 GitCredentialsSection 은
+// "이 프로젝트에 딱 한 쌍(provider + username + PAT)" 을 바인딩하는 간소 모델.
+// 서버는 projectId 를 주키로 upsert 하고, 클라이언트로 내려줄 때는 token 을
+// 반드시 마스킹해서 hasToken 플래그만 전달한다.
+export interface GitCredential {
+  projectId: string;
+  provider: SourceProvider;
+  username: string;
+  // AES-256-GCM 으로 암호화된 personal access token 바이트를
+  // base64 로 인코딩한 문자열(`iv(12) || authTag(16) || ciphertext`). 복호화 키는
+  // 환경변수 GIT_TOKEN_ENC_KEY 에만 존재하므로, DB 덤프가 유출돼도 평문 복원은
+  // 불가능하다. 응답 페이로드에는 절대 포함되지 않고, 저장 여부만 hasToken 으로 노출된다.
+  tokenEncrypted: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// 클라이언트가 읽는 형태: 암호문조차 내려보내지 않고 "저장됨" 플래그만 노출해
+// UI 가 마스킹 배지를 표시할 수 있게 한다. POST 성공 응답과 GET 응답이 동일 구조를 공유한다.
+export type GitCredentialRedacted = Omit<GitCredential, 'tokenEncrypted'> & { hasToken: boolean };
+
 export const USER_PREFERENCES_KEY = 'llm-tycoon:user-preferences';
 
 export interface ManagedProject {

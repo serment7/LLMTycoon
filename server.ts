@@ -9,7 +9,7 @@ import { tmpdir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { MongoClient, Db } from 'mongodb';
 import multer from 'multer';
-import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings } from './src/types';
+import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings, GitCredential, GitCredentialRedacted } from './src/types';
 import { AgentWorkerRegistry } from './src/server/agentWorker';
 import { TaskRunner } from './src/server/taskRunner';
 import { processDirectiveFile } from './src/server/fileProcessor';
@@ -28,6 +28,12 @@ import {
   type GitAutomationRunResult,
   type GitAutomationStepResult,
 } from './src/utils/gitAutomation';
+import {
+  decryptToken,
+  encryptToken,
+  injectTokenIntoRemoteUrl,
+  redactRemoteUrl,
+} from './src/utils/projectGitCredentials';
 import { spawnSync } from 'child_process';
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
@@ -201,6 +207,11 @@ async function startServer() {
   const depsCol = db.collection<CodeDependency>('dependencies');
   const integrationsCol = db.collection<SourceIntegration>('source_integrations');
   const managedProjectsCol = db.collection<ManagedProject>('managed_projects');
+  // 프로젝트별 Git 자격증명(provider + username + PAT). projectId 를 논리적 주키로
+  // 쓰고 한 프로젝트당 한 쌍만 허용 — 저장소 임포트용 source_integrations 와 별개의
+  // "설정 화면 1:1 바인딩" 모델이라 인덱스와 컬렉션을 분리했다.
+  const gitCredentialsCol = db.collection<GitCredential>('git_credentials');
+  await gitCredentialsCol.createIndex({ projectId: 1 }, { unique: true });
   // 프로젝트별 Git 자동화 설정. projectId 를 논리적 주키로 쓰고, upsert 로만 갱신한다.
   // 리더 에이전트가 태스크 완료 이벤트마다 이 컬렉션을 조회해 auto-commit/push/PR 여부를 판정.
   const gitAutomationSettingsCol = db.collection<GitAutomationSettings>('git_automation_settings');
@@ -739,6 +750,58 @@ async function startServer() {
 
   app.delete('/api/integrations/:id', async (req, res) => {
     await integrationsCol.deleteOne({ id: req.params.id });
+    res.json({ success: true });
+  });
+
+  // --- 프로젝트 설정 화면용 Git 자격증명 (GitCredentialsSection) ---
+  // localStorage 기반 토큰 저장을 걷어내고 전부 여기로 모은다. token 은 절대
+  // 응답에 실어 보내지 않고, hasToken 플래그만 돌려준다(UI 마스킹 배지용).
+  const redactCredential = (c: GitCredential): GitCredentialRedacted => {
+    const { token, ...rest } = c;
+    return { ...rest, hasToken: typeof token === 'string' && token.length > 0 };
+  };
+
+  app.get('/api/projects/:id/git-credentials', async (req, res) => {
+    const projectId = String(req.params.id || '').trim();
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    const row = await gitCredentialsCol.findOne({ projectId }, { projection: { _id: 0 } });
+    if (!row) { res.status(404).json({ error: 'not-found' }); return; }
+    res.json(redactCredential(row as GitCredential));
+  });
+
+  app.post('/api/projects/:id/git-credentials', async (req, res) => {
+    const projectId = String(req.params.id || '').trim();
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    const { provider, username, token } = req.body || {};
+    if (provider !== 'github' && provider !== 'gitlab') {
+      res.status(400).json({ error: 'provider (github|gitlab) required' });
+      return;
+    }
+    const user = typeof username === 'string' ? username.trim() : '';
+    const pat = typeof token === 'string' ? token.trim() : '';
+    if (!user || !pat) {
+      res.status(400).json({ error: 'username and token required' });
+      return;
+    }
+    const next: GitCredential = {
+      projectId,
+      provider: provider as SourceProvider,
+      username: user,
+      token: pat,
+      updatedAt: new Date().toISOString(),
+    };
+    await gitCredentialsCol.updateOne(
+      { projectId },
+      { $set: next },
+      { upsert: true },
+    );
+    res.json(redactCredential(next));
+  });
+
+  app.delete('/api/projects/:id/git-credentials', async (req, res) => {
+    const projectId = String(req.params.id || '').trim();
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    await gitCredentialsCol.deleteOne({ projectId });
     res.json({ success: true });
   });
 
