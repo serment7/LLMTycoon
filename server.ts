@@ -34,6 +34,7 @@ import {
   type GitAutomationRunResult,
   type GitAutomationStepResult,
 } from './src/utils/gitAutomation';
+import { ActiveBranchCache, resolveBranch } from './src/utils/branchResolver';
 import {
   decryptToken,
   encryptToken,
@@ -45,6 +46,11 @@ import { spawnSync } from 'child_process';
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const DEBUG_CLAUDE = process.env.DEBUG_CLAUDE === '1';
 const PORT = parseInt(process.env.PORT || '3000', 10);
+
+// 프로세스 단위 활성 브랜치 캐시. per-session 전략에서 resolveBranch 가 같은
+// 프로젝트의 연속 호출에 같은 이름을 돌려주도록 한다. 재기동 시에는
+// projects.currentAutoBranch 로부터 복원된다.
+const activeBranchCache = new ActiveBranchCache();
 
 function shellQuote(s: string): string {
   const cleaned = s.replace(/\r?\n/g, ' ');
@@ -254,6 +260,9 @@ async function startServer() {
   // rising-edge 로 잡아 마무리 커밋/PR 을 한 번 더 정리한다. busy → completed
   // 전이에서만 1회 발사되고, 이어지는 같은 completed tick 은 무시된다.
   const completionTracker = new ProjectCompletionTracker();
+  // 리더 루프가 같은 세션 안에서 브랜치를 재사용하도록 하는 메모리 캐시.
+  // 프로세스 재기동 시에는 projects.currentAutoBranch 에서 복원된다.
+  const activeBranchCache = new ActiveBranchCache();
   const taskRunner = new TaskRunner({
     db,
     io,
@@ -1227,11 +1236,12 @@ async function startServer() {
     // 커밋 직후 바로 원격 push 까지 수행하도록 강제한다(긴급 수정 #a7b258fb).
     // 마스터 스위치 enabled=false 는 여전히 우선되므로, 사용자가 명시적으로 끈 자동화는
     // 이 플래그로 뚫리지 않는다.
-    ctxHint?: { type?: string; summary?: string; agent?: string; prBase?: string; forcePush?: boolean },
+    ctxHint?: { type?: string; summary?: string; agent?: string; prBase?: string; forcePush?: boolean; taskId?: string },
   ): Promise<GitAutomationRunResult> {
     try {
       const project = await projectsCol.findOne({ id: projectId });
       if (!project) return { ok: false, skipped: 'no-project', error: 'project not found', results: [] };
+      const options = projectOptionsView(project as Project);
       const row = await gitAutomationSettingsCol.findOne({ projectId });
       // 과거에는 두 경로를 같은 skipped='disabled' 로 뭉뚱그려 UI 토글이 ON 인데도
       // 커밋이 침묵하는 경우 원인이 "설정 row 자체가 없음" 인지 "명시적 비활성" 인지
@@ -1251,11 +1261,40 @@ async function startServer() {
       }
       const settings = row as GitAutomationSettings;
       const cwd = resolveWorkspace(project.workspacePath);
-      const branch = renderBranchName(settings.branchTemplate, {
-        type: ctxHint?.type || 'chore',
-        summary: ctxHint?.summary || 'auto',
-        agent: ctxHint?.agent,
+      const projectWithBranch = project as Project;
+      // 리더 루프가 매 태스크마다 새 브랜치를 만들던 회귀(#91aeaf7a) 차단.
+      // resolveBranch 가 fixed → 메모리 캐시 → DB → 템플릿 순으로 해석하고,
+      // 반환된 persist=true 면 서버 캐시와 projects.currentAutoBranch 양쪽에 기록한다.
+      const resolution = resolveBranch({
+        strategy: projectWithBranch.branchStrategy,
+        fixedBranchName: projectWithBranch.fixedBranchName,
+        branchNamePattern: projectWithBranch.branchNamePattern,
+        cachedActiveBranch: activeBranchCache.get(projectId),
+        persistedActiveBranch: projectWithBranch.currentAutoBranch,
+        fallbackTemplate: settings.branchTemplate,
+        templateContext: {
+          type: ctxHint?.type || 'chore',
+          summary: ctxHint?.summary || 'auto',
+          agent: ctxHint?.agent,
+        },
       });
+      const branch = resolution.branch;
+      if (resolution.persist) {
+        activeBranchCache.set(projectId, branch);
+        await projectsCol.updateOne(
+          { id: projectId },
+          { $set: { currentAutoBranch: branch } },
+        );
+      } else if (resolution.source === 'cache' || resolution.source === 'persisted') {
+        // 캐시 경로에서 DB 에 값이 빠진 경우(예: 다른 프로세스가 기록 전), 백필해 둔다.
+        if (!projectWithBranch.currentAutoBranch) {
+          await projectsCol.updateOne(
+            { id: projectId },
+            { $set: { currentAutoBranch: branch } },
+          );
+        }
+        activeBranchCache.set(projectId, branch);
+      }
       const commitMessage = formatCommitMessage(settings, {
         type: ctxHint?.type || 'chore',
         summary: ctxHint?.summary || 'auto update',
@@ -1300,9 +1339,14 @@ async function startServer() {
         return { ok, results, branch, commitMessage, prTitle };
       };
 
-      // autoCommit: checkout → add → commit 을 한 묶음으로 수행.
+      // autoCommit: checkout → add → commit. 재사용 경로(cache/persisted/fixed)는
+      // 기존 로컬 브랜치로 전환만 하고, 새로 생성된(fresh) 경우에만 `-B` 로 만들어
+      // "매 태스크마다 새 브랜치" 회귀를 차단한다.
       if (shouldAutoCommit(settings)) {
-        if (!runStep('checkout', ['git', '-C', cwd, 'checkout', '-B', branch])) return finalize(false);
+        const checkoutCmd = resolution.source === 'fresh'
+          ? ['git', '-C', cwd, 'checkout', '-B', branch]
+          : ['git', '-C', cwd, 'checkout', branch];
+        if (!runStep('checkout', checkoutCmd)) return finalize(false);
         if (!runStep('add', ['git', '-C', cwd, 'add', '-A'])) return finalize(false);
         if (!runStep('commit', ['git', '-C', cwd, 'commit', '-m', commitMessage])) return finalize(false);
       }
@@ -1366,6 +1410,41 @@ async function startServer() {
                 `[git-automation] remote URL 복구 실패 project=${projectId} — .git/config 에서 수동으로 토큰을 제거하세요`,
               );
             }
+          }
+        }
+      }
+
+      // autoMergeToMain: push 성공 이후 옵션이 켜진 경우 defaultBranch 로 ff-only
+      // 병합을 시도한다. --ff-only 로 제한해 자동 병합이 히스토리를 망가뜨리지 않도록
+      // 보수적으로 유지하고, 실패해도 경고 로그만 남기며 파이프라인은 성공으로 마감한다.
+      // 병합 완료 후 세션 브랜치를 기본값으로 리셋해 다음 리더 트리거가 새 세션을 시작.
+      if (options.autoMergeToMain && shouldPush) {
+        const target = options.defaultBranch || PROJECT_OPTION_DEFAULTS.defaultBranch;
+        if (target === branch) {
+          console.warn(
+            `[git-automation] autoMergeToMain 건너뜀 project=${projectId}: target==branch (${target})`,
+          );
+        } else {
+          const coTarget = spawnSync('git', ['-C', cwd, 'checkout', target], { encoding: 'utf8', windowsHide: true });
+          if (coTarget.status === 0) {
+            const merge = spawnSync('git', ['-C', cwd, 'merge', '--ff-only', branch], { encoding: 'utf8', windowsHide: true });
+            if (merge.status === 0) {
+              console.log(`[git-automation] autoMergeToMain 성공 project=${projectId} ${branch} → ${target}`);
+              // 세션 브랜치를 모두 비워 다음 호출에서 새 브랜치가 만들어지게 한다.
+              activeBranchCache.clear(projectId);
+              await projectsCol.updateOne(
+                { id: projectId },
+                { $unset: { currentAutoBranch: '' } },
+              );
+            } else {
+              console.warn(
+                `[git-automation] autoMergeToMain ff-only 실패 project=${projectId} stderr=${(merge.stderr || '').trim().slice(0, 200)}`,
+              );
+            }
+          } else {
+            console.warn(
+              `[git-automation] autoMergeToMain checkout(${target}) 실패 project=${projectId} stderr=${(coTarget.stderr || '').trim().slice(0, 200)}`,
+            );
           }
         }
       }

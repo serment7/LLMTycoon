@@ -119,6 +119,34 @@
   --project-settings-lock-fg: rgba(255, 255, 255, 0.45);
   --project-settings-toggle-chain: rgba(127, 212, 255, 0.35);
 
+  /* ── BranchStrategySection · Git 브랜치 전략 선택 디자인 토큰 (2026-04-18) ──
+   * 대상: src/components/BranchStrategySection.tsx (신규) — ProjectSettingsPanel
+   * 의 "Git 자동화" 섹션 내부. 4 전략(per-commit / per-task / per-session / fixed)
+   * 라디오 카드 UI 와 조건부 하위 입력·실시간 미리보기를 한 팔레트로 통제한다.
+   * 시안 문서: tests/branch-strategy-mockup.md ·
+   * 정적 미리보기: tests/branch-strategy-mockup.svg
+   *
+   * 설계 의도:
+   *   1) card-idle-border 는 "선택하지 않은 옵션" 임을 약하게 시사(white/18%) 하고,
+   *      선택된 카드만 card-active-border(#00d4ff) 로 강한 대비를 가진다. 이는
+   *      "지금 이 전략이 활성" 임을 시선이 가장 먼저 잡도록 한다.
+   *   2) chip-required(amber) 는 필수 변수(★)만을 구분하는 전용 색. 일반 변수 칩의
+   *      mute 톤과 시각적 계층을 분리해 "빠뜨리면 안 되는 것" 을 색만으로도 전달.
+   *   3) preview-fg(emerald) 와 preview-error(red) 는 ProjectSettingsPanel 의
+   *      saveStatus idle/error 와 동일한 팔레트를 쓰되 전용 변수로 분리해,
+   *      후속 리디자인에서 preview 만 따로 조정할 수 있게 한다.
+   *
+   * 대비: 모든 전경/배경은 패널 배경(#0f3460) 기준 4.5:1 이상 — AA 본문 충족.
+   */
+  --branch-strategy-card-idle-border: rgba(255, 255, 255, 0.18);
+  --branch-strategy-card-active-border: #00d4ff;
+  --branch-strategy-card-active-bg: rgba(0, 210, 255, 0.08);
+  --branch-strategy-chip-bg: rgba(255, 255, 255, 0.06);
+  --branch-strategy-chip-required: #fbbf24;
+  --branch-strategy-preview-fg: #34d399;
+  --branch-strategy-preview-error: #f87171;
+  --branch-strategy-danger-banner: rgba(248, 113, 113, 0.12);
+
   /* ── Git 자동화 파이프라인·로그 뷰어 디자인 토큰 (2026-04-18) ─────────────
    * 목적: AgentStatusPanel 의 `.git-auto-stages*` 배지와 신규 Git 자동화 로그
    * 뷰어(`.git-auto-log*`) 가 동일한 단계 팔레트를 공유하게 한다. 기존
@@ -4119,5 +4147,144 @@ body {
 @media (max-width: 767px) {
   .project-settings-panel .project-settings-panel__section {
     padding: 10px;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * BranchStrategySection · Git 브랜치 전략 선택 (2026-04-18 UI 시안)
+ * 참조: tests/branch-strategy-mockup.md · tests/branch-strategy-mockup.svg
+ *
+ * 구현자(Joker 인계)는 JSX 에서 `data-strategy`(라디오 그룹 전체의 선택값)
+ * 와 각 카드의 `data-kind` 를 올바르게 세팅하면 활성/비활성 스타일이 자동 적용된다.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+.branch-strategy {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.branch-strategy__card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: rgba(0, 0, 0, 0.30);
+  border: 2px solid var(--branch-strategy-card-idle-border);
+  transition: border-color 180ms ease-out, background-color 180ms ease-out;
+}
+
+/* 선택된 전략 카드만 accent 로 두드러짐 */
+.branch-strategy[data-strategy="per-commit"] .branch-strategy__card[data-kind="per-commit"],
+.branch-strategy[data-strategy="per-task"] .branch-strategy__card[data-kind="per-task"],
+.branch-strategy[data-strategy="per-session"] .branch-strategy__card[data-kind="per-session"],
+.branch-strategy[data-strategy="fixed"] .branch-strategy__card[data-kind="fixed"] {
+  border-color: var(--branch-strategy-card-active-border);
+  background: var(--branch-strategy-card-active-bg);
+}
+
+/* 비활성 카드는 조건부 입력을 숨김 */
+.branch-strategy__body {
+  display: none;
+}
+
+.branch-strategy[data-strategy="per-commit"] .branch-strategy__card[data-kind="per-commit"] .branch-strategy__body,
+.branch-strategy[data-strategy="per-task"] .branch-strategy__card[data-kind="per-task"] .branch-strategy__body,
+.branch-strategy[data-strategy="per-session"] .branch-strategy__card[data-kind="per-session"] .branch-strategy__body,
+.branch-strategy[data-strategy="fixed"] .branch-strategy__card[data-kind="fixed"] .branch-strategy__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 변수 칩 */
+.branch-strategy__chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 56px;
+  padding: 3px 8px;
+  background: var(--branch-strategy-chip-bg);
+  border: 2px solid rgba(255, 255, 255, 0.30);
+  font-family: var(--font-game);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+}
+
+.branch-strategy__chip[data-required="1"] {
+  border-color: var(--branch-strategy-chip-required);
+  color: var(--branch-strategy-chip-required);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.branch-strategy__chip[data-warn="1"] {
+  border-style: dashed;
+  border-color: rgba(251, 191, 36, 0.60);
+  color: var(--branch-strategy-chip-required);
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.branch-strategy__chip:focus-visible {
+  outline: 2px solid var(--pixel-accent);
+  outline-offset: 2px;
+}
+
+/* 실시간 미리보기 줄 */
+.branch-strategy__preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(52, 211, 153, 0.15);
+  border: 2px solid var(--branch-strategy-preview-fg);
+  color: var(--branch-strategy-preview-fg);
+  font-family: 'Consolas', 'Noto Sans Mono CJK KR', monospace;
+  font-size: 12px;
+}
+
+.branch-strategy__preview[data-preview-state="error"] {
+  background: var(--branch-strategy-danger-banner);
+  border-color: var(--branch-strategy-preview-error);
+  color: var(--branch-strategy-preview-error);
+}
+
+/* main 고정 경고 배너 — fixed 전략에서 fixedBranch === 'main' | 'master' 일 때 */
+.branch-strategy__danger-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--branch-strategy-danger-banner);
+  border: 2px solid var(--branch-strategy-preview-error);
+  color: var(--branch-strategy-preview-error);
+}
+
+.branch-strategy__hold-button {
+  align-self: flex-end;
+  padding: 6px 14px;
+  background: rgba(248, 113, 113, 0.20);
+  border: 2px solid var(--branch-strategy-preview-error);
+  color: var(--branch-strategy-preview-error);
+  font-family: var(--font-game);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+/* hold 동작: data-holding="1" 인 동안 progress 를 background gradient 로 시각화 */
+.branch-strategy__hold-button[data-holding="1"] {
+  background: linear-gradient(to right,
+    rgba(248, 113, 113, 0.55) 0%,
+    rgba(248, 113, 113, 0.55) var(--hold-progress, 0%),
+    rgba(248, 113, 113, 0.20) var(--hold-progress, 0%),
+    rgba(248, 113, 113, 0.20) 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .branch-strategy__card {
+    transition: none;
   }
 }

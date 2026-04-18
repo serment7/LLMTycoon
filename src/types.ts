@@ -60,7 +60,30 @@ export interface Project {
   // 관리 UI 가 자유롭게 저장하는 키-값 묶음. Jsonb 대체 — MongoDB 문서 필드에
   // 그대로 포함되며, 클라이언트 변경은 PATCH /api/projects/:id 를 통해 저장한다.
   settingsJson?: Record<string, unknown>;
+  // Git 자동화 브랜치 전략. 기본 'per-session' — 자동 개발 세션 1회당 단일
+  // 브랜치를 재사용해 커밋마다 새 브랜치가 만들어지는 회귀를 막는다.
+  branchStrategy?: BranchStrategy;
+  // strategy === 'fixed-branch' 에서 사용하는 고정 브랜치 이름.
+  fixedBranchName?: string;
+  // strategy ∈ {per-task, per-session} 에서 사용하는 브랜치 이름 템플릿.
+  // `{date}` `{shortId}` `{type}` `{slug}` `{agent}` 토큰을 치환한다.
+  branchNamePattern?: string;
+  // 푸시 성공 후 defaultBranch 로 자동 병합할지 여부. 기본 false.
+  autoMergeToMain?: boolean;
+  // 'per-session' 전략 하에서 현재 서버가 재사용 중인 브랜치명. executeGitAutomation
+  // 이 첫 호출에 기록하고, 이후 같은 세션에서는 이 값을 재사용한다. 프로세스
+  // 재기동 시에도 같은 세션이 이어지도록 DB 에 영속화한다.
+  currentAutoBranch?: string;
 }
+
+export type BranchStrategy = 'per-commit' | 'per-task' | 'per-session' | 'fixed-branch';
+
+export const BRANCH_STRATEGY_VALUES: readonly BranchStrategy[] = [
+  'per-commit',
+  'per-task',
+  'per-session',
+  'fixed-branch',
+] as const;
 
 // 프로젝트 옵션 부분 업데이트(PATCH /api/projects/:id) 입력. Zod 가 설치돼 있지
 // 않은 저장소라 서버가 직접 필드별 타입·열거값을 검사한다. 지정하지 않은 필드는
@@ -73,6 +96,10 @@ export interface ProjectOptionsUpdate {
   gitRemoteUrl?: string | null;
   sharedGoalId?: string | null;
   settingsJson?: Record<string, unknown>;
+  branchStrategy?: BranchStrategy;
+  fixedBranchName?: string;
+  branchNamePattern?: string;
+  autoMergeToMain?: boolean;
 }
 
 export const PROJECT_OPTION_DEFAULTS = {
@@ -81,6 +108,10 @@ export const PROJECT_OPTION_DEFAULTS = {
   autoPushEnabled: false,
   defaultBranch: 'main',
   settingsJson: {} as Record<string, unknown>,
+  branchStrategy: 'per-session' as BranchStrategy,
+  fixedBranchName: 'auto/dev',
+  branchNamePattern: 'auto/{date}-{shortId}',
+  autoMergeToMain: false,
 } as const;
 
 export interface GameState {

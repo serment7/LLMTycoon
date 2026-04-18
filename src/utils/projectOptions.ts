@@ -10,8 +10,8 @@
 // - sharedGoalId 의 "해당 프로젝트에 실제로 속하는지" 검증은 DB 조회가 필요해
 //   여기서는 수행하지 않는다. 호출부가 필요 시 추가로 검증한다.
 
-import type { ProjectOptionsUpdate } from '../types';
-import { PROJECT_OPTION_DEFAULTS } from '../types';
+import type { ProjectOptionsUpdate, BranchStrategy } from '../types';
+import { PROJECT_OPTION_DEFAULTS, BRANCH_STRATEGY_VALUES } from '../types';
 
 export interface ValidatedProjectOptionsUpdate {
   $set: Record<string, unknown>;
@@ -27,7 +27,7 @@ export class ProjectOptionsValidationError extends Error {
   }
 }
 
-const BOOL_FIELDS = ['autoDevEnabled', 'autoCommitEnabled', 'autoPushEnabled'] as const;
+const BOOL_FIELDS = ['autoDevEnabled', 'autoCommitEnabled', 'autoPushEnabled', 'autoMergeToMain'] as const;
 
 // 입력 검증 + Mongo 업데이트 구문 빌더. 호환성을 위해 "업데이트 할 필드가
 // 하나도 없는" 케이스도 정상 반환한다(호출부가 직접 400 처리). `null` 명시는
@@ -79,6 +79,33 @@ export function updateProjectOptionsSchema(input: unknown): ValidatedProjectOpti
     $set.settingsJson = value;
   }
 
+  if ('branchStrategy' in body && body.branchStrategy !== undefined) {
+    const value = body.branchStrategy;
+    if (typeof value !== 'string' || !BRANCH_STRATEGY_VALUES.includes(value as BranchStrategy)) {
+      throw new ProjectOptionsValidationError(
+        'branchStrategy',
+        `branchStrategy 는 ${BRANCH_STRATEGY_VALUES.join('|')} 중 하나여야 합니다`,
+      );
+    }
+    $set.branchStrategy = value;
+  }
+
+  if ('fixedBranchName' in body && body.fixedBranchName !== undefined) {
+    const value = body.fixedBranchName;
+    if (typeof value !== 'string' || !value.trim()) {
+      throw new ProjectOptionsValidationError('fixedBranchName', 'fixedBranchName 은 비어있지 않은 문자열이어야 합니다');
+    }
+    $set.fixedBranchName = value.trim();
+  }
+
+  if ('branchNamePattern' in body && body.branchNamePattern !== undefined) {
+    const value = body.branchNamePattern;
+    if (typeof value !== 'string' || !value.trim()) {
+      throw new ProjectOptionsValidationError('branchNamePattern', 'branchNamePattern 은 비어있지 않은 문자열이어야 합니다');
+    }
+    $set.branchNamePattern = value.trim();
+  }
+
   return { $set, $unset };
 }
 
@@ -93,10 +120,30 @@ export interface ProjectOptionsView {
   gitRemoteUrl?: string;
   sharedGoalId?: string;
   settingsJson: Record<string, unknown>;
+  branchStrategy: BranchStrategy;
+  fixedBranchName: string;
+  branchNamePattern: string;
+  autoMergeToMain: boolean;
+  // 'per-session' 전략 하에서 서버가 재사용 중인 활성 브랜치. 미결정이면 undefined —
+  // 클라이언트 패널은 "아직 파이프라인이 한 번도 돌지 않음" 으로 표시한다.
+  currentAutoBranch?: string;
 }
 
 export function projectOptionsView(
-  source: Partial<ProjectOptionsUpdate> & { autoDevEnabled?: boolean; autoCommitEnabled?: boolean; autoPushEnabled?: boolean; defaultBranch?: string; gitRemoteUrl?: string; sharedGoalId?: string; settingsJson?: Record<string, unknown> },
+  source: Partial<ProjectOptionsUpdate> & {
+    autoDevEnabled?: boolean;
+    autoCommitEnabled?: boolean;
+    autoPushEnabled?: boolean;
+    defaultBranch?: string;
+    gitRemoteUrl?: string;
+    sharedGoalId?: string;
+    settingsJson?: Record<string, unknown>;
+    branchStrategy?: BranchStrategy;
+    fixedBranchName?: string;
+    branchNamePattern?: string;
+    autoMergeToMain?: boolean;
+    currentAutoBranch?: string;
+  },
 ): ProjectOptionsView {
   return {
     autoDevEnabled: source.autoDevEnabled ?? PROJECT_OPTION_DEFAULTS.autoDevEnabled,
@@ -106,6 +153,11 @@ export function projectOptionsView(
     gitRemoteUrl: source.gitRemoteUrl || undefined,
     sharedGoalId: source.sharedGoalId || undefined,
     settingsJson: source.settingsJson ?? { ...PROJECT_OPTION_DEFAULTS.settingsJson },
+    branchStrategy: source.branchStrategy ?? PROJECT_OPTION_DEFAULTS.branchStrategy,
+    fixedBranchName: source.fixedBranchName ?? PROJECT_OPTION_DEFAULTS.fixedBranchName,
+    branchNamePattern: source.branchNamePattern ?? PROJECT_OPTION_DEFAULTS.branchNamePattern,
+    autoMergeToMain: source.autoMergeToMain ?? PROJECT_OPTION_DEFAULTS.autoMergeToMain,
+    currentAutoBranch: source.currentAutoBranch || undefined,
   };
 }
 

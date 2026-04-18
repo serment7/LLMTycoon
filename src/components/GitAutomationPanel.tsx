@@ -12,6 +12,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GitCommit, GitBranch, GitPullRequest, RotateCcw, Save, AlertTriangle, Info, Power, CheckCircle2, Clock3, Check, Square, Loader2, XCircle, Upload, Hash, X } from 'lucide-react';
 import { useReducedMotion } from '../utils/useReducedMotion';
+import type { BranchStrategy } from '../types';
 
 // 디자이너: Git 자동화 흐름은 "되돌릴 수 있는 일 → 원격에 남는 일 → 동료에게 알림이
 // 가는 일" 순으로 위험이 누적된다. 3단계 라디오를 가로로 배치하고, 각 단계를

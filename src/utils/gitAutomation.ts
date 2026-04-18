@@ -2,6 +2,7 @@ import { isExcludedFromGitStaging } from './codeGraphFilter';
 import type {
   GitAutomationLogEntry,
   GitAutomationLogStage,
+  BranchStrategy,
 } from '../types';
 
 // 커밋 → 푸시 → PR 의 어디까지 자동으로 실행할지. UI 토글과 일대일로 매핑된다.
@@ -77,6 +78,81 @@ export function renderBranchName(template: string, ctx: TemplateContext): string
   // git은 `//`, 끝의 `.`, 공백을 허용하지 않는다. 템플릿 오타로 생기는 사고를
   // 여기서 한 번 더 정리한다.
   return rendered.replace(/\/{2,}/g, '/').replace(/\.+$/, '').replace(/\s+/g, '-');
+}
+
+// branchNamePattern 전용 렌더러. renderBranchName 의 슬러그 토큰을 그대로
+// 지원하면서 `{shortId}` 토큰을 추가로 치환한다 — per-task 전략은 taskId,
+// per-session 전략은 sessionId 의 앞 8자를 넘긴다.
+export function renderBranchPattern(
+  pattern: string,
+  ctx: TemplateContext & { shortId?: string },
+): string {
+  const tokens: Record<string, string> = {
+    type: slugify(ctx.type || 'change'),
+    slug: slugify(ctx.summary || 'update'),
+    agent: slugify(ctx.agent || ''),
+    date: ctx.date || new Date().toISOString().slice(0, 10),
+    shortId: (ctx.shortId || '').trim() || 'anon',
+  };
+  const rendered = replaceTokens(pattern, tokens);
+  return rendered.replace(/\/{2,}/g, '/').replace(/\.+$/, '').replace(/\s+/g, '-');
+}
+
+// ensureBranch 컨텍스트. 런타임 의존성(실제 git 명령)을 가두기 위해 존재 여부
+// 확인은 호출자가 전달하는 predicate 로 추상화한다. 서버 실행기는 spawnSync
+// 기반 `git rev-parse --verify` 로 구현하고, 테스트는 Map 기반 가짜 predicate 를
+// 주입한다.
+export interface EnsureBranchInput {
+  strategy: BranchStrategy;
+  // 기존 설정과의 호환을 위해 per-commit 에서 계속 사용되는 레거시 템플릿.
+  branchTemplate: string;
+  // per-task / per-session 전략이 사용하는 패턴. `{shortId}` 토큰을 지원한다.
+  branchNamePattern: string;
+  // fixed-branch 전략이 그대로 사용하는 이름.
+  fixedBranchName: string;
+  templateCtx: TemplateContext;
+  // 전략별 shortId 후보. 우선순위: per-task → taskId, per-session → sessionId.
+  taskId?: string;
+  sessionId?: string;
+  branchExists(name: string): boolean;
+}
+
+export interface EnsuredBranch {
+  branch: string;
+  // true 면 기존 브랜치가 있어 checkout 만 수행(재사용), false 면 `checkout -B` 로
+  // 생성한다. 호출자는 이 플래그로 "같은 세션 안에서 중복 생성되지 않는지" 검증.
+  existed: boolean;
+  strategy: BranchStrategy;
+}
+
+function shortIdFor(input: EnsureBranchInput): string {
+  if (input.strategy === 'per-task') return (input.taskId || '').slice(0, 8);
+  if (input.strategy === 'per-session') return (input.sessionId || '').slice(0, 8);
+  return '';
+}
+
+// 브랜치 전략에 따라 실제로 사용할 브랜치 이름을 계산하고, 이미 존재하는지
+// 검사한 결과를 함께 돌려준다. "매 커밋마다 새 브랜치" 회귀는 strategy 가
+// per-session/per-task/fixed-branch 일 때 branchExists 경로를 타며 재사용된다.
+export function ensureBranch(input: EnsureBranchInput): EnsuredBranch {
+  let branch: string;
+  switch (input.strategy) {
+    case 'fixed-branch':
+      branch = input.fixedBranchName.trim() || 'auto/dev';
+      break;
+    case 'per-task':
+    case 'per-session': {
+      const shortId = shortIdFor(input);
+      branch = renderBranchPattern(input.branchNamePattern, { ...input.templateCtx, shortId });
+      break;
+    }
+    case 'per-commit':
+    default:
+      branch = renderBranchName(input.branchTemplate, input.templateCtx);
+      break;
+  }
+  const existed = !!branch && input.branchExists(branch);
+  return { branch, existed, strategy: input.strategy };
 }
 
 export function formatCommitMessage(
