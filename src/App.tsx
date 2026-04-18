@@ -175,6 +175,11 @@ export default function App() {
   // 유지). 초기엔 false 로 두고 mount 시점에 GET /api/auto-dev 로 동기화하며,
   // 'auto-dev:updated' 소켓 이벤트로 푸시 갱신을 받는다.
   const [autoDevEnabled, setAutoDevEnabled] = useState<boolean>(false);
+  // 자동 개발 ON 직전에 GET /api/projects/:id/shared-goal 이 null 을 돌려주면(공동 목표
+  // 미설정) 토글을 켜지 않고 이 플래그를 올려 전면 모달로 사용자에게 공동 목표 입력을
+  // 요청한다. Thanos 가 추후 도입할 SharedGoalModal(공동 목표 작성 폼) 과 충돌하지
+  // 않도록, 본 가드는 기존 Modal(z-50 오버레이)만 재사용하고 상태 소유는 App 루트에 둔다.
+  const [sharedGoalPromptOpen, setSharedGoalPromptOpen] = useState<boolean>(false);
   const [agentPaths, setAgentPaths] = useState<Record<string, { x: number; y: number; id: string; timestamp: number }[]>>({});
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   // 초기 state:initial 소켓 이벤트가 도착해 선택 프로젝트 복원/폴백 판정이 끝날 때까지는 false.
@@ -784,7 +789,7 @@ export default function App() {
       '4': 'agents',
       '5': 'project-management',
     };
-    const anyModalOpen = !!(showHireModal || showProjectModal || manageMembersProjectId || confirmFire || confirmDeleteProject);
+    const anyModalOpen = !!(showHireModal || showProjectModal || manageMembersProjectId || confirmFire || confirmDeleteProject || sharedGoalPromptOpen);
 
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -795,6 +800,7 @@ export default function App() {
         else if (manageMembersProjectId) setManageMembersProjectId(null);
         else if (confirmFire) setConfirmFire(null);
         else if (confirmDeleteProject) setConfirmDeleteProject(null);
+        else if (sharedGoalPromptOpen) setSharedGoalPromptOpen(false);
         return;
       }
       if (typing || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -811,7 +817,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [activeTab, showHireModal, showProjectModal, manageMembersProjectId, confirmFire, confirmDeleteProject]);
+  }, [activeTab, showHireModal, showProjectModal, manageMembersProjectId, confirmFire, confirmDeleteProject, sharedGoalPromptOpen]);
 
   const selectProject = (projectId: string) => {
     setSelectedProjectId(projectId);
@@ -1030,6 +1036,32 @@ export default function App() {
       addLog(`리더 지시 전달 실패: ${(e as Error).message}`);
     } finally {
       setCommandBusy(false);
+    }
+  };
+
+  // 그래프 초기화: 현재 프로젝트의 코드그래프(파일 노드·의존성 엣지)를 비운다.
+  //  - 선택된 프로젝트가 있으면 해당 프로젝트만, 없으면 전체 그래프를 리셋한다.
+  //  - 실수 클릭 방지를 위해 window.confirm 으로 재확인을 받는다. 파일은 서버의
+  //    정식 소스(MongoDB)에 있으므로 서버 엔드포인트가 삭제하고 socket 의
+  //    'state:updated' 브로드캐스트로 로컬 gameState 가 자연스럽게 빈 노드·엣지로
+  //    수렴한다. 즉, 별도의 클라이언트 스토어 초기화가 필요 없다.
+  const resetGraph = async () => {
+    const scopeLabel = selectedProjectId
+      ? '현재 프로젝트의 코드 그래프'
+      : '전체 코드 그래프';
+    const confirmed = typeof window !== 'undefined'
+      ? window.confirm(`${scopeLabel}를 초기 상태로 리셋합니다. 계속하시겠습니까?`)
+      : true;
+    if (!confirmed) return;
+    try {
+      const qs = selectedProjectId ? `?projectId=${encodeURIComponent(selectedProjectId)}` : '';
+      const res = await safeFetch(`/api/graph/reset${qs}`, { method: 'POST' });
+      const body = await res.json().catch(() => ({} as { filesDeleted?: number; dependenciesDeleted?: number }));
+      const filesDeleted = typeof body.filesDeleted === 'number' ? body.filesDeleted : 0;
+      const depsDeleted = typeof body.dependenciesDeleted === 'number' ? body.dependenciesDeleted : 0;
+      addLog(`그래프 초기화: 파일 ${filesDeleted}개·의존성 ${depsDeleted}개 제거`);
+    } catch (e) {
+      addLog(`그래프 초기화 실패: ${(e as Error).message}`);
     }
   };
 
@@ -1351,11 +1383,18 @@ export default function App() {
           </nav>
 
           <div className="mt-auto pt-4 space-y-3">
-            <button 
+            <button
               onClick={() => setShowHireModal(true)}
               className="w-full bg-[var(--pixel-accent)] text-black py-3 font-bold uppercase border-b-4 border-[#0099cc] hover:brightness-110 transition-all"
             >
               에이전트 고용
+            </button>
+            <button
+              onClick={resetGraph}
+              title="현재 프로젝트의 코드 그래프(파일 노드·의존성 엣지)를 초기 상태로 되돌립니다"
+              className="w-full bg-[#f4a261] text-black py-3 font-bold uppercase border-b-4 border-[#a45a1c] hover:brightness-110 transition-all"
+            >
+              그래프 초기화
             </button>
             <button
               onClick={emergencyStop}
@@ -1886,16 +1925,49 @@ export default function App() {
               aria-checked={autoDevEnabled}
               onClick={async () => {
                 const next = !autoDevEnabled;
+                // ON 전환 직전에 활성 공동 목표 유무를 확인한다. 목표가 없으면 서버도
+                // /api/auto-dev PATCH 를 거절하지만(types.ts 주석 참조) 사용자가 "왜
+                // 꺼졌는가"를 바로 알 수 있도록 UI 차원에서 먼저 차단하고 SharedGoal
+                // 입력 모달을 띄운다. 프로젝트 미선택(전역 auto-dev) 케이스는 종전처럼
+                // 그대로 PATCH 를 진행한다.
+                if (next && selectedProjectId) {
+                  try {
+                    const res = await safeFetch(`/api/projects/${selectedProjectId}/shared-goal`);
+                    const goal = await res.json();
+                    if (!goal) {
+                      setSharedGoalPromptOpen(true);
+                      addLog('공동 목표가 비어 있어 자동 개발 ON 을 차단했습니다');
+                      return;
+                    }
+                  } catch (e) {
+                    addLog(`공동 목표 확인 실패: ${(e as Error).message}`);
+                  }
+                }
                 // 낙관적 UI: 서버 반영 전에 토글 시각을 즉시 바꾸고, 실패 시 원복.
                 // auto-dev:updated 소켓 이벤트로도 최종값이 동기화된다.
                 setAutoDevEnabled(next);
                 addLog(next ? '자동 개발 모드 ON' : '자동 개발 모드 OFF');
+                // PATCH 응답은 safeFetch 를 거치지 않고 직접 읽는다 — 400 응답의
+                // `code: SHARED_GOAL_REQUIRED` 플래그를 살려야 pre-check 가 건너뛴
+                // 경로(프로젝트 미선택 + 서버 저장 projectId 에 목표 없음, 혹은 선택
+                // 프로젝트와 서버 저장 projectId 의 불일치)에서도 모달이 열린다.
                 try {
-                  await safeFetch('/api/auto-dev', {
+                  const resp = await fetch('/api/auto-dev', {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ enabled: next }),
                   });
+                  if (!resp.ok) {
+                    let body: { error?: string; code?: string } = {};
+                    try { body = await resp.json(); } catch { /* ignore */ }
+                    setAutoDevEnabled(!next);
+                    if (next && body.code === 'SHARED_GOAL_REQUIRED') {
+                      setSharedGoalPromptOpen(true);
+                      addLog('공동 목표가 비어 있어 자동 개발 ON 을 차단했습니다');
+                      return;
+                    }
+                    addLog(`자동 개발 토글 실패: ${body.error || `${resp.status} ${resp.statusText}`}`);
+                  }
                 } catch (e) {
                   setAutoDevEnabled(!next);
                   addLog(`자동 개발 토글 실패: ${(e as Error).message}`);
@@ -2038,6 +2110,35 @@ export default function App() {
                   className="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-3 font-bold uppercase border-b-4 border-gray-800"
                 >
                   취소
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )}
+        {sharedGoalPromptOpen && (
+          <Modal title="공동 목표를 먼저 입력해주세요" onClose={() => setSharedGoalPromptOpen(false)}>
+            <div className="space-y-4">
+              <p className="text-sm text-white/80">
+                자동 개발을 시작하려면 이 프로젝트의 <span className="text-[var(--pixel-accent)] font-bold">공동 목표</span>가 먼저 저장되어 있어야 합니다.
+              </p>
+              <p className="text-[11px] text-white/60">
+                "프로젝트 관리" 탭의 공동 목표 입력 폼에서 제목·우선순위·기한을 작성하고 저장한 뒤 다시 자동 개발 토글을 켜주세요.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    setActiveTab('project-management');
+                    setSharedGoalPromptOpen(false);
+                  }}
+                  className="flex-1 bg-[var(--pixel-accent)] text-black py-3 font-bold uppercase border-b-4 border-[var(--pixel-border)]"
+                >
+                  공동 목표 입력으로 이동
+                </button>
+                <button
+                  onClick={() => setSharedGoalPromptOpen(false)}
+                  className="flex-1 bg-gray-600 hover:bg-gray-700 text-white py-3 font-bold uppercase border-b-4 border-gray-800"
+                >
+                  닫기
                 </button>
               </div>
             </div>

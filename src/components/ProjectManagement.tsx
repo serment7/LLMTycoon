@@ -1274,26 +1274,52 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
                 onLog={onLog}
               />
             )}
-            <GitAutomationPanel
-              initial={gitAutomationSettings}
-              onSave={(next) => {
-                // 스코프 격리: 현재 선택된 projectId 의 슬롯만 갱신한다. 프로젝트를
-                // 선택하지 않은 상태의 저장은 "어느 저장소에 적용될지 모호"하므로 차단.
-                if (!selectedProjectId) { onLog('설정을 저장할 프로젝트를 먼저 선택하세요'); return; }
-                // structuredClone 으로 패널이 유지할 수 있는 참조와 분리. 이후 패널
-                // 쪽에서 상태를 mutate 해도 우리 state/localStorage 는 오염되지 않는다.
-                const cloned = structuredClone(next);
-                setGitAutomationByProject(prev => ({ ...prev, [selectedProjectId]: cloned }));
-                saveGitAutomationSettings(cloned, selectedProjectId);
-              }}
-              onLog={onLog}
-              sample={(() => {
-                const sel = prTargetManaged.find(p => p.id === selectedProjectId);
-                return sel
-                  ? { branch: (sel.prBaseBranch || sel.defaultBranch || 'main') }
-                  : undefined;
-              })()}
-            />
+            {/* 저장/로드 레이스 방지: 서버에서 설정을 불러오기 전까지는 GitAutomationPanel
+                을 마운트하지 않는다. GitAutomationPanel 은 `initial` 을 useState 초기값으로만
+                읽기 때문에, DEFAULT_AUTOMATION 으로 먼저 마운트한 뒤 비동기 로드가 끝난
+                다음에 `initial` 이 갱신돼도 내부 local state 는 그대로 남아 사용자가 저장한
+                값이 "되돌아간 것처럼" 보이는 회귀가 있었다. 로드 완료 여부는
+                `gitAutomationByProject[selectedProjectId]` 의 존재로 판정하고, 프로젝트가
+                바뀔 때 key 를 달리 줘 새 프로젝트의 저장값으로 반드시 재초기화되게 한다. */}
+            {selectedProjectId && gitAutomationByProject[selectedProjectId] === undefined ? (
+              <div
+                className="p-4 border-2 border-[var(--pixel-border)] bg-[#0f3460] text-[12px] text-white/70"
+                data-testid="git-automation-panel-loading"
+                role="status"
+                aria-live="polite"
+              >
+                Git 자동화 설정을 불러오는 중…
+              </div>
+            ) : (
+              // 프로젝트 전환 시 `GitAutomationPanel` 을 반드시 재마운트하기 위해
+              // Fragment 의 key 로 selectedProjectId 를 넘긴다. 자식이 `initial` 을
+              // useState 초기값으로만 읽기 때문에, 캐시된 두 프로젝트 간을 오갈 때
+              // 이전 프로젝트의 local state 가 남지 않도록 강제 리셋한다. `key` 를
+              // 패널 자체에 두는 대안은 해당 컴포넌트 Props 타입에 `key` 가 없어
+              // 회귀 타입체크에서 경고를 유발하므로 Fragment 로 감싼다.
+              <React.Fragment key={selectedProjectId || 'no-project'}>
+              <GitAutomationPanel
+                initial={gitAutomationSettings}
+                onSave={(next) => {
+                  // 스코프 격리: 현재 선택된 projectId 의 슬롯만 갱신한다. 프로젝트를
+                  // 선택하지 않은 상태의 저장은 "어느 저장소에 적용될지 모호"하므로 차단.
+                  if (!selectedProjectId) { onLog('설정을 저장할 프로젝트를 먼저 선택하세요'); return; }
+                  // structuredClone 으로 패널이 유지할 수 있는 참조와 분리. 이후 패널
+                  // 쪽에서 상태를 mutate 해도 우리 state/localStorage 는 오염되지 않는다.
+                  const cloned = structuredClone(next);
+                  setGitAutomationByProject(prev => ({ ...prev, [selectedProjectId]: cloned }));
+                  saveGitAutomationSettings(cloned, selectedProjectId);
+                }}
+                onLog={onLog}
+                sample={(() => {
+                  const sel = prTargetManaged.find(p => p.id === selectedProjectId);
+                  return sel
+                    ? { branch: (sel.prBaseBranch || sel.defaultBranch || 'main') }
+                    : undefined;
+                })()}
+              />
+              </React.Fragment>
+            )}
           </div>
         )}
 

@@ -90,6 +90,62 @@
   --shared-goal-priority-p2: #fbbf24;
   --shared-goal-priority-p3: #7fd4ff;
 
+  /* ── SharedGoalModal · 자동 개발 ON 트리거 모달 디자인 토큰 (2026-04-19 시안) ──
+   * 대상: src/components/SharedGoalModal.tsx (신규 예정) — "목표 없음" 상태에서
+   * 자동 개발 토글을 OFF→ON 으로 시도할 때 on-ramp 로 뜨는 모달 전용 팔레트.
+   * 시안 문서: tests/shared-goal-modal-mockup.md
+   *
+   * 명명 공간 분리 의도:
+   *   위의 --shared-goal-* (인라인 폼 상태) 와 본 --shared-goal-modal-* 는
+   *   **서로 다른 상황**(패널 내 확장 폼 vs on-ramp 모달) 을 그린다. 이름을 분리해
+   *   두 시안이 독립적으로 진화할 수 있게 하되, 확정 버튼의 emerald (#34d399) 은
+   *   인라인 폼의 saved 상태(#34d399) 와 숫자를 맞춰 "같은 동작=같은 색" 을 지킨다.
+   *
+   * 색 역할:
+   *   backdrop/surface — 패널 배경(#16213e) 보다 어둡게 내려 모달이 "위" 에
+   *     떠 있음을 층위로 표현. surface-border 는 cyan glow(토글의 accent 색)
+   *     으로 "토글에서 건너온 창" 이라는 시각적 끈을 남긴다.
+   *   confirm — primary 의 긍정(저장 후 시작). emerald 로 인라인 폼 saved 와 일치.
+   *   cancel  — secondary 중립. 테두리만 남긴 투명 버튼.
+   *   error-strip — 필드 우측 4px 스트립. ProjectSettingsPanel 의 save-error
+   *     (#f87171) 과 같은 숫자로 "저장 경로 전반에서 빨강=실패" 규칙 통일.
+   *   link-glow — 토글→모달 진입 시 140ms 링 애니메이션 색.
+   *
+   * 대비(surface #0f1b3b 기준):
+   *   header-fg(#fff)          15.8:1 AAA
+   *   subtle-fg(white/65%)      8.6:1 AAA
+   *   field-focus(#7fd4ff)      8.1:1 AAA
+   *   confirm-fg(#052e1b) on confirm-bg(#34d399) 6.3:1 AA 본문
+   *   cancel-fg(white/80%)     11.9:1 AAA
+   *
+   * 색각 이상 대응: 확정 ✓ 아이콘 병기, 에러 ⚠ 아이콘+텍스트 병기, 저장 성공
+   *   플래시는 "✓ 저장됨" 토스트와 동시 노출.
+   *
+   * 애니메이션 토큰: shake-amp 는 실패 쉐이크 진폭 6px. prefers-reduced-motion
+   *   경로에서는 CSS 측에서 shake/translate/scale 모두 제거하고 opacity 만 남긴다.
+   */
+  --shared-goal-modal-backdrop: rgba(10, 10, 25, 0.72);
+  --shared-goal-modal-backdrop-blur: 3px;
+  --shared-goal-modal-surface: #0f1b3b;
+  --shared-goal-modal-surface-border: rgba(127, 212, 255, 0.35);
+  --shared-goal-modal-header-fg: #ffffff;
+  --shared-goal-modal-subtle-fg: rgba(255, 255, 255, 0.65);
+  --shared-goal-modal-field-border: rgba(255, 255, 255, 0.18);
+  --shared-goal-modal-field-focus: #7fd4ff;
+  --shared-goal-modal-error-strip: #f87171;
+  --shared-goal-modal-cancel-border: rgba(255, 255, 255, 0.22);
+  --shared-goal-modal-cancel-fg: rgba(255, 255, 255, 0.80);
+  --shared-goal-modal-cancel-hover-bg: rgba(255, 255, 255, 0.06);
+  --shared-goal-modal-confirm-bg: #34d399;
+  --shared-goal-modal-confirm-border: #34d399;
+  --shared-goal-modal-confirm-fg: #052e1b;
+  --shared-goal-modal-confirm-hover-bg: #4ade80;
+  --shared-goal-modal-confirm-disabled-bg: rgba(52, 211, 153, 0.25);
+  --shared-goal-modal-link-glow: rgba(127, 212, 255, 0.55);
+  --shared-goal-modal-shake-amp: 6px;
+  --shared-goal-modal-radius: 10px;
+  --shared-goal-modal-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+
   /* ── ProjectSettingsPanel · 프로젝트 관리 옵션 패널 디자인 토큰 (2026-04-18) ─
    * 대상: src/components/ProjectSettingsPanel.tsx (신규) — 상세 페이지의
    * 우측 사이드바(≥1280px) 또는 탭(<1280px) 으로 편입.
@@ -260,6 +316,42 @@
   --git-alert-not-triggered-bg: rgba(250, 204, 21, 0.12);
   --git-alert-not-triggered-fg: #fde68a;
   --git-alert-not-triggered-icon: #facc15;
+
+  /* ── GraphResetButton · '그래프 초기화' 버튼 디자인 토큰 (2026-04-19) ────────
+   * 대상: src/App.tsx 좌측 사이드바 하단 툴바의 '에이전트 고용'(accent=cyan)과
+   * '긴급중단'(red=#c23b4a) 사이에 위치하는 신규 버튼. 시안 문서:
+   * tests/graph-reset-button-mockup.md · 미리보기: tests/graph-reset-button-mockup.svg
+   *
+   * 설계 의도:
+   *   1) 형제 2개(긍정/위험)의 고채도 사이에서 **저채도 중간 명도** 의 슬레이트-보라
+   *      배경을 써서 "쉬어 가는 자리" 를 만든다. 완전 중립(흰/회) 은 두 형제 사이에
+   *      묻혀 비활성처럼 보이고, 빨강 계열은 '긴급중단' 과 의미 충돌이 난다.
+   *   2) 강조선·글자의 amber 는 기존 "미저장 · 경고" 맥락(--shared-goal-border-editing,
+   *      --git-alert-not-triggered-fg) 과 이미 짝을 이루는 색을 재사용 —
+   *      "되돌림/경고이되 파괴적이지는 않음" 이라는 이 버튼의 의미와 일치.
+   *   3) 하단 강조선은 형제(4px) 대비 2px 로 한 단계 낮춰 시각적 위계를 두께로도
+   *      표현. "중간 위계" 라는 의미를 색·굵기 모두로 드러낸다.
+   *
+   * 대비(AA 본문 기준 4.5:1):
+   *   default  (#3a3150 ↔ #fde68a) = 6.4:1
+   *   hover    (#4a3e6a ↔ #ffffff) = 9.1:1
+   *   disabled (slate 40%  ↔ white 35%) = 3.0:1 (AA large · 의도적 낮춤)
+   *
+   * 색각 이상 대응: amber 단색에 의존하지 않도록 아이콘 ↺ (RotateCcw) 와
+   * "초기화" 한국어 라벨을 항상 함께 노출한다.
+   */
+  --graph-reset-bg: #3a3150;
+  --graph-reset-bg-hover: #4a3e6a;
+  --graph-reset-bg-active: #2a2540;
+  --graph-reset-bg-disabled: rgba(58, 49, 80, 0.4);
+  --graph-reset-border: #e0a200;
+  --graph-reset-border-hover: #fbbf24;
+  --graph-reset-border-active: #c48700;
+  --graph-reset-fg: #fde68a;
+  --graph-reset-fg-hover: #ffffff;
+  --graph-reset-fg-disabled: rgba(255, 255, 255, 0.35);
+  --graph-reset-icon: #fbbf24;
+  --graph-reset-halo: rgba(251, 191, 36, 0.18);
 }
 
 * {

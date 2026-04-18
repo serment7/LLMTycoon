@@ -1,0 +1,379 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1280" font-family="ui-monospace, 'Segoe UI Mono', 'Noto Sans Mono CJK KR', monospace">
+  <rect width="1200" height="1280" fill="#16213e"/>
+
+  <defs>
+    <style>
+      .px-border { stroke: #4fc3f7; stroke-width: 2; fill: none; }
+      .px-border-dim { stroke: #385b7c; stroke-width: 2; fill: none; }
+      .px-border-dash { stroke: rgba(255,255,255,0.25); stroke-width: 2; stroke-dasharray: 5 4; fill: none; }
+      .panel-bg { fill: #0f3460; }
+      .deep-bg { fill: rgba(0,0,0,0.30); }
+      .aside-bg { fill: #0c1a30; }
+      .accent { fill: #7fd4ff; }
+      .accent-fill { fill: #00d2ff; }
+      .accent-dark { fill: #0099cc; }
+      .white { fill: #ffffff; }
+      .black { fill: #000000; }
+      .mute { fill: rgba(255,255,255,0.60); }
+      .dim { fill: rgba(255,255,255,0.38); }
+      .amber-100 { fill: #fde68a; }
+      .amber-400 { fill: #fbbf24; }
+      .amber-600 { fill: #e0a200; }
+      .amber-800 { fill: #c48700; }
+      .amber-halo { fill: rgba(251,191,36,0.18); }
+      .red-500 { fill: #c23b4a; }
+      .red-800 { fill: #7a1a25; }
+      .emerald { fill: #34d399; }
+      .slate-v { fill: #3a3150; }
+      .slate-v-hover { fill: #4a3e6a; }
+      .slate-v-active { fill: #2a2540; }
+      .slate-v-disabled { fill: rgba(58,49,80,0.4); }
+      .focus-ring { stroke: #00d2ff; stroke-width: 2; fill: none; }
+      .title { font-size: 15px; font-weight: bold; letter-spacing: 0.1em; text-transform: uppercase; }
+      .h2 { font-size: 13px; font-weight: bold; letter-spacing: 0.08em; text-transform: uppercase; }
+      .label { font-size: 10px; font-weight: bold; letter-spacing: 0.08em; text-transform: uppercase; }
+      .small { font-size: 10px; }
+      .tiny { font-size: 9px; letter-spacing: 0.04em; }
+      .btn-label { font-size: 12px; font-weight: bold; letter-spacing: 0.08em; }
+    </style>
+    <!-- 픽셀풍 눌림 그림자용 마커 (옵션) -->
+  </defs>
+
+  <!-- 전체 헤더 -->
+  <text x="32" y="36" class="amber-400 title">GraphResetButton · '그래프 초기화' 비주얼 시안</text>
+  <text x="32" y="56" class="mute small">2026-04-19 · 좌측 사이드바 하단 툴바 · 에이전트 고용(긍정) ↔ 긴급중단(위험) 사이 중립~경고 톤</text>
+
+  <!-- ══════════════════════════ ① 툴바 전체 레이아웃 (3버튼 · default) ══════════════════════════ -->
+  <g transform="translate(32, 88)">
+    <text x="0" y="0" class="accent label">① 툴바 전체 레이아웃 — 3 버튼 수직 스택 · default 상태</text>
+    <rect x="0" y="10" width="340" height="430" class="aside-bg"/>
+    <rect x="0" y="10" width="340" height="430" class="px-border"/>
+    <text x="16" y="34" class="dim tiny">aside.left-toolbar (폭 340 · px-4)</text>
+    <text x="16" y="50" class="dim tiny">… 위쪽: 네비게이션 목록 (flex-1)</text>
+
+    <!-- 중앙 dashed 구분선으로 .mt-auto 경계 표시 -->
+    <line x1="16" y1="84" x2="324" y2="84" stroke="rgba(255,255,255,0.15)" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="16" y="98" class="dim tiny">.mt-auto pt-4 space-y-3 ↓</text>
+
+    <!-- ① 에이전트 고용 (cyan) -->
+    <rect x="16" y="114" width="308" height="44" class="accent-fill"/>
+    <rect x="16" y="154" width="308" height="4" class="accent-dark"/>
+    <text x="170" y="141" class="black btn-label" text-anchor="middle">에이전트 고용</text>
+    <text x="16" y="174" class="dim tiny">긍정 · accent=#00d2ff · border-b-4 #0099cc · 44px</text>
+
+    <!-- space-y-3 -->
+    <text x="170" y="196" class="dim tiny" text-anchor="middle">↕ 12px (space-y-3)</text>
+
+    <!-- ② 그래프 초기화 (amber · 신규) -->
+    <rect x="16" y="204" width="308" height="44" class="slate-v"/>
+    <rect x="16" y="244" width="308" height="2" class="amber-600"/>
+    <!-- 아이콘 ↺ -->
+    <g transform="translate(96, 226)">
+      <circle cx="0" cy="0" r="7" fill="none" stroke="#fbbf24" stroke-width="2"/>
+      <path d="M -5.5 -3 L -7 -6 L -3.5 -6.5 Z" fill="#fbbf24"/>
+      <path d="M 0 -7 A 7 7 0 0 0 -7 0" fill="none" stroke="#fbbf24" stroke-width="2"/>
+    </g>
+    <text x="185" y="231" class="amber-100 btn-label" text-anchor="middle">그래프 초기화</text>
+    <text x="16" y="264" class="dim tiny">중립~경고 · bg=#3a3150 · border-b-2 #e0a200 · 44px · 신규</text>
+
+    <text x="170" y="286" class="dim tiny" text-anchor="middle">↕ 12px (space-y-3)</text>
+
+    <!-- ③ 긴급중단 (red) -->
+    <rect x="16" y="294" width="308" height="44" class="red-500"/>
+    <rect x="16" y="334" width="308" height="4" class="red-800"/>
+    <text x="170" y="321" class="white btn-label" text-anchor="middle">긴급중단</text>
+    <text x="16" y="354" class="dim tiny">위험 · bg=#c23b4a · border-b-4 #7a1a25 · 44px</text>
+
+    <!-- 측정선 -->
+    <line x1="340" y1="114" x2="356" y2="114" stroke="#fbbf24" stroke-width="1"/>
+    <line x1="340" y1="338" x2="356" y2="338" stroke="#fbbf24" stroke-width="1"/>
+    <line x1="350" y1="114" x2="350" y2="338" stroke="#fbbf24" stroke-width="1"/>
+    <text x="360" y="228" class="amber-400 tiny">총 156px</text>
+    <text x="360" y="244" class="dim tiny">(44×3 + 12×2)</text>
+
+    <text x="16" y="410" class="mute small">세 버튼 모두 w-full · 중앙정렬 · font-bold uppercase.</text>
+    <text x="16" y="425" class="dim tiny">신규 버튼 하단 테두리는 2px — 형제(4px) 대비 한 단계 낮은 위계.</text>
+  </g>
+
+  <!-- ══════════════════════════ ② 상태 4종 (default / hover / active / disabled) ══════════════════════════ -->
+  <g transform="translate(440, 88)">
+    <text x="0" y="0" class="amber-400 label">② '그래프 초기화' 상태 4종</text>
+    <rect x="0" y="10" width="720" height="430" class="panel-bg"/>
+    <rect x="0" y="10" width="720" height="430" class="px-border-dim"/>
+
+    <!-- default -->
+    <g transform="translate(24, 40)">
+      <text x="0" y="0" class="mute label">default</text>
+      <rect x="0" y="10" width="308" height="44" class="slate-v"/>
+      <rect x="0" y="50" width="308" height="2" class="amber-600"/>
+      <g transform="translate(80, 32)">
+        <circle cx="0" cy="0" r="7" fill="none" stroke="#fbbf24" stroke-width="2"/>
+        <path d="M -5.5 -3 L -7 -6 L -3.5 -6.5 Z" fill="#fbbf24"/>
+        <path d="M 0 -7 A 7 7 0 0 0 -7 0" fill="none" stroke="#fbbf24" stroke-width="2"/>
+      </g>
+      <text x="169" y="37" class="amber-100 btn-label" text-anchor="middle">그래프 초기화</text>
+      <text x="0" y="74" class="dim tiny">bg #3a3150 · border-b-2 #e0a200 · fg #fde68a · icon #fbbf24</text>
+    </g>
+
+    <!-- hover -->
+    <g transform="translate(360, 40)">
+      <text x="0" y="0" class="white label">hover</text>
+      <!-- halo -->
+      <rect x="-4" y="6" width="316" height="52" class="amber-halo" rx="1"/>
+      <rect x="0" y="10" width="308" height="44" class="slate-v-hover"/>
+      <rect x="0" y="50" width="308" height="2" class="amber-400"/>
+      <g transform="translate(80, 32)">
+        <circle cx="0" cy="0" r="7" fill="none" stroke="#ffffff" stroke-width="2"/>
+        <path d="M -5.5 -3 L -7 -6 L -3.5 -6.5 Z" fill="#ffffff"/>
+        <path d="M 0 -7 A 7 7 0 0 0 -7 0" fill="none" stroke="#ffffff" stroke-width="2"/>
+      </g>
+      <text x="169" y="37" class="white btn-label" text-anchor="middle">그래프 초기화</text>
+      <text x="0" y="74" class="dim tiny">bg #4a3e6a · border-b-2 #fbbf24 · fg #ffffff · halo rgba(251,191,36,.18)</text>
+    </g>
+
+    <!-- active -->
+    <g transform="translate(24, 140)">
+      <text x="0" y="0" class="amber-400 label">active (눌림)</text>
+      <!-- 내려앉음: translateY(2px) · border 0 -->
+      <rect x="0" y="12" width="308" height="44" class="slate-v-active"/>
+      <!-- 하단 선 사라짐 (0px) -->
+      <g transform="translate(80, 34)">
+        <circle cx="0" cy="0" r="7" fill="none" stroke="#fbbf24" stroke-width="2"/>
+        <path d="M -5.5 -3 L -7 -6 L -3.5 -6.5 Z" fill="#fbbf24"/>
+        <path d="M 0 -7 A 7 7 0 0 0 -7 0" fill="none" stroke="#fbbf24" stroke-width="2"/>
+      </g>
+      <text x="169" y="39" class="amber-100 btn-label" text-anchor="middle">그래프 초기화</text>
+      <!-- 원래 위치 잔상 (dim) -->
+      <rect x="0" y="10" width="308" height="2" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1" stroke-dasharray="3 2"/>
+      <text x="0" y="76" class="dim tiny">bg #2a2540 · translateY(+2px) · border 0 · "내려앉음" 픽셀감</text>
+    </g>
+
+    <!-- focus -->
+    <g transform="translate(360, 140)">
+      <text x="0" y="0" class="accent label">focus-visible (키보드)</text>
+      <rect x="0" y="10" width="308" height="44" class="slate-v"/>
+      <rect x="0" y="50" width="308" height="2" class="amber-600"/>
+      <!-- outline 2px cyan · offset 2px -->
+      <rect x="-2" y="8" width="312" height="48" class="focus-ring"/>
+      <g transform="translate(80, 32)">
+        <circle cx="0" cy="0" r="7" fill="none" stroke="#fbbf24" stroke-width="2"/>
+        <path d="M -5.5 -3 L -7 -6 L -3.5 -6.5 Z" fill="#fbbf24"/>
+        <path d="M 0 -7 A 7 7 0 0 0 -7 0" fill="none" stroke="#fbbf24" stroke-width="2"/>
+      </g>
+      <text x="169" y="37" class="amber-100 btn-label" text-anchor="middle">그래프 초기화</text>
+      <text x="0" y="74" class="dim tiny">+ outline: 2px solid #00d2ff · offset 2px · amber 와 색 구분</text>
+    </g>
+
+    <!-- disabled -->
+    <g transform="translate(24, 240)">
+      <text x="0" y="0" class="dim label">disabled</text>
+      <rect x="0" y="10" width="308" height="44" class="slate-v-disabled"/>
+      <rect x="0" y="50" width="308" height="2" fill="rgba(255,255,255,0.1)"/>
+      <g transform="translate(80, 32)" opacity="0.4">
+        <circle cx="0" cy="0" r="7" fill="none" stroke="#ffffff" stroke-width="2"/>
+        <path d="M -5.5 -3 L -7 -6 L -3.5 -6.5 Z" fill="#ffffff"/>
+        <path d="M 0 -7 A 7 7 0 0 0 -7 0" fill="none" stroke="#ffffff" stroke-width="2"/>
+      </g>
+      <text x="169" y="37" class="dim btn-label" text-anchor="middle" style="fill:rgba(255,255,255,0.35)">그래프 초기화</text>
+      <text x="0" y="74" class="dim tiny">bg 40% · border rgba(255,255,255,.1) · fg white/35% · cursor not-allowed</text>
+      <text x="0" y="88" class="dim tiny">조건: ① 이미 pan=(0,0) & zoom=1.0, ② 드래그 중</text>
+    </g>
+
+    <!-- 범례 -->
+    <g transform="translate(360, 240)">
+      <text x="0" y="0" class="mute label">상태 전이 (State transition)</text>
+      <rect x="0" y="12" width="308" height="100" class="deep-bg"/>
+      <rect x="0" y="12" width="308" height="100" class="px-border-dim"/>
+      <text x="12" y="32" class="mute small">default → hover → active → default</text>
+      <text x="12" y="50" class="mute small">transition: all 180ms ease-out</text>
+      <text x="12" y="68" class="mute small">active: transform translateY(2px) · 60ms</text>
+      <text x="12" y="86" class="mute small">disabled → pointer-events: none + aria-disabled</text>
+      <text x="12" y="104" class="amber-400 tiny">prefers-reduced-motion: halo/translate 제거</text>
+    </g>
+  </g>
+
+  <!-- ══════════════════════════ ③ 색상 팔레트 비교 ══════════════════════════ -->
+  <g transform="translate(32, 560)">
+    <text x="0" y="0" class="amber-400 label">③ 형제 버튼과의 팔레트 관계 — "중간 채도" 로 경계를 표현</text>
+    <rect x="0" y="10" width="1140" height="150" class="panel-bg"/>
+    <rect x="0" y="10" width="1140" height="150" class="px-border-dim"/>
+
+    <g transform="translate(24, 32)">
+      <!-- 에이전트 고용 -->
+      <rect x="0" y="0" width="340" height="52" class="accent-fill"/>
+      <rect x="0" y="52" width="340" height="6" class="accent-dark"/>
+      <text x="170" y="32" class="black btn-label" text-anchor="middle">에이전트 고용</text>
+      <text x="0" y="80" class="accent tiny">bg #00d2ff (cyan-300) · fg #000 · border-b #0099cc</text>
+      <text x="0" y="94" class="dim tiny">긍정 · "플릿 확장"</text>
+
+      <!-- 그래프 초기화 -->
+      <rect x="380" y="0" width="340" height="52" class="slate-v"/>
+      <rect x="380" y="52" width="340" height="4" class="amber-600"/>
+      <g transform="translate(474, 28)">
+        <circle cx="0" cy="0" r="8" fill="none" stroke="#fbbf24" stroke-width="2"/>
+        <path d="M -6 -3.5 L -8 -7 L -3.5 -7.5 Z" fill="#fbbf24"/>
+        <path d="M 0 -8 A 8 8 0 0 0 -8 0" fill="none" stroke="#fbbf24" stroke-width="2"/>
+      </g>
+      <text x="566" y="34" class="amber-100 btn-label" text-anchor="middle">그래프 초기화</text>
+      <text x="380" y="80" class="amber-400 tiny">bg #3a3150 (slate-v) · fg #fde68a · border-b #e0a200</text>
+      <text x="380" y="94" class="dim tiny">중립~경고 · "캔버스 복구"</text>
+
+      <!-- 긴급중단 -->
+      <rect x="760" y="0" width="340" height="52" class="red-500"/>
+      <rect x="760" y="52" width="340" height="6" class="red-800"/>
+      <text x="930" y="32" class="white btn-label" text-anchor="middle">긴급중단</text>
+      <text x="760" y="80" class="red-500 tiny" style="fill:#fca5a5">bg #c23b4a (red-500) · fg #fff · border-b #7a1a25</text>
+      <text x="760" y="94" class="dim tiny">위험 · "전체 정지 · 되돌리기 어려움"</text>
+    </g>
+
+    <text x="24" y="140" class="mute small">세 배경은 <tspan class="accent">채도 — 명도</tspan> 축에서: cyan(고채도/밝음) → slate-v(저채도/중간) → red(고채도/중간어두움). 중간 버튼의 저채도가 "쉬어 가는 자리" 를 만든다.</text>
+  </g>
+
+  <!-- ══════════════════════════ ④ 아이콘 규격 ══════════════════════════ -->
+  <g transform="translate(32, 740)">
+    <text x="0" y="0" class="amber-400 label">④ 아이콘 규격 — ↺ (RotateCcw) 14×14 · 8px 라벨 간격</text>
+    <rect x="0" y="10" width="560" height="180" class="panel-bg"/>
+    <rect x="0" y="10" width="560" height="180" class="px-border-dim"/>
+
+    <!-- 확대 아이콘 -->
+    <g transform="translate(80, 100)">
+      <!-- 격자 -->
+      <g stroke="rgba(255,255,255,0.08)" stroke-width="1">
+        <line x1="-40" y1="-40" x2="40" y2="-40"/>
+        <line x1="-40" y1="-20" x2="40" y2="-20"/>
+        <line x1="-40" y1="0" x2="40" y2="0"/>
+        <line x1="-40" y1="20" x2="40" y2="20"/>
+        <line x1="-40" y1="40" x2="40" y2="40"/>
+        <line x1="-40" y1="-40" x2="-40" y2="40"/>
+        <line x1="-20" y1="-40" x2="-20" y2="40"/>
+        <line x1="0" y1="-40" x2="0" y2="40"/>
+        <line x1="20" y1="-40" x2="20" y2="40"/>
+        <line x1="40" y1="-40" x2="40" y2="40"/>
+      </g>
+      <!-- 아이콘 -->
+      <circle cx="0" cy="0" r="28" fill="none" stroke="#fbbf24" stroke-width="4"/>
+      <path d="M -22 -12 L -28 -24 L -14 -26 Z" fill="#fbbf24"/>
+      <path d="M 0 -28 A 28 28 0 0 0 -28 0" fill="none" stroke="#fbbf24" stroke-width="4"/>
+      <!-- 중심점 -->
+      <circle cx="0" cy="0" r="1" fill="#00d2ff"/>
+    </g>
+    <text x="80" y="160" class="mute small" text-anchor="middle">14×14 @ 4× 확대</text>
+    <text x="80" y="174" class="dim tiny" text-anchor="middle">U+21BA ↺ · lucide RotateCcw 권장</text>
+
+    <g transform="translate(200, 50)">
+      <text x="0" y="0" class="mute label">형제 대비</text>
+      <text x="0" y="20" class="dim tiny">·  14×14 — 라벨 11~12px 의 baseline 과 정렬</text>
+      <text x="0" y="36" class="dim tiny">·  라벨과 간격 8px — 한 덩어리로 읽힘</text>
+      <text x="0" y="52" class="dim tiny">·  좌측 내부 여백 12px — 형제 버튼 텍스트와 x 정렬</text>
+      <text x="0" y="68" class="dim tiny">·  색: icon = amber-400 (#fbbf24), label = amber-100 (#fde68a)</text>
+      <text x="0" y="84" class="dim tiny">·  hover: icon/label 모두 #ffffff 로 상승</text>
+
+      <text x="0" y="112" class="label" style="fill:#fca5a5">거부된 대안</text>
+      <text x="0" y="130" class="dim tiny">✕ 🗑 (휴지통) — 에이전트·작업을 삭제하지 않으므로 오해를 만든다</text>
+      <text x="0" y="146" class="dim tiny">✕ × (닫기) — 위험 톤 아이콘, '긴급중단' 과 의미 겹침</text>
+    </g>
+  </g>
+
+  <!-- ══════════════════════════ ⑤ 디자인 토큰 ══════════════════════════ -->
+  <g transform="translate(612, 740)">
+    <text x="0" y="0" class="amber-400 label">⑤ 디자인 토큰 (index.css --graph-reset-*)</text>
+    <rect x="0" y="10" width="560" height="180" class="panel-bg"/>
+    <rect x="0" y="10" width="560" height="180" class="px-border-dim"/>
+
+    <g transform="translate(16, 30)">
+      <!-- row 1 -->
+      <rect x="0" y="0" width="90" height="36" class="slate-v"/>
+      <text x="45" y="22" class="amber-100 tiny" text-anchor="middle">bg</text>
+      <text x="45" y="50" class="dim tiny" text-anchor="middle">#3a3150</text>
+
+      <rect x="102" y="0" width="90" height="36" class="slate-v-hover"/>
+      <text x="147" y="22" class="amber-100 tiny" text-anchor="middle">bg-hover</text>
+      <text x="147" y="50" class="dim tiny" text-anchor="middle">#4a3e6a</text>
+
+      <rect x="204" y="0" width="90" height="36" class="slate-v-active"/>
+      <text x="249" y="22" class="amber-100 tiny" text-anchor="middle">bg-active</text>
+      <text x="249" y="50" class="dim tiny" text-anchor="middle">#2a2540</text>
+
+      <rect x="306" y="0" width="90" height="36" class="slate-v-disabled"/>
+      <text x="351" y="22" class="dim tiny" text-anchor="middle">bg-disabled</text>
+      <text x="351" y="50" class="dim tiny" text-anchor="middle">slate/40%</text>
+
+      <rect x="408" y="0" width="120" height="36" class="amber-halo"/>
+      <text x="468" y="22" class="amber-400 tiny" text-anchor="middle">halo (hover)</text>
+      <text x="468" y="50" class="dim tiny" text-anchor="middle">#fbbf24 18%</text>
+
+      <!-- row 2 (borders + fg) -->
+      <rect x="0" y="72" width="90" height="36" fill="#1a1a2e"/>
+      <rect x="0" y="104" width="90" height="4" class="amber-600"/>
+      <text x="45" y="95" class="amber-600 tiny" text-anchor="middle">border</text>
+      <text x="45" y="128" class="dim tiny" text-anchor="middle">#e0a200</text>
+
+      <rect x="102" y="72" width="90" height="36" fill="#1a1a2e"/>
+      <rect x="102" y="104" width="90" height="4" class="amber-400"/>
+      <text x="147" y="95" class="amber-400 tiny" text-anchor="middle">border-hover</text>
+      <text x="147" y="128" class="dim tiny" text-anchor="middle">#fbbf24</text>
+
+      <rect x="204" y="72" width="90" height="36" fill="#1a1a2e"/>
+      <rect x="204" y="104" width="90" height="4" class="amber-800"/>
+      <text x="249" y="95" class="amber-800 tiny" text-anchor="middle" style="fill:#c48700">border-active</text>
+      <text x="249" y="128" class="dim tiny" text-anchor="middle">#c48700</text>
+
+      <rect x="306" y="72" width="90" height="36" fill="#1a1a2e"/>
+      <text x="351" y="95" class="amber-100 tiny" text-anchor="middle">fg (default)</text>
+      <text x="351" y="128" class="dim tiny" text-anchor="middle">#fde68a</text>
+
+      <rect x="408" y="72" width="120" height="36" fill="#1a1a2e"/>
+      <text x="468" y="95" class="white tiny" text-anchor="middle">fg-hover / icon</text>
+      <text x="468" y="128" class="dim tiny" text-anchor="middle">#fff / #fbbf24</text>
+    </g>
+
+    <text x="16" y="176" class="dim tiny">대비: default (#3a3150 ↔ #fde68a) = 6.4:1 · hover (#4a3e6a ↔ #fff) = 9.1:1 · 모두 AA 본문.</text>
+  </g>
+
+  <!-- ══════════════════════════ ⑥ 접근성 / 인터랙션 ══════════════════════════ -->
+  <g transform="translate(32, 960)">
+    <text x="0" y="0" class="accent label">⑥ 접근성(a11y) + 인터랙션</text>
+    <rect x="0" y="10" width="560" height="220" class="panel-bg"/>
+    <rect x="0" y="10" width="560" height="220" class="px-border-dim"/>
+
+    <text x="20" y="34" class="mute small">• aria-label="그래프 초기화 — 캔버스 위치와 줌만 복원"</text>
+    <text x="20" y="54" class="mute small">• title="캔버스 위치·줌만 초기 상태로 되돌립니다. 에이전트·작업 이력은 보존"</text>
+    <text x="20" y="74" class="mute small">• disabled 시 aria-disabled="true" + cursor: not-allowed + tooltip 교체</text>
+    <text x="20" y="94" class="mute small">• :focus-visible — outline 2px #00d2ff · offset 2px (마우스에는 미노출)</text>
+    <text x="20" y="114" class="mute small">• 색각 이상: amber 단색에만 의존 X · 아이콘(↺) + "초기화" 라벨 병기</text>
+    <text x="20" y="134" class="mute small">• prefers-reduced-motion: halo · translateY · transition 모두 즉시로 단축</text>
+    <text x="20" y="154" class="mute small">• Tab 순서: 에이전트 고용 → 그래프 초기화 → 긴급중단</text>
+    <text x="20" y="174" class="mute small">• Enter/Space 로 클릭 동일 — 긴급 단축키는 배정하지 않음</text>
+    <text x="20" y="194" class="amber-400 tiny">확인 모달은 기본 없음 (pan/zoom 은 드래그/휠로 즉시 복구 가능)</text>
+    <text x="20" y="210" class="dim tiny">※ 사용자 배치 에이전트가 있을 때만 window.confirm 한 번</text>
+  </g>
+
+  <!-- ══════════════════════════ ⑦ 구현 경로 ══════════════════════════ -->
+  <g transform="translate(612, 960)">
+    <text x="0" y="0" class="accent label">⑦ 구현 경로 (QA 인계용)</text>
+    <rect x="0" y="10" width="560" height="220" class="panel-bg"/>
+    <rect x="0" y="10" width="560" height="220" class="px-border"/>
+
+    <text x="20" y="34" class="white small">1. src/index.css 에 --graph-reset-* 토큰 12개 (본 PR 선-반영)</text>
+    <text x="20" y="54" class="white small">2. .graph-reset-btn / __icon / __label 클래스 정의 — 상태 4종</text>
+    <text x="20" y="74" class="white small">3. src/App.tsx L1353~L1367 세 버튼 스택 중간에 버튼 JSX 삽입</text>
+    <text x="20" y="94" class="white small">4. resetGraph() 스텁 — pan={0,0} · zoom=1.0 · 에이전트/작업 보존</text>
+    <text x="20" y="114" class="white small">5. LogPanelTabs 로그 탭 배지 +1 회귀 — "캔버스 위치/줌 초기화 완료"</text>
+    <text x="20" y="134" class="accent small">→ 회귀 테스트: tests/graph-reset-button-regression.md</text>
+    <text x="20" y="154" class="dim tiny">   · default/hover/active/disabled × 마우스/키보드/터치</text>
+    <text x="20" y="174" class="dim tiny">   · disabled 조건 2종 (초기 상태 판정 · 드래그 중 차단)</text>
+    <text x="20" y="194" class="dim tiny">   · Tab 순서 · aria-label · prefers-reduced-motion</text>
+    <text x="20" y="214" class="amber-400 tiny">이번 시안은 비주얼만. resetGraph() 구현은 후속 PR 범위.</text>
+  </g>
+
+  <!-- ══════════════════════════ ⑧ 마이크로카피 ══════════════════════════ -->
+  <g transform="translate(32, 1200)">
+    <text x="0" y="-12" class="accent label">⑧ 마이크로카피 · 툴팁 · 로그</text>
+    <rect x="0" y="0" width="1140" height="70" class="panel-bg"/>
+    <rect x="0" y="0" width="1140" height="70" class="px-border-dim"/>
+
+    <text x="20" y="22" class="mute small">라벨: <tspan class="amber-100">그래프 초기화</tspan> · 툴팁: <tspan class="mute">"캔버스 위치·줌만 초기 상태로 되돌립니다. 에이전트·작업 이력은 보존됩니다."</tspan></text>
+    <text x="20" y="42" class="mute small">disabled 툴팁: <tspan class="dim">"이미 초기 상태입니다"</tspan> · 배치 에이전트 confirm: <tspan class="dim">"배치한 에이전트 위치가 초기화됩니다. 계속할까요?"</tspan></text>
+    <text x="20" y="62" class="amber-400 small">실행 후 로그: <tspan class="mute">"캔버스 위치/줌 초기화 완료"</tspan> — LogPanelTabs 의 logs 탭 배지가 +1 증가해 시선 유도</text>
+  </g>
+</svg>

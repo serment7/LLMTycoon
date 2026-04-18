@@ -875,6 +875,44 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // 그래프 초기화: 특정 프로젝트(projectId 쿼리) 또는 전체 코드그래프를 비운다.
+  // 에이전트가 만지던 working 파일 참조도 끊어 좀비 링크가 남지 않게 한다.
+  app.post('/api/graph/reset', async (req, res) => {
+    const raw = typeof req.query.projectId === 'string' ? req.query.projectId.trim() : '';
+    if (raw) {
+      const files = await filesCol.find({ projectId: raw }).toArray();
+      const fileIds = files.map(f => f.id);
+      const filesDeleted = await filesCol.deleteMany({ projectId: raw });
+      let depsDeleted = { deletedCount: 0 } as { deletedCount?: number };
+      if (fileIds.length > 0) {
+        depsDeleted = await depsCol.deleteMany({ $or: [{ from: { $in: fileIds } }, { to: { $in: fileIds } }] });
+      }
+      if (fileIds.length > 0) {
+        await agentsCol.updateMany(
+          { workingOnFileId: { $in: fileIds } },
+          { $set: { workingOnFileId: '' } },
+        );
+      }
+      io.emit('state:updated', await getGameState());
+      res.json({
+        scope: 'project',
+        projectId: raw,
+        filesDeleted: filesDeleted.deletedCount ?? 0,
+        dependenciesDeleted: depsDeleted.deletedCount ?? 0,
+      });
+      return;
+    }
+    const filesDeleted = await filesCol.deleteMany({});
+    const depsDeleted = await depsCol.deleteMany({});
+    await agentsCol.updateMany({}, { $set: { workingOnFileId: '' } });
+    io.emit('state:updated', await getGameState());
+    res.json({
+      scope: 'all',
+      filesDeleted: filesDeleted.deletedCount ?? 0,
+      dependenciesDeleted: depsDeleted.deletedCount ?? 0,
+    });
+  });
+
   // --- Source integrations (GitHub / GitLab) ---
   const redactIntegration = (i: SourceIntegration) => ({ ...i, accessToken: '' });
 
