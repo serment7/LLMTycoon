@@ -32,6 +32,10 @@ export interface Agent {
   lastActiveTask?: string;
   lastMessage?: string;
   lastMessageTo?: string;
+  // 리더 최근 발화 유형. 'reply' = 답변 전용(분배 없이 대화만), 'delegate' = 업무 분배,
+  // 'plain' = 일반 텍스트. UI 가 리더 카드·말풍선·로그 배지를 이 값으로 판정한다.
+  // 리더가 아닌 에이전트의 발화는 'plain' 으로 남긴다.
+  lastLeaderMessageKind?: 'delegate' | 'reply' | 'plain';
   workingOnFileId?: string;
 }
 
@@ -121,6 +125,40 @@ export interface GitAutomationPreference {
   commitScope: string;
   prTitleTemplate: string;
   reviewers: string[];
+}
+
+// Git 자동화 파이프라인 각 단계(commit/push/pr)의 시작·성공·실패를 그대로 보존한
+// 불변 이력 엔트리. 같은 단계에 대해 보통 started → (succeeded | failed) 두 건이
+// 쌓이며, 설정 비활성/프로젝트 누락 같은 전체 스킵은 단일 'skipped' 엔트리로 요약한다.
+// AgentStatusPanel 이 실패 원인 메시지를 사용자에게 노출할 때 errorMessage 를 그대로
+// 읽도록 설계했다. 서버는 이 배열을 'git-automation:log' 소켓 이벤트로 방출하고,
+// 클라이언트는 동일 태스크 ID 아래로 누적해 과거 실행까지 되짚을 수 있다.
+export type GitAutomationLogStage = 'commit' | 'push' | 'pr';
+export type GitAutomationLogOutcome = 'started' | 'succeeded' | 'failed' | 'skipped';
+
+export interface GitAutomationLogEntry {
+  // 이 엔트리가 속한 파이프라인 실행의 식별자. 같은 taskId 아래 여러 엔트리가
+  // 들어올 수 있다. 서버 측 디바운스 키와 동일.
+  taskId?: string;
+  // 파이프라인을 촉발한 에이전트 이름(디버깅/표시용). 알 수 없으면 비운다.
+  agent?: string;
+  stage: GitAutomationLogStage;
+  outcome: GitAutomationLogOutcome;
+  // 해당 outcome 이 발생한 시각(epoch ms). 시작/종료가 구분되지 않는 경로
+  // (예: skipped) 에서는 관측된 순간 하나만 기록한다.
+  at: number;
+  // 자동화가 대상으로 잡은 브랜치 이름. skipped 엔트리에서도 빈 값을 허용한다.
+  branch?: string;
+  // commit 단계 성공 시 server.ts 가 stdout 에서 파싱한 단축 SHA(7자+).
+  commitSha?: string;
+  // pr 단계 성공 시 `gh pr create` stdout 에서 파싱한 PR URL.
+  prUrl?: string;
+  // 단계가 돌려준 종료 코드. 알 수 없으면 null(spawn 실패) 또는 undefined(스킵).
+  exitCode?: number | null;
+  // 실패/스킵 사유. outcome === 'failed' 일 때 AgentStatusPanel 이 stage.errorMessage
+  // 로 그대로 노출하고, 'skipped' 일 때는 스킵 원인(disabled/no-project)을 담는다.
+  // 페이로드 비용을 막기 위해 400자 상한으로 잘라 서버가 채운다.
+  errorMessage?: string;
 }
 
 // 서버 DB(git_automation_settings) 에 프로젝트별로 1:1 저장되는 레코드.

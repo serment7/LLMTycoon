@@ -177,3 +177,45 @@ test('useReducedMotion: useEffect 본문이 매 마운트마다 현재값을 다
   // 이 호출이 사라지면 SSR → 클라이언트 hydration 에서 한 틱 동안 잘못된 값이 깜빡인다.
   assert.match(HOOK_SRC, /useEffect\([^)]*\(\)\s*=>\s*\{[\s\S]*?setReduced\(readReducedMotion\(window\)\)/);
 });
+
+// ─── (7) 엄격 boolean 비교 계약 ────────────────────────────────────────
+//
+// 구현은 `mq.matches === true` 로 엄격 비교를 쓴다. 일부 폴리필/래퍼가
+// matches 를 truthy 한 non-boolean(문자열·숫자·객체) 으로 돌려주는 경우에도
+// 모션을 "켠 상태" 로 보수적으로 해석해야 애니메이션이 사용자 의사와 어긋나지
+// 않는다. 이 계약이 느슨해지면(`Boolean(mq.matches)` 로 바뀌면) non-boolean
+// truthy 값에서 예상치 못하게 모션이 꺼지므로, 아래 두 테스트로 엄격 비교를
+// 고정한다.
+
+test('readReducedMotion: matches 가 truthy 한 문자열이어도 false (엄격 === true 비교)', () => {
+  const win: ReducedMotionWindow = {
+    matchMedia: () => ({ matches: 'yes' as unknown as boolean }),
+  };
+  assert.equal(readReducedMotion(win), false);
+});
+
+test('readReducedMotion: matches 가 숫자 1 이어도 false (엄격 === true 비교)', () => {
+  const win: ReducedMotionWindow = {
+    matchMedia: () => ({ matches: 1 as unknown as boolean }),
+  };
+  assert.equal(readReducedMotion(win), false);
+});
+
+// ─── (8) 비표준 matchMedia 반환 객체에서 cleanup 안전성 ─────────────────
+//
+// matchMedia 는 있지만 반환 객체에 addEventListener / addListener 가 모두
+// 없는 비표준·축약 폴리필 환경이 실제로 존재한다. 이 때 구독 함수는 no-op
+// cleanup 을 돌려주고, cleanup 호출이 throw 하지 않아야 React useEffect 해제
+// 경로가 깨지지 않는다. 현재 구현은 `return () => {}` 로 처리하므로 이 계약을
+// 회귀 테스트로 고정한다.
+
+test('subscribeReducedMotion: add(Event)Listener 둘 다 없으면 cleanup 은 no-op 이고 호출이 안전', () => {
+  const mq = { matches: false } as unknown as { matches: boolean };
+  const win: ReducedMotionWindow = { matchMedia: () => mq };
+  const calls: boolean[] = [];
+  const off = subscribeReducedMotion(win, v => calls.push(v));
+  assert.equal(typeof off, 'function');
+  // 호출 자체가 throw 하지 않고, 콜백이 한 번도 불리지 않은 상태여야 한다.
+  off();
+  assert.deepEqual(calls, []);
+});

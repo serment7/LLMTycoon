@@ -26,6 +26,7 @@ export function personaLine(agent: Agent): string {
 export function buildSystemPrompt(agent: Agent): string {
   return [
     '[언어 규칙 — 최우선]',
+    '- 반드시 한국어(한글)로만 응답한다. 코드·식별자·파일명을 제외하고 영어 단어를 섞어 쓰지 않는다. 기술 용어는 가능하면 한국어로 번역하거나 괄호 병기한다.',
     '- 모든 사용자 응답·동료 메시지·로그 문장은 반드시 한국어로 작성한다.',
     '- 코드·식별자·파일명·커맨드는 원문(영문) 그대로 두되, 주석과 설명은 한국어.',
     '- 영어로 답하고 싶더라도 한국어로 번역해 출력한다. (게임 UI가 한국어 전용이다)',
@@ -75,6 +76,9 @@ interface TaskPromptInput {
 export function buildTaskPrompt(input: TaskPromptInput): string {
   const { agent, task, project, candidateFile, peer } = input;
   const lines: string[] = [];
+  lines.push('[언어 규칙 — 최우선]');
+  lines.push('반드시 한국어(한글)로만 응답한다. 코드·식별자·파일명을 제외하고 영어 단어를 섞어 쓰지 않는다. 기술 용어는 가능하면 한국어로 번역하거나 괄호 병기한다.');
+  lines.push('');
   lines.push(`[새 지시 #${task.id.slice(0, 8)}]`);
   lines.push(`할당된 업무: ${task.description}`);
   if (project) lines.push(`프로젝트: ${project.name}${project.description ? ` — ${project.description}` : ''}`);
@@ -106,6 +110,9 @@ export function buildLeaderPlanPrompt(input: LeaderPlanPromptInput): string {
     .map(p => `- ${p.name} (${translateRole(p.role)}, id: ${p.id}, 상태: ${p.status})`)
     .join('\n') || '- (없음)';
   const lines: string[] = [];
+  lines.push('[언어 규칙 — 최우선]');
+  lines.push('반드시 한국어(한글)로만 응답한다. 코드·식별자·파일명을 제외하고 영어 단어를 섞어 쓰지 않는다. 기술 용어는 가능하면 한국어로 번역하거나 괄호 병기한다.');
+  lines.push('');
   lines.push(`당신은 팀 리더 "${agent.name}" 입니다. ${agent.persona?.trim() ? `페르소나: ${agent.persona.trim()}` : ''}`.trim());
   lines.push(`프로젝트: ${project.name} — ${project.description || ''}`);
   lines.push('');
@@ -119,21 +126,48 @@ export function buildLeaderPlanPrompt(input: LeaderPlanPromptInput): string {
     lines.push('프로젝트의 현재 상태를 고려하여 팀원들에게 다음으로 해야 할 업무를 분배하세요.');
   }
   lines.push('');
-  lines.push('반드시 아래 JSON 형식으로만 응답하세요 (앞뒤 설명 금지):');
-  lines.push('{"tasks":[{"assignedTo":"에이전트id","description":"구체적 업무 설명(한국어)"}],"message":"팀에 전달할 한국어 한 줄 메시지(≤20단어)"}');
-  lines.push('JSON 안의 description 과 message 는 반드시 한국어로 작성한다.');
+  lines.push('반드시 아래 JSON 형식으로만 응답하세요 (앞뒤 설명 금지). mode 는 이번 응답의 성격을 선언하는 필수 필드입니다:');
+  lines.push('- mode="dispatch": 팀원에게 업무를 분배하는 평상시 경로. tasks 를 한 개 이상 채운다.');
+  lines.push('- mode="reply": 사용자의 단순 질문·상태 확인·안부 등에 답만 하고 종료할 때. tasks 는 빈 배열로 두고 message 에 답변을 담는다.');
+  lines.push('분배 예:');
+  lines.push('{"mode":"dispatch","tasks":[{"assignedTo":"에이전트id","description":"로그인 폼 컴포넌트의 이메일·비밀번호 유효성 검증 함수를 추가한다"}],"message":"로그인 흐름 개선 작업을 팀에 분배합니다"}');
+  lines.push('답변 예:');
+  lines.push('{"mode":"reply","tasks":[],"message":"현재 프로젝트는 인증 모듈 리팩터링 단계에 있으며, 오늘 처리 중인 태스크는 3건입니다."}');
+  lines.push('JSON 안의 description 과 message 는 반드시 한국어 문장으로 작성한다. 영어 단어는 파일명·식별자·코드 토큰에만 허용한다.');
   lines.push('');
   lines.push('규칙:');
-  lines.push('- role 에 맞게 할당 (Developer=구현, QA=테스트, Designer=UI/UX, Researcher=조사)');
+  lines.push('- mode 판정: 사용자 지시가 "해줘/추가해/구현해" 류의 실행 요청이면 dispatch, "뭐 해?/어때?/얼마나 진행됐어?" 류의 조회·질문이면 reply.');
+  lines.push('- dispatch 일 때: role 에 맞게 할당 (Developer=구현, QA=테스트, Designer=UI/UX, Researcher=조사)');
   lines.push('- description 은 파일명·함수명·기능 세부까지 포함한 구체 지시');
   lines.push('- idle 상태 팀원을 우선 할당');
-  lines.push('- 팀원이 없거나 분배할 업무가 없으면 tasks 를 빈 배열로, message 만 채우세요');
+  lines.push('- reply 일 때: tasks 를 반드시 빈 배열로 두고, message 에 사용자가 바로 읽을 한국어 답변(1~3문장)만 담는다.');
+  lines.push('- 분배할 업무를 찾지 못한 경우에도 억지로 tasks 를 만들지 말고 mode="reply" 로 사유를 message 에 적는다.');
+  lines.push('');
+  lines.push('[에이전트 개선 보고 수신 시 — 재분배 로직]');
+  lines.push('- 사용자 지시 또는 이전 턴의 맥락에 "개선/리팩터/버그 수정/테스트 추가/구현 완료" 류의 에이전트 완료 보고가 포함되면,');
+  lines.push('  해당 변경이 영향을 줄 수 있는 인접 영역(QA 시나리오·문서·연관 모듈)을 식별하고 후속 업무를 mode="dispatch" 로 배분하라.');
+  lines.push('- 한 명이 구현을 마친 경우 기본 분배 규칙:');
+  lines.push('  1) QA 팀원에게 해당 변경 범위의 회귀 테스트/시나리오 확장 업무를 할당.');
+  lines.push('  2) 다른 Developer 에게 연관 파일의 통합/후속 개선이 필요한지 점검 업무를 할당.');
+  lines.push('  3) 후속이 실제로 필요 없다고 판단되면 mode="reply" 로 사유를 기록하고 재분배를 생략한다.');
+  lines.push('- 재분배로 생성되는 task.description 에는 원 개선 보고의 요약(무엇을 누가 완료했는지)을 명시해 후속 팀원이 컨텍스트를 잃지 않게 한다.');
+  lines.push('- 같은 개선 보고에 대해서는 한 번만 재분배한다(중복 분배 금지) — 이미 분배된 후속 작업이 있다면 mode="reply" 로 상태만 알린다.');
   return lines.join('\n');
 }
 
 // 리더 응답에서 JSON 블록만 추출한다. ```json 펜스, 앞뒤 서술, 여러 JSON 혼재
 // 케이스를 모두 방어적으로 다룬다.
-export function extractLeaderPlan(text: string): { tasks: { assignedTo: string; description: string }[]; message?: string } | null {
+// mode 는 프롬프트에서 필수 필드로 요구하지만, 과거 응답과의 호환을 위해 누락된
+// 경우 tasks 길이로 추정한다(있으면 dispatch, 없으면 reply).
+export type LeaderPlanMode = 'dispatch' | 'reply';
+
+export interface ExtractedLeaderPlan {
+  mode: LeaderPlanMode;
+  tasks: { assignedTo: string; description: string }[];
+  message?: string;
+}
+
+export function extractLeaderPlan(text: string): ExtractedLeaderPlan | null {
   if (!text) return null;
   const m = text.match(/\{[\s\S]*\}/);
   if (!m) return null;
@@ -146,7 +180,14 @@ export function extractLeaderPlan(text: string): { tasks: { assignedTo: string; 
           .map((t: any) => ({ assignedTo: t.assignedTo, description: t.description }))
       : [];
     const message = typeof parsed.message === 'string' ? parsed.message : undefined;
-    return { tasks, message };
+    const rawMode = typeof parsed.mode === 'string' ? parsed.mode.toLowerCase() : '';
+    const mode: LeaderPlanMode =
+      rawMode === 'reply' || rawMode === 'dispatch'
+        ? (rawMode as LeaderPlanMode)
+        : tasks.length > 0
+          ? 'dispatch'
+          : 'reply';
+    return { mode, tasks, message };
   } catch {
     return null;
   }

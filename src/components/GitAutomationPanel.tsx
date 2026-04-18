@@ -300,11 +300,9 @@ export function GitAutomationPanel({
   };
 
   const toggleEnabled = () => {
-    setEnabled(v => {
-      const nv = !v;
-      onLog?.(`Git 자동화 ${nv ? '활성화' : '비활성화'} (미저장)`);
-      return nv;
-    });
+    const nv = !enabled;
+    setEnabled(nv);
+    onLog?.(`Git 자동화 ${nv ? '활성화' : '비활성화'} (미저장)`);
   };
 
   const optionSummary = useMemo(() => deriveAutomationOptions({ flow, enabled }), [flow, enabled]);

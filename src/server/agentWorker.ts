@@ -2,6 +2,17 @@ import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import path from 'path';
 import { writeFileSync, unlinkSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
+import {
+  collectNaturalLanguageSample,
+  isMostlyKorean,
+  koreanRatio,
+  DEFAULT_KOREAN_THRESHOLD,
+} from '../utils/koreanRatio';
+import {
+  createImprovementReport,
+  type ImprovementReport,
+  type ImprovementReportCategory,
+} from '../utils/leaderMessage';
 
 // 에이전트 1명 = 상시 실행되는 Claude CLI 자식 프로세스 1개.
 // stdin/stdout 을 line-delimited stream-json 으로 유지하여 "유저 턴"을 큐잉으로
@@ -14,7 +25,29 @@ import { tmpdir } from 'os';
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const DEBUG_CLAUDE = process.env.DEBUG_CLAUDE === '1';
+// Git 자동화 트리거 경로 전용 디버그 스위치. 워커 → taskRunner → executeGitAutomation
+// 흐름 중 어디서 누락됐는지 재현 로그로 좁혀 볼 때 켠다. 기본 OFF 이며 운영 노이즈
+// 를 만들지 않는다.
+const DEBUG_GIT_AUTO = process.env.DEBUG_GIT_AUTO === '1';
 const DEFAULT_PORT = parseInt(process.env.PORT || '3000', 10);
+
+// 디자이너: 워커에서 throw 되는 Error 메시지는 AgentStatusPanel 의 실패 단계 라벨,
+// 로그 패널, 토스트에 그대로 노출될 수 있다. 한국어 UI 에 영어가 섞이지 않도록
+// 사용자 가시 에러는 한국어 문자열로 단일 관리한다. 접두어는 서버 로그와 구분이
+// 쉽도록 "[워커]" 로 통일하고, 디버깅용 메타데이터(code/stderr)는 본문 말미에 붙인다.
+const WORKER_ERROR = {
+  disposed: '[워커] 워커가 종료되어 처리가 중단되었습니다',
+  spawnFailed: '[워커] Claude 워커 프로세스를 기동하지 못했습니다',
+  repeatedFailure: '[워커] 연속 실패가 반복되어 워커 기동을 중단했습니다',
+} as const;
+
+// 디자이너: 워커 자식 프로세스가 비정상 종료됐을 때의 에러 본문. stderr 는 최근 300자만
+// 보존해 상세는 개발자 로그에 남기고, 사용자 UI 에는 한 줄 요약으로 떨어진다.
+function formatChildExitMessage(code: number, stderr: string): string {
+  const tail = stderr.trim().slice(-300);
+  const suffix = tail ? ` · stderr: ${tail}` : '';
+  return `[워커] 자식 프로세스가 종료되었습니다 (code=${code})${suffix}`;
+}
 
 interface QueueItem {
   prompt: string;
@@ -23,12 +56,36 @@ interface QueueItem {
   onError: (err: Error) => void;
 }
 
+// 태스크 턴이 성공적으로 결과(result.subtype === 'success')를 돌려줄 때 워커가
+// 바깥으로 흘려주는 이벤트 페이로드. TaskRunner 는 이 훅을 받아 Git 자동화
+// 트리거(서버 runGitAutomation — MCP 의 trigger_git_automation 과 동일 파이프라인)를
+// 개시한다. 실패 턴에서는 호출하지 않으며, 예외를 먹는 쪽은 훅 소비자 책임.
+export interface TaskCompleteInfo {
+  agentId: string;
+  projectId: string;
+  taskId?: string;
+  text: string;
+}
+
+export type TaskCompleteHandler = (info: TaskCompleteInfo) => void;
+
+// 에이전트가 턴 종료 직후 자체 개선점을 뽑아 리더 큐로 흘려 보낼 때 쓰는 훅.
+// taskRunner 는 이 핸들러를 받아 리더 태스크로 재발행한다. 훅이 throw 해도 워커
+// 루프는 계속 돌아야 하므로 소비자가 try/catch 로 감싸든 워커 내부에서 감싸든
+// 예외가 바깥으로 새어 나가면 안 된다.
+export type ImprovementReportHandler = (report: ImprovementReport) => void;
+
 interface WorkerInit {
   agentId: string;
   projectId: string;
   workspacePath: string;
   port?: number;
   systemPrompt?: string;
+  // 매 턴 성공 시 호출되는 완료 훅. 예: Git 자동화 파이프라인 개시.
+  onTaskComplete?: TaskCompleteHandler;
+  // 턴 종료 직후 reportImprovementToLeader 가 리포트를 만들었을 때 호출되는 훅.
+  // taskRunner 의 handleImprovementReport 가 이 경로로 리더 큐에 태스크를 투입한다.
+  onImprovementReport?: ImprovementReportHandler;
 }
 
 type WorkerStatus = 'idle' | 'busy';
@@ -42,6 +99,8 @@ export class AgentWorker {
 
   private child: ChildProcessWithoutNullStreams | null = null;
   private mcpConfigPath: string | null = null;
+  private onTaskComplete?: TaskCompleteHandler;
+  private onImprovementReport?: ImprovementReportHandler;
 
   private queue: QueueItem[] = [];
   private processing: QueueItem | null = null;
@@ -61,6 +120,20 @@ export class AgentWorker {
     this.workspacePath = init.workspacePath;
     this.port = init.port ?? DEFAULT_PORT;
     this.systemPrompt = init.systemPrompt;
+    this.onTaskComplete = init.onTaskComplete;
+    this.onImprovementReport = init.onImprovementReport;
+  }
+
+  // TaskRunner 가 워커 재사용 시 훅만 갱신하고 싶을 때 쓰는 setter.
+  // updateSystemPrompt 과 동일한 "라이프사이클 중 변경" 의도.
+  setOnTaskComplete(handler: TaskCompleteHandler | undefined) {
+    this.onTaskComplete = handler;
+  }
+
+  // 개선 보고 훅도 워커 재사용 경로에서 교체 가능해야 한다. ensure() 가 이미
+  // 존재하는 워커를 돌려줄 때 이 setter 로 최신 TaskRunner 바인딩을 덮어쓴다.
+  setOnImprovementReport(handler: ImprovementReportHandler | undefined) {
+    this.onImprovementReport = handler;
   }
 
   status(): WorkerStatus {
@@ -79,8 +152,21 @@ export class AgentWorker {
     this.systemPrompt = next;
   }
 
+  // Git 자동화 실패처럼 "에이전트 외부"에서 생긴 오류를 이 워커 컨텍스트에 귀속시켜
+  // 기록한다. TaskRunner 가 실패 단계(label)와 stderr 요약을 함께 넘기면 여기서
+  // 접두어를 통일해 stderr 로그로 남기고, 가장 최근 한 건은 조회 가능하게 둔다.
+  private lastFailureLog: string | null = null;
+  logFailure(entry: string): void {
+    const clipped = entry.trim().slice(0, 600);
+    this.lastFailureLog = clipped;
+    console.warn(`[worker:${this.agentId}] git-automation failure: ${clipped}`);
+  }
+  getLastFailureLog(): string | null {
+    return this.lastFailureLog;
+  }
+
   enqueue(prompt: string, taskId?: string): Promise<string> {
-    if (this.closed) return Promise.reject(new Error('worker disposed'));
+    if (this.closed) return Promise.reject(new Error(WORKER_ERROR.disposed));
     return new Promise((resolve, reject) => {
       this.queue.push({ prompt, taskId, onResult: resolve, onError: reject });
       this.drain();
@@ -92,9 +178,9 @@ export class AgentWorker {
     this.closed = true;
     const pending = [...this.queue];
     this.queue = [];
-    for (const item of pending) item.onError(new Error('worker disposed'));
+    for (const item of pending) item.onError(new Error(WORKER_ERROR.disposed));
     if (this.processing) {
-      this.processing.onError(new Error('worker disposed'));
+      this.processing.onError(new Error(WORKER_ERROR.disposed));
       this.processing = null;
     }
     this.killChild();
@@ -173,7 +259,7 @@ export class AgentWorker {
     let child: ChildProcessWithoutNullStreams;
     try {
       child = spawn(CLAUDE_BIN, args, {
-        shell: false,
+        shell: true,
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
         env,
@@ -244,7 +330,46 @@ export class AgentWorker {
       if (item) {
         if (msg.subtype === 'success') {
           this.consecutiveSpawnFailures = 0;
+          this.warnIfLowKoreanRatio(text, item.taskId);
           item.onResult(text);
+          // 한 턴이 성공 종료되면 Git 자동화 등 외부 파이프라인을 개시할 수 있도록
+          // 완료 이벤트를 방출한다. 훅이 throw 해도 워커 루프는 계속 돌아야 하므로
+          // try/catch 로 감싸 예외를 삼킨다.
+          if (this.onTaskComplete) {
+            if (DEBUG_GIT_AUTO) {
+              console.log(
+                `[git-auto] worker success → onTaskComplete agent=${this.agentId} task=${item.taskId ?? 'n/a'} len=${text.length}`,
+              );
+            }
+            try {
+              this.onTaskComplete({
+                agentId: this.agentId,
+                projectId: this.projectId,
+                taskId: item.taskId,
+                text,
+              });
+            } catch (e) {
+              console.warn(`[worker:${this.agentId}] onTaskComplete threw:`, (e as Error).message);
+            }
+            // onTaskComplete 가 Git 자동화 같은 "외부 파이프라인" 을 여는 훅이라면,
+            // reportImprovementToLeader 는 "에이전트 자체 메타 협업" 훅이다. 둘은
+            // 독립적으로 작동하므로 순서 의존성 없이 연속 호출한다. 힌트가 없으면
+            // 내부에서 조용히 null 을 돌려 주어 노이즈가 남지 않는다.
+            this.reportImprovementToLeader({
+              agentId: this.agentId,
+              projectId: this.projectId,
+              taskId: item.taskId,
+              text,
+            });
+          } else if (DEBUG_GIT_AUTO) {
+            // 훅이 세팅되지 않은 상태로 완료된 성공 턴 — TaskRunner 안전망이 뒤이어
+            // 동일 taskId 로 handleWorkerTaskComplete 를 한 번 더 부르므로 실제 Git
+            // 자동화는 이어 진행된다. 다만 "여기서 훅이 비어 있었다" 는 사실 자체가
+            // 재사용 타이밍·워커 리셋 순서의 지표라 재현 추적용으로 남겨둔다.
+            console.warn(
+              `[git-auto] worker success but onTaskComplete is unset (agent=${this.agentId}, task=${item.taskId ?? 'n/a'})`,
+            );
+          }
         } else {
           const errText = typeof msg.result === 'string' && msg.result
             ? msg.result
@@ -265,9 +390,7 @@ export class AgentWorker {
     const item = this.processing;
     this.processing = null;
     if (item) {
-      const stderr = this.stderrTail.trim();
-      const msg = `worker child exited code=${code}${stderr ? ` stderr: ${stderr.slice(-300)}` : ''}`;
-      item.onError(new Error(msg));
+      item.onError(new Error(formatChildExitMessage(code, this.stderrTail)));
     }
     this.currentTurnText = [];
     this.stdoutBuf = '';
@@ -277,7 +400,7 @@ export class AgentWorker {
     if (this.consecutiveSpawnFailures >= 3) {
       const pending = [...this.queue];
       this.queue = [];
-      for (const p of pending) p.onError(new Error('worker repeatedly failed to start'));
+      for (const p of pending) p.onError(new Error(WORKER_ERROR.repeatedFailure));
       this.consecutiveSpawnFailures = 0;
       return;
     }
@@ -296,7 +419,7 @@ export class AgentWorker {
       if (!ok) {
         // spawn 자체 실패 → 큐 첫 항목 실패 처리 후 재시도 방지.
         const head = this.queue.shift();
-        if (head) head.onError(new Error('failed to spawn claude worker'));
+        if (head) head.onError(new Error(WORKER_ERROR.spawnFailed));
         return;
       }
     }
@@ -318,6 +441,119 @@ export class AgentWorker {
       item.onError(e as Error);
       setImmediate(() => this.drain());
     }
+  }
+
+  // 에이전트가 한 턴을 마치며 남긴 출력에서 "다음에 손볼 거리" 를 탐지해 리더 큐로
+  // 밀어 넣는 협업 훅. 정상 경로는 result.success 직후 자동 호출되며, 외부(예:
+  // taskRunner 의 테스트) 에서도 직접 호출해 리포트를 재발행할 수 있도록 public
+  // 으로 열어 둔다. override 를 전달하면 본문 탐색을 건너뛰고 그대로 리포트를
+  // 조립한다 — 호출자가 이미 보고서 메타데이터를 확보한 경우의 지름길.
+  //
+  // 반환값:
+  //   - 성공 시 ImprovementReport (onImprovementReport 훅도 호출).
+  //   - 힌트를 찾지 못했거나 summary 가 비면 null — 훅은 호출되지 않는다.
+  reportImprovementToLeader(
+    info: TaskCompleteInfo,
+    override?: {
+      summary?: string;
+      detail?: string;
+      category?: ImprovementReportCategory;
+      focusFiles?: string[];
+      agentName?: string;
+      role?: string;
+    },
+  ): ImprovementReport | null {
+    const suggestion = override?.summary
+      ? {
+          summary: override.summary,
+          detail: override.detail,
+          category: override.category ?? 'followup',
+          focusFiles: override.focusFiles,
+        }
+      : this.detectImprovementHint(info.text);
+    if (!suggestion) return null;
+    const report = createImprovementReport({
+      agentId: info.agentId || this.agentId,
+      projectId: info.projectId || this.projectId,
+      taskId: info.taskId,
+      agentName: override?.agentName,
+      role: override?.role,
+      summary: suggestion.summary,
+      detail: suggestion.detail,
+      category: suggestion.category,
+      focusFiles: suggestion.focusFiles,
+    });
+    if (!report) return null;
+    if (this.onImprovementReport) {
+      try {
+        this.onImprovementReport(report);
+      } catch (e) {
+        console.warn(
+          `[worker:${this.agentId}] onImprovementReport threw:`,
+          (e as Error).message,
+        );
+      }
+    }
+    return report;
+  }
+
+  // 응답 본문에서 흔히 쓰이는 "개선 제안 / 후속 작업 / 다음에는 / TODO / FIXME /
+  // follow-up" 패턴을 뽑아 리포트 seed 로 돌려준다. 단순 문자열 검색이라 오탐이
+  // 전혀 없지는 않지만, createImprovementReport 가 summary/필드 유효성을 한 번 더
+  // 검증하고 taskRunner 쪽에서 리더가 최종적으로 mode="reply" 로 흘려 보낼 수도
+  // 있으므로, 과잉 감지를 두려워하지 않고 넓게 매칭한다. 관련 파일은 본문에서
+  // "src/..." 혹은 백틱으로 감싼 파일 경로만 수집한다.
+  private detectImprovementHint(text: string | undefined | null): {
+    summary: string;
+    detail?: string;
+    category: ImprovementReportCategory;
+    focusFiles?: string[];
+  } | null {
+    if (!text) return null;
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) return null;
+    const HINT_RE = /^(?:[-*•]\s*)?(?:개선\s*제안|후속\s*작업|다음에는|todo|fixme|follow[-\s]?up|improvement)\s*[::\-]\s*(.+)$/i;
+    const hits: string[] = [];
+    for (const l of lines) {
+      const m = l.match(HINT_RE);
+      if (m && m[1]) hits.push(m[1].trim());
+    }
+    if (hits.length === 0) return null;
+    const [summary, ...rest] = hits;
+    const focusFiles = this.extractFocusFiles(text);
+    return {
+      summary,
+      detail: rest.length > 0 ? rest.join(' / ') : undefined,
+      category: 'followup',
+      focusFiles: focusFiles.length > 0 ? focusFiles : undefined,
+    };
+  }
+
+  private extractFocusFiles(text: string): string[] {
+    const found = new Set<string>();
+    const pathRe = /`([^`\s]+?\.(?:tsx?|jsx?|css|md|json))`|\b((?:src|tests|scripts)\/[\w./\-]+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = pathRe.exec(text)) !== null) {
+      const captured = (m[1] || m[2] || '').trim();
+      if (captured) found.add(captured);
+      if (found.size >= 16) break;
+    }
+    return Array.from(found);
+  }
+
+  // 시스템 프롬프트가 "한국어로만 응답" 을 강제함에도 모델이 영어로 회귀하는
+  // 사례가 관측된다. 결과 턴이 성공했을 때 자연어 영역만 샘플링해 한국어 비율을
+  // 재확인하고, 임계값 아래면 경고 로그를 남긴다. 흐름은 막지 않는다 —
+  // 오탐으로 실제 결과를 차단하면 사용자 손실이 더 크다.
+  private warnIfLowKoreanRatio(text: string, taskId?: string): void {
+    if (!text) return;
+    const sample = collectNaturalLanguageSample(text);
+    if (isMostlyKorean(sample)) return;
+    const ratio = koreanRatio(sample);
+    const preview = sample.replace(/\s+/g, ' ').slice(0, 120);
+    console.warn(
+      `[worker:${this.agentId}] korean ratio below threshold: ${ratio.toFixed(2)} < ${DEFAULT_KOREAN_THRESHOLD} (taskId=${taskId ?? 'n/a'}, sample="${preview}")`,
+    );
   }
 
   private killChild() {
@@ -350,6 +586,8 @@ export class AgentWorkerRegistry {
     if (existing) {
       if (existing.projectId === init.projectId && existing.workspacePath === init.workspacePath) {
         existing.updateSystemPrompt(init.systemPrompt);
+        existing.setOnTaskComplete(init.onTaskComplete);
+        existing.setOnImprovementReport(init.onImprovementReport);
         return existing;
       }
       existing.dispose();

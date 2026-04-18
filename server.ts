@@ -13,15 +13,20 @@ import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegr
 import { AgentWorkerRegistry } from './src/server/agentWorker';
 import { TaskRunner } from './src/server/taskRunner';
 import { processDirectiveFile } from './src/server/fileProcessor';
+import { ProjectCompletionTracker } from './src/server/completionWatcher';
 import { parseEntry, type LedgerEntry } from './src/utils/handoffLedger';
 import { inferFileType, isExcludedFromCodeGraph, normalizeCodeGraphPath } from './src/utils/codeGraphFilter';
 import {
   DEFAULT_GIT_AUTOMATION_CONFIG,
-  buildRunPlan,
   formatCommitMessage,
   formatPrTitle,
   renderBranchName,
+  shouldAutoCommit,
+  shouldAutoOpenPR,
+  shouldAutoPush,
   validateGitAutomationConfig,
+  type GitAutomationRunResult,
+  type GitAutomationStepResult,
 } from './src/utils/gitAutomation';
 import { spawnSync } from 'child_process';
 
@@ -96,12 +101,11 @@ function callClaude(prompt: string, ctx?: AgentContext): Promise<string> {
       if (ctx && ctx.agentId && ctx.projectId) {
         mcpConfigPath = writeMcpConfig(ctx);
       }
-      // 셸을 거치지 않고 직접 spawn하여 한글 프롬프트가 cmd.exe 파싱에 깨지는 문제를 방지.
-      // shell:true + 문자열 명령 대신 argv 배열로 전달하면 OS가 인자를 그대로 넘긴다.
+      // 한글 프롬프트를 cmd.exe 인자로 넘기면 PC마다 코드 페이지 차이로 깨진다.
+      // stdin으로 파이프하면 셸 파싱을 완전히 우회한다.
       const args = ['--dangerously-skip-permissions'];
       if (mcpConfigPath) args.push('--mcp-config', mcpConfigPath);
-      args.push('-p', prompt.replace(/\r?\n/g, ' '));
-      if (DEBUG_CLAUDE) console.log('[claude] spawn', CLAUDE_BIN, args.map(a => a.length > 80 ? a.slice(0, 80) + '…' : a));
+      if (DEBUG_CLAUDE) console.log('[claude] spawn', CLAUDE_BIN, args, '| stdin:', prompt.slice(0, 80));
       const env: Record<string, string | undefined> = {
         ...process.env,
         PYTHONIOENCODING: 'utf-8',
@@ -118,12 +122,15 @@ function callClaude(prompt: string, ctx?: AgentContext): Promise<string> {
       const cwd = ctx?.workspacePath ? resolveWorkspace(ctx.workspacePath) : undefined;
       if (DEBUG_CLAUDE && cwd) console.log('[claude] cwd =', cwd);
       const child = spawn(CLAUDE_BIN, args, {
-        shell: false,
+        shell: true,
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         env,
         cwd,
       });
+      // 프롬프트를 stdin으로 전달하고 즉시 닫아 EOF 신호를 보낸다
+      child.stdin.write(prompt, 'utf8');
+      child.stdin.end();
       let stdout = '';
       const stderrChunks: Buffer[] = [];
       child.stdout?.on('data', d => { stdout += d.toString('utf8'); });
@@ -220,15 +227,25 @@ async function startServer() {
   // 유지하며 stream-json 으로 유저 턴을 큐잉한다. 에이전트 간 컨텍스트는 격리되고
   // 동일 에이전트에 대한 연속 지시는 같은 세션에서 이어진다.
   const workerRegistry = new AgentWorkerRegistry();
+  // 프로젝트 단위 "모든 에이전트 idle 수렴" 전이 추적기. 개별 태스크 완료마다
+  // git 자동화를 돌리는 기존 훅과 별개로, 한 묶음의 지시가 모두 끝난 시점을
+  // rising-edge 로 잡아 마무리 커밋/PR 을 한 번 더 정리한다. busy → completed
+  // 전이에서만 1회 발사되고, 이어지는 같은 completed tick 은 무시된다.
+  const completionTracker = new ProjectCompletionTracker();
   const taskRunner = new TaskRunner({
     db,
     io,
     registry: workerRegistry,
     port: PORT,
     resolveWorkspace,
-    runGitAutomation: (projectId, ctx) => runGitAutomation(projectId, ctx),
+    runGitAutomation: (projectId, ctx) => executeGitAutomation(projectId, ctx),
     getGameState: () => getGameState(),
     getTasks: () => getTasks(),
+    onAgentStateChanged: (projectId) => {
+      allAgentsCompletedWatcher(projectId).catch(err =>
+        console.error('[all-agents-watcher] tick failed:', (err as Error).message),
+      );
+    },
   });
   await taskRunner.init();
 
@@ -373,12 +390,21 @@ async function startServer() {
       // 본인의 "completed" 를 다시 트리거하면 무한 루프 위험이 있다.
       const actor = await agentsCol.findOne({ id: task.assignedTo });
       if (actor && actor.role !== 'Leader') {
-        runGitAutomation(task.projectId, {
+        executeGitAutomation(task.projectId, {
           type: 'chore',
           summary: task.description?.slice(0, 64) || 'auto update',
           agent: actor.name,
+          // 긴급 수정 #a7b258fb: 태스크 완료 PATCH 경로도 taskRunner 훅과 동일하게
+          // 커밋+푸시를 한 번에 원격까지 반영하도록 강제한다.
+          forcePush: true,
         }).catch(err => console.error('[git-automation] auto-run failed:', err?.message));
       }
+      // 전원 idle 수렴 감시기 — 이번 태스크 완료로 프로젝트 전체가 idle 이 된
+      // 경우 집계 커밋을 1회 발사한다. 개별 태스크 트리거와 중복돼도 tracker
+      // rising-edge 가드가 1회로 수렴시킨다.
+      allAgentsCompletedWatcher(task.projectId).catch(err =>
+        console.error('[all-agents-watcher] tick failed:', (err as Error).message),
+      );
     }
 
     io.emit('tasks:updated', await getTasks());
@@ -414,6 +440,9 @@ async function startServer() {
     if (project?.agents) {
       for (const agentId of project.agents) taskRunner.disposeAgentWorker(agentId);
     }
+    // tracker 상태 초기화 — 같은 ID 의 프로젝트가 이후 재생성되더라도 이전 phase 가
+    // 유령처럼 남아 첫 관측 결과를 왜곡하지 않도록 한다.
+    completionTracker.reset(id);
     const files = await filesCol.find({ projectId: id }).toArray();
     const fileIds = files.map(f => f.id);
     await projectsCol.deleteOne({ id });
@@ -544,6 +573,18 @@ async function startServer() {
     }
     await agentsCol.updateOne({ id }, { $set: update });
     io.emit('state:updated', await getGameState());
+    // 상태 전이에 따라 이 에이전트가 속한 모든 프로젝트의 completion 감시기를 재평가.
+    // 같은 에이전트가 동시에 여러 프로젝트에 매핑되는 일은 드물지만, projectId 를
+    // body 에 요구하지 않는 이 엔드포인트에서는 agents 배열에 포함된 모든 프로젝트를
+    // 후보로 본다.
+    const owningProjects = await projectsCol
+      .find({ agents: id }, { projection: { _id: 0, id: 1 } })
+      .toArray();
+    for (const p of owningProjects) {
+      allAgentsCompletedWatcher(p.id).catch(err =>
+        console.error('[all-agents-watcher] tick failed:', (err as Error).message),
+      );
+    }
     res.json({ success: true });
   });
 
@@ -880,56 +921,172 @@ async function startServer() {
     res.json(settings);
   });
 
-  // 리더가 완료 이벤트에 맞춰 호출하는 자동 실행 엔드포인트. 설정을 읽어
-  // buildRunPlan 이 계산한 단계들을 프로젝트 workspacePath 에서 순차 실행한다.
-  // 실패한 단계에서 중단하고 이후 단계는 skip 으로 기록한다.
-  async function runGitAutomation(projectId: string, ctxHint?: { type?: string; summary?: string; agent?: string; prBase?: string }) {
-    const project = await projectsCol.findOne({ id: projectId });
-    if (!project) return { ok: false, error: 'project not found' };
-    const row = await gitAutomationSettingsCol.findOne({ projectId });
-    if (!row || row.enabled === false) return { ok: false, skipped: 'disabled' };
-    const settings = row as GitAutomationSettings;
-    const cwd = resolveWorkspace(project.workspacePath);
-    const branch = renderBranchName(settings.branchTemplate, {
-      type: ctxHint?.type || 'chore',
-      summary: ctxHint?.summary || 'auto',
-      agent: ctxHint?.agent,
-    });
-    const commitMessage = formatCommitMessage(settings, {
-      type: ctxHint?.type || 'chore',
-      summary: ctxHint?.summary || 'auto update',
-    });
-    const prTitle = formatPrTitle(settings.prTitleTemplate, {
-      type: ctxHint?.type || 'chore',
-      summary: ctxHint?.summary || 'auto update',
-      branch,
-    });
-    const steps = buildRunPlan(settings, {
-      workspacePath: cwd,
-      branch,
-      commitMessage,
-      prTitle,
-      prBase: ctxHint?.prBase,
-      reviewers: settings.reviewers,
-    });
-    const results: Array<{ label: string; ok: boolean; code: number | null; stderr?: string }> = [];
-    for (const step of steps) {
-      const [bin, ...rest] = step.cmd;
-      const r = spawnSync(bin, rest, { cwd, encoding: 'utf8', windowsHide: true });
-      const ok = r.status === 0;
-      results.push({ label: step.label, ok, code: r.status, stderr: ok ? undefined : (r.stderr || '').slice(0, 400) });
-      if (!ok) break;
+  // Git 자동화 패널 설정을 읽어 실제 git/gh 명령을 돌리는 실행기.
+  // autoCommit → autoPush → autoPR 순서로 플래그를 검사하고, 각 플래그가 켜진
+  // 경우에만 해당 단계의 명령을 수행한다. 한 단계라도 실패하면 뒷 단계는 건너뛰고
+  // 즉시 실패로 종결 — 실패한 push 를 그대로 덮어 PR 을 만들면 잘못된 상태가
+  // 공개 저장소에 박힌다.
+  async function executeGitAutomation(
+    projectId: string,
+    // forcePush: flowLevel='commitOnly' 로 저장된 프로젝트라도 태스크 완료 훅 호출에는
+    // 커밋 직후 바로 원격 push 까지 수행하도록 강제한다(긴급 수정 #a7b258fb).
+    // 마스터 스위치 enabled=false 는 여전히 우선되므로, 사용자가 명시적으로 끈 자동화는
+    // 이 플래그로 뚫리지 않는다.
+    ctxHint?: { type?: string; summary?: string; agent?: string; prBase?: string; forcePush?: boolean },
+  ): Promise<GitAutomationRunResult> {
+    try {
+      const project = await projectsCol.findOne({ id: projectId });
+      if (!project) return { ok: false, skipped: 'no-project', error: 'project not found', results: [] };
+      const row = await gitAutomationSettingsCol.findOne({ projectId });
+      // 과거에는 두 경로를 같은 skipped='disabled' 로 뭉뚱그려 UI 토글이 ON 인데도
+      // 커밋이 침묵하는 경우 원인이 "설정 row 자체가 없음" 인지 "명시적 비활성" 인지
+      // 구분할 수 없었다. tests/auto-commit-no-fire-repro.md 의 침묵 경로 추적을 위해
+      // 최소 한 줄씩 분리 로그를 남긴다.
+      if (!row) {
+        console.warn(
+          `[git-automation] skip project=${projectId}: settings row 부재 — 한 번도 저장된 적 없음 (POST /api/projects/:id/git-automation 으로 초기화 필요)`,
+        );
+        return { ok: false, skipped: 'disabled', results: [] };
+      }
+      if (row.enabled === false) {
+        if (process.env.DEBUG_GIT_AUTO === '1') {
+          console.log(`[git-automation] skip project=${projectId}: enabled=false (명시적 OFF)`);
+        }
+        return { ok: false, skipped: 'disabled', results: [] };
+      }
+      const settings = row as GitAutomationSettings;
+      const cwd = resolveWorkspace(project.workspacePath);
+      const branch = renderBranchName(settings.branchTemplate, {
+        type: ctxHint?.type || 'chore',
+        summary: ctxHint?.summary || 'auto',
+        agent: ctxHint?.agent,
+      });
+      const commitMessage = formatCommitMessage(settings, {
+        type: ctxHint?.type || 'chore',
+        summary: ctxHint?.summary || 'auto update',
+      });
+      const prTitle = formatPrTitle(settings.prTitleTemplate, {
+        type: ctxHint?.type || 'chore',
+        summary: ctxHint?.summary || 'auto update',
+        branch,
+      });
+
+      const results: GitAutomationStepResult[] = [];
+      const runStep = (label: string, cmd: string[]): boolean => {
+        const [bin, ...rest] = cmd;
+        const r = spawnSync(bin, rest, { cwd, encoding: 'utf8', windowsHide: true });
+        // spawn 자체가 실패(바이너리 미설치 등)하면 r.status 는 null, r.error 가 채워진다.
+        // stderr 만 보면 원인이 빈 문자열로 남아 디버깅 불가 → r.error.message 를 로그에 합친다.
+        const ok = r.status === 0 && !r.error;
+        const stderrRaw = (r.stderr || '') + (r.error ? `\nspawn error: ${r.error.message}` : '');
+        const stdout = label === 'commit' || label === 'pr'
+          ? (r.stdout || '').slice(0, 400)
+          : undefined;
+        const step: GitAutomationStepResult = {
+          label,
+          ok,
+          code: r.status,
+          stderr: ok ? undefined : stderrRaw.slice(0, 400),
+          stdout: stdout || undefined,
+        };
+        results.push(step);
+        if (!ok) {
+          console.error(
+            `[git-automation] step=${label} failed project=${projectId} branch=${branch} code=${r.status ?? 'null'} stderr=${(step.stderr || '').slice(0, 200)}`,
+          );
+        }
+        return ok;
+      };
+      const finalize = (ok: boolean): GitAutomationRunResult => {
+        io.emit('git-automation:ran', { projectId, results, branch });
+        return { ok, results, branch, commitMessage, prTitle };
+      };
+
+      // autoCommit: checkout → add → commit 을 한 묶음으로 수행.
+      if (shouldAutoCommit(settings)) {
+        if (!runStep('checkout', ['git', '-C', cwd, 'checkout', '-B', branch])) return finalize(false);
+        if (!runStep('add', ['git', '-C', cwd, 'add', '-A'])) return finalize(false);
+        if (!runStep('commit', ['git', '-C', cwd, 'commit', '-m', commitMessage])) return finalize(false);
+      }
+
+      // autoPush: 원격 원브랜치로 업스트림 연결 후 push.
+      // 태스크 완료 훅은 ctxHint.forcePush=true 를 넘기므로, flowLevel='commitOnly' 로
+      // 저장된 프로젝트에서도 커밋 직후 push 가 한 번에 이어져 원격까지 반영된다.
+      const shouldPush = shouldAutoPush(settings) || ctxHint?.forcePush === true;
+      if (shouldPush) {
+        if (ctxHint?.forcePush === true && !shouldAutoPush(settings)) {
+          console.log(
+            `[git-automation] push forced project=${projectId} branch=${branch} (flowLevel=${settings.flowLevel}, forcePush=true)`,
+          );
+        }
+        if (!runStep('push', ['git', '-C', cwd, 'push', '-u', 'origin', branch])) return finalize(false);
+      }
+
+      // autoPR: gh CLI 가 인증돼 있어야 한다. 실패 로그는 호출자가 agent 워커로 전달.
+      if (shouldAutoOpenPR(settings)) {
+        const reviewerArgs: string[] = [];
+        for (const r of settings.reviewers || []) {
+          if (r && typeof r === 'string') reviewerArgs.push('--reviewer', r);
+        }
+        const base = ctxHint?.prBase?.trim();
+        const prCmd = [
+          'gh', 'pr', 'create',
+          '--title', prTitle,
+          '--body', commitMessage,
+          ...(base ? ['--base', base] : []),
+          '--head', branch,
+          ...reviewerArgs,
+        ];
+        if (!runStep('pr', prCmd)) return finalize(false);
+      }
+
+      return finalize(true);
+    } catch (e) {
+      // DB 조회·spawn 래퍼·템플릿 렌더 중 어디서든 throw 가 나면 호출자 쪽 훅이
+      // 이벤트를 못 받고 조용히 죽는다. 여기서 한 번 더 가두고 원인을 로그로 남겨
+      // TaskRunner.handleWorkerTaskComplete 와 /api/tasks PATCH 양쪽 호출자가
+      // 동일한 {ok:false, error} 계약만 보고도 판정 가능하게 한다.
+      const message = (e as Error)?.message || String(e);
+      console.error(`[git-automation] unexpected throw project=${projectId}: ${message}`);
+      return { ok: false, error: message, results: [] };
     }
-    io.emit('git-automation:ran', { projectId, results, branch });
-    return { ok: results.every(r => r.ok), results, branch, commitMessage, prTitle };
   }
 
   app.post('/api/projects/:id/git-automation/run', async (req, res) => {
     const { id } = req.params;
-    const out = await runGitAutomation(id, req.body || {});
-    if (!out.ok && 'error' in out) { res.status(404).json(out); return; }
+    const out = await executeGitAutomation(id, req.body || {});
+    if (!out.ok && out.skipped === 'no-project') { res.status(404).json(out); return; }
     res.json(out);
   });
+
+  // 모든 에이전트 상태가 idle 로 수렴된 "전이 순간" 감시기.
+  //   - 각 태스크 완료 훅이 개별 변경을 커밋하는 것과는 별개로, 한 묶음의 지시가
+  //     "전원 idle" 로 가라앉는 시점에 한 번 더 자동화를 돌려 흩어진 변경을 모은
+  //     마무리 커밋/PR 을 남긴다.
+  //   - ProjectCompletionTracker 가 busy → completed 전이에만 true 를 돌려주므로
+  //     같은 completed 구간에서 tick 이 여러 번 와도 한 번만 발사된다.
+  //   - 프로젝트 agent 편성이 0명인 경우 tracker 가 이전 phase 를 그대로 유지해
+  //     의미 없는 자동화가 돌지 않는다.
+  async function allAgentsCompletedWatcher(projectId: string): Promise<void> {
+    const project = await projectsCol.findOne({ id: projectId }, { projection: { _id: 0 } });
+    if (!project?.agents || project.agents.length === 0) return;
+    const members = await agentsCol
+      .find({ id: { $in: project.agents } }, { projection: { _id: 0 } })
+      .toArray();
+    const statuses = members.map(m => m.status as Agent['status']);
+    const { fire } = completionTracker.observe(projectId, statuses);
+    if (!fire) return;
+    // 정상 전이 — 집계 커밋을 트리거. 실패는 기존 executeGitAutomation 의 구조화
+    // 로그/소켓 이벤트 경로로 흘러가므로 여기서는 로그만 남긴다.
+    executeGitAutomation(projectId, {
+      type: 'chore',
+      summary: 'all agents completed',
+      // 긴급 수정 #a7b258fb: 전원 idle 수렴 집계 커밋도 원격까지 한 번에 반영.
+      forcePush: true,
+    }).catch(err =>
+      console.error('[all-agents-watcher] auto-run failed:', (err as Error).message),
+    );
+  }
 
   // 긴급중단: 모든 에이전트를 idle 로 되돌리고, 완료되지 않은 모든 작업을 pending
   // 상태로 재설정한다. 이미 completed 인 작업은 그대로 보존해 이력을 잃지 않는다.

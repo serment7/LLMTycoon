@@ -15,20 +15,22 @@ import {
   CheckCircle2,
   UserPlus,
   Trash2,
+  MessageSquare,
 } from 'lucide-react';
 import { Agent, Project, GameState, AgentRole, CodeFile, CodeDependency, Task, GitAutomationSettings } from './types';
-import { LogFilter } from './components/LogFilter';
 import { FileTooltip } from './components/FileTooltip';
 import { ProjectManagement } from './components/ProjectManagement';
-import { AgentStatusPanel } from './components/AgentStatusPanel';
+import { AgentStatusPanel, type GitAutomationDigest, type GitAutomationStageKey, type GitAutomationStageState } from './components/AgentStatusPanel';
 import { AgentContextBubble, AgentLogLine } from './components/AgentContextBubble';
 import { CollabTimeline } from './components/CollabTimeline';
 import { EmptyProjectPlaceholder, EmptyProjectPlaceholderSkeleton } from './components/EmptyProjectPlaceholder';
 import { DirectivePrompt, AttachmentPreviewModal, classifyAttachment, type DirectiveAttachment as UiDirectiveAttachment } from './components/DirectivePrompt';
+import { CurrentProjectBadge } from './components/CurrentProjectBadge';
 import { computeWorkspaceInsights } from './utils/workspaceInsights';
 import type { LedgerEntry } from './utils/handoffLedger';
 import { EXCLUDED_PATHS } from './utils/codeGraphFilter';
 import { useReducedMotion } from './utils/useReducedMotion';
+import { parseLeaderPlanMessage, summarizeLeaderMessage, LEADER_ANSWER_ONLY_LABEL, LEADER_ANSWER_ONLY_TOOLTIP, type LeaderPlan } from './utils/leaderMessage';
 
 // QA: 화면에 쌓이는 상태·타이밍 상수를 한곳에 모아 매직 넘버를 제거한다.
 // 값을 바꿀 때 여러 곳을 동시에 손대지 않도록 단일 출처(single source of truth)를
@@ -58,6 +60,66 @@ type PendingDirectiveAttachment = UiDirectiveAttachment & {
   extractedText?: string;
   images?: string[];
 };
+
+// git commit stdout 예: "[my-branch abc1234] message" — 대괄호 안의 두 번째 토큰이 단축 SHA.
+const COMMIT_SHA_RE = /\[[^\]]*\s+([0-9a-f]{7,40})\]/i;
+// gh pr create stdout 마지막 줄에 "https://github.com/owner/repo/pull/123" 가 들어온다.
+const PR_URL_RE = /https?:\/\/github\.com\/[^\s]+\/pull\/\d+/;
+
+// 서버의 'git-automation:ran' 페이로드를 AgentStatusPanel 이 소비하는 digest 로 접는다.
+// 단계별 state 는 results 배열에서 실패 지점을 기준으로 파생하며, commit/pr 의 stdout
+// 에서 SHA/URL 을 파싱해 detail 라벨로 바로 보여줄 수 있도록 담아 준다.
+export function buildGitAutomationDigest(payload: {
+  branch?: string;
+  results: Array<{ label: string; ok: boolean; code: number | null; stderr?: string; stdout?: string }>;
+}): GitAutomationDigest {
+  const stageByLabel: Record<string, GitAutomationStageKey> = {
+    commit: 'commit',
+    push: 'push',
+    pr: 'pr',
+  };
+  const stages: Record<GitAutomationStageKey, { state: GitAutomationStageState; detail?: string; errorMessage?: string }> = {
+    commit: { state: 'idle' },
+    push: { state: 'idle' },
+    pr: { state: 'idle' },
+  };
+  let commitSha: string | undefined;
+  let prUrl: string | undefined;
+  // 실패 단계를 만나기 전까지는 성공으로 누적. 이후 단계는 자동화가 조기 종료됐으므로
+  // 그대로 idle(대기) 로 남겨 "거기까지 진행됐는지" 를 패널에서 한눈에 보이게 한다.
+  for (const r of payload.results) {
+    const key = stageByLabel[r.label];
+    if (!key) continue;
+    if (r.ok) {
+      stages[key] = { state: 'success' };
+      if (key === 'commit' && r.stdout) {
+        const m = r.stdout.match(COMMIT_SHA_RE);
+        if (m) {
+          commitSha = m[1];
+          stages.commit.detail = `SHA ${commitSha}`;
+        }
+      }
+      if (key === 'pr' && r.stdout) {
+        const m = r.stdout.match(PR_URL_RE);
+        if (m) {
+          prUrl = m[0];
+          stages.pr.detail = prUrl;
+        }
+      }
+    } else {
+      stages[key] = {
+        state: 'failed',
+        errorMessage: (r.stderr || `exit=${r.code ?? '?'}`).trim() || undefined,
+      };
+    }
+  }
+  return {
+    stages,
+    branch: payload.branch,
+    commitSha,
+    prUrl,
+  };
+}
 
 function loadPersistedLogs(): LogEntry[] {
   if (typeof window === 'undefined') return [];
@@ -93,7 +155,6 @@ export default function App() {
   const [confirmFire, setConfirmFire] = useState<{ id: string; name: string } | null>(null);
   const [confirmDeleteProject, setConfirmDeleteProject] = useState<{ id: string; name: string } | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>(() => loadPersistedLogs());
-  const [logQuery, setLogQuery] = useState('');
   const [hoveredFileId, setHoveredFileId] = useState<string | null>(null);
   const [commandInput, setCommandInput] = useState('');
   const [commandBusy, setCommandBusy] = useState(false);
@@ -128,6 +189,10 @@ export default function App() {
   // 앱 전역 상태로 보관한다. ProjectManagement 화면을 열지 않아도 리더 자동화가 즉시
   // 제 설정을 따르도록 하기 위함. socket 'git-automation:updated' 로 동기화 유지.
   const [gitAutomationSettings, setGitAutomationSettings] = useState<GitAutomationSettings | null>(null);
+  // 최근 Git 자동화 실행 결과. 서버가 'git-automation:ran' 소켓 이벤트로 push 해 주며,
+  // AgentStatusPanel 우측 패널에 단계별 진행 + 커밋 SHA / PR URL 을 표시하는 데 쓴다.
+  // results[].stdout 에서 SHA(`[branch abc1234] ...`) 와 PR URL(github.com/.../pull/N) 을 파싱한다.
+  const [lastGitAutomation, setLastGitAutomation] = useState<GitAutomationDigest | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -290,18 +355,18 @@ export default function App() {
     return { total, active, ratio, byRole };
   }, [selectedProjectId, gameState.projects, gameState.agents]);
 
-  const visibleLogs = useMemo(() => {
-    const q = logQuery.trim().toLowerCase();
-    if (!q) return logs;
-    return logs.filter(l =>
-      l.text.toLowerCase().includes(q) ||
-      l.from.toLowerCase().includes(q) ||
-      (l.to ?? '').toLowerCase().includes(q)
-    );
-  }, [logs, logQuery]);
-
   const translateRole = getRoleLabel;
   const translateStatus = getStatusLabel;
+
+  // 리더 분배 메시지에 들어 있는 task.assignedTo (에이전트 ID) 를 사용자가 알아볼
+  // 수 있는 이름으로 치환하기 위한 lookup. 한 번만 빌드해 모든 로그 행이 공유한다.
+  // 매핑이 없는 ID 는 (해고된 팀원 등) 원본을 그대로 노출해 정보 손실을 막는다.
+  // 이름뿐 아니라 role 도 필요해(배지 배경/이모지/설명) Agent 전체를 담는다.
+  const agentById = useMemo(() => {
+    const map = new Map<string, Agent>();
+    for (const a of gameState.agents) map.set(a.id, a);
+    return map;
+  }, [gameState.agents]);
 
   // 역할별 (활성/전체) 를 한 줄로 요약한 툴팁 라벨. translateRole 은 렌더 마다 새로
   // 만들어지지만 useMemo 의존성에 agentActivity 만 넣어도 충분하다 — 동일 데이터에 대해
@@ -465,17 +530,33 @@ export default function App() {
       });
     });
 
-    newSocket.on('agent:messaged', ({ agentId, message, targetAgentId }) => {
+    newSocket.on('agent:messaged', ({ agentId, message, targetAgentId, leaderKind }: {
+      agentId: string;
+      message: string;
+      targetAgentId?: string;
+      leaderKind?: 'delegate' | 'reply' | 'plain';
+    }) => {
       setGameState(prev => {
         const fromAgent = prev.agents.find(a => a.id === agentId);
         const toAgent = targetAgentId ? prev.agents.find(a => a.id === targetAgentId) : undefined;
         if (fromAgent) addLog(message, fromAgent.name, toAgent?.name);
         return {
           ...prev,
-          agents: prev.agents.map(a => a.id === agentId ? { ...a, lastMessage: message, lastMessageTo: targetAgentId } : a)
+          agents: prev.agents.map(a => a.id === agentId
+            ? {
+                ...a,
+                lastMessage: message,
+                lastMessageTo: targetAgentId,
+                // 서버가 leaderKind 를 태워 보낸 경우에만 덮어쓴다. 누락 시 직전 값을
+                // 유지해 오래된 클라이언트에서도 배지가 깜빡이지 않게 한다.
+                lastLeaderMessageKind: leaderKind ?? a.lastLeaderMessageKind,
+              }
+            : a)
         };
       });
       setTimeout(() => {
+        // 말풍선 TTL 만료 시 lastMessage 는 비우지만 lastLeaderMessageKind 는 유지 —
+        // 리더 카드의 '답변 전용' 배지는 다음 발화 전까지 "최근 응답 유형" 을 계속 보여준다.
         setGameState(prev => ({
           ...prev,
           agents: prev.agents.map(a => a.id === agentId && a.lastMessage === message ? { ...a, lastMessage: undefined, lastMessageTo: undefined } : a)
@@ -524,6 +605,27 @@ export default function App() {
     socket.on('git-automation:updated', handler);
     return () => { socket.off('git-automation:updated', handler); };
   }, [socket, selectedProjectId]);
+
+  // Git 자동화 파이프라인 실행 결과 수신. server.ts 의 runStep 이 commit/pr 단계
+  // stdout 을 400자 잘라 보내 주므로, 여기서 정규식으로 커밋 SHA / PR URL 을 추출해
+  // AgentStatusPanel.gitAutomation 에 꽂는다. 최근 1건만 덮어쓰는 단일 슬롯 전략 —
+  // 히스토리가 필요하면 별도 드로어로 분리할 예정.
+  useEffect(() => {
+    if (!socket) return;
+    const handler = (payload: {
+      projectId: string;
+      branch?: string;
+      results: Array<{ label: string; ok: boolean; code: number | null; stderr?: string; stdout?: string }>;
+    }) => {
+      if (!payload?.projectId || payload.projectId !== selectedProjectId) return;
+      setLastGitAutomation(buildGitAutomationDigest(payload));
+    };
+    socket.on('git-automation:ran', handler);
+    return () => { socket.off('git-automation:ran', handler); };
+  }, [socket, selectedProjectId]);
+
+  // 프로젝트 전환 시 이전 프로젝트의 digest 가 남아 혼동되지 않도록 초기화.
+  useEffect(() => { setLastGitAutomation(null); }, [selectedProjectId]);
 
   // 협업 타임라인 폴링. 파일 수가 적은 구간이라 간단히 15초 주기 폴링.
   // 서버가 단일 소스이므로 클라이언트는 파일 I/O를 하지 않는다.
@@ -1157,6 +1259,7 @@ export default function App() {
           <div className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)]">
             프로젝트: {gameState.projects.length}
           </div>
+          <CurrentProjectBadge projectName={project?.name ?? null} />
           <div
             className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] border-l-[6px]"
             style={{ borderLeftColor: getMetricTierColor(workspaceInsights.coveragePercent) }}
@@ -1187,7 +1290,25 @@ export default function App() {
         {/* Sidebar */}
         <aside className="w-[220px] bg-[var(--pixel-card)] border-r-4 border-[var(--pixel-border)] flex flex-col p-4">
           <div className="text-[12px] text-[var(--pixel-accent)] mb-3 uppercase tracking-wider">워크스페이스</div>
-          
+
+          {/* 현재 프로젝트 — 오피스 플로어 사이드바의 "어디에 있는가" 앵커.
+              .sidebar-project 스펙은 src/index.css 주석 참조. 프로젝트명이 길면
+              ellipsis 로 잘리고 title/aria-label 로 전체 이름을 복원한다. */}
+          <div
+            className="sidebar-project"
+            data-state={project ? 'active' : 'empty'}
+            title={project ? project.name : '프로젝트 미선택'}
+            aria-label={project ? `현재 프로젝트: ${project.name}` : '프로젝트가 선택되지 않았습니다'}
+          >
+            <Briefcase className="sidebar-project__icon" aria-hidden />
+            <div className="sidebar-project__body">
+              <span className="sidebar-project__label">현재 프로젝트</span>
+              <span className="sidebar-project__name">
+                {project ? project.name : '선택되지 않음'}
+              </span>
+            </div>
+          </div>
+
           <nav className="flex-1 space-y-3 overflow-y-auto">
             <button 
               onClick={() => setActiveTab('game')}
@@ -1404,7 +1525,7 @@ export default function App() {
                         workingFileName={workingFile?.name}
                         translateStatus={translateStatus}
                         highlighted={highlightedAgent === agent.name}
-                        onClick={() => nudgeAgent(agent)}
+                        onClick={() => {}}
                       />
                     );
                   })}
@@ -1589,28 +1710,49 @@ export default function App() {
           {activeTab === 'agents' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 p-8">
               {gameState.agents.map(agent => (
-                <div key={agent.id} className="bg-[#0f3460] border-2 border-[var(--pixel-border)] p-5 flex items-center justify-between hover:border-[var(--pixel-accent)] transition-all group">
-                  <div className="flex items-center gap-4">
+                <div
+                  key={agent.id}
+                  className="bg-[#0f3460] border-2 border-[var(--pixel-border)] p-4 min-h-[96px] flex items-start justify-between gap-3 hover:border-[var(--pixel-accent)] transition-all group"
+                >
+                  <div className="flex items-start gap-4 min-w-0 flex-1">
                     <div
-                      className="w-14 h-14 border-2 border-black flex items-center justify-center text-2xl"
+                      className="w-14 h-14 shrink-0 border-2 border-black flex items-center justify-center text-2xl"
                       style={{ backgroundColor: getRoleAccent(agent.role) }}
                       title={getRoleDescription(agent.role)}
                       aria-label={`${translateRole(agent.role)}: ${getRoleDescription(agent.role)}`}
                     >
                       {getAgentEmoji(agent.role)}
                     </div>
-                    <div>
-                      <h3 className="font-bold text-sm text-[var(--pixel-accent)]">{agent.name}</h3>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="font-bold text-sm text-[var(--pixel-accent)] truncate">{agent.name}</h3>
                       <p className="text-[10px] uppercase tracking-widest font-bold opacity-70" title={getRoleDescription(agent.role)}>{translateRole(agent.role)}</p>
                       <div className="flex items-center gap-2 mt-2">
                         <div className={`w-2 h-2 ${agent.status === 'idle' ? 'bg-white/20' : `bg-green-500${reducedMotion ? '' : ' animate-pulse'}`}`} />
                         <span className="text-[10px] opacity-60 uppercase">{translateStatus(agent.status)}</span>
                       </div>
+                      {agent.persona && (
+                        <div
+                          className="mt-2 pt-2 border-t border-white/10 flex items-start gap-1.5"
+                          data-testid="agent-card-persona"
+                        >
+                          <MessageSquare
+                            size={10}
+                            className="shrink-0 mt-[3px] text-[var(--pixel-accent)] opacity-70"
+                            aria-hidden="true"
+                          />
+                          <p
+                            className="text-[11px] italic leading-snug text-white/75 line-clamp-2"
+                            title={agent.persona}
+                          >
+                            {agent.persona}
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
-                  <button 
+                  <button
                     onClick={() => fireAgent(agent.id, agent.name)}
-                    className="opacity-0 group-hover:opacity-100 p-2 bg-red-900/30 border-2 border-red-900 hover:bg-red-900 transition-all text-[10px] font-bold uppercase"
+                    className="opacity-0 group-hover:opacity-100 shrink-0 self-start p-2 bg-red-900/30 border-2 border-red-900 hover:bg-red-900 transition-all text-[10px] font-bold uppercase"
                   >
                     해고
                   </button>
@@ -1623,13 +1765,39 @@ export default function App() {
 
         {/* Right Panel (Management Console Style) */}
         <aside className="w-[280px] bg-[var(--pixel-card)] border-l-4 border-[var(--pixel-border)] p-4 flex flex-col">
-          <div className="text-[12px] text-[var(--pixel-accent)] mb-3 uppercase tracking-wider">에이전트 작업 현황</div>
+          <div className="flex items-center gap-2 mb-3">
+            <div className="text-[12px] text-[var(--pixel-accent)] uppercase tracking-wider">에이전트 작업 현황</div>
+            <span
+              role="status"
+              aria-label={`자동 개발 ${autoDevEnabled ? '켜짐' : '꺼짐'} — 태스크 완료 시 Git 자동화 트리거 ${autoDevEnabled ? '가능' : '대기'}`}
+              title={autoDevEnabled
+                ? '자동 개발 ON — 태스크 완료 시 Git 자동화가 트리거됩니다'
+                : '자동 개발 OFF — 태스크가 완료되어도 Git 자동화는 트리거되지 않습니다'}
+              className={`ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider border-2 tabular-nums ${
+                autoDevEnabled
+                  ? 'border-emerald-400 bg-emerald-500/15 text-emerald-200'
+                  : 'border-white/25 bg-black/30 text-white/50'
+              }`}
+            >
+              <span
+                aria-hidden="true"
+                className={`inline-block w-1.5 h-1.5 rounded-full ${
+                  autoDevEnabled
+                    ? `bg-emerald-400${reducedMotion ? '' : ' animate-pulse'}`
+                    : 'bg-white/30'
+                }`}
+              />
+              {autoDevEnabled ? '자동 개발 ON' : '자동 개발 OFF'}
+            </span>
+          </div>
           <div className="flex-1 overflow-y-auto space-y-3">
             <AgentStatusPanel
               agents={gameState.agents}
               files={gameState.files}
               translateRole={translateRole}
               translateStatus={translateStatus}
+              showGitAutomation={!!lastGitAutomation}
+              gitAutomation={lastGitAutomation ?? undefined}
             />
             <CollabTimeline
               entries={collabEntries}
@@ -1778,21 +1946,43 @@ export default function App() {
             role="tabpanel"
             id="log-panel-panel-log"
             aria-labelledby="log-panel-tab-log"
-            className="flex-1 min-h-0 bg-black border-t-4 border-[var(--pixel-border)] p-3 font-mono text-[11px] text-[#00ff00] overflow-hidden flex flex-col gap-2"
+            className="flex-1 min-h-0 bg-black border-t-2 border-[var(--pixel-border)] px-3 py-2 font-mono text-[11px] text-[#00ff00] overflow-y-auto"
           >
-            <LogFilter logs={logs} query={logQuery} onQueryChange={setLogQuery} />
-            <div className="flex-1 overflow-y-auto">
-              {logs.length === 0 && <div className="opacity-50 italic">시스템 준비 완료. 로그 대기 중...</div>}
-              {visibleLogs.map(log => (
-                <div key={log.id} className="mb-1 flex gap-3">
-                  <span className="text-[#888]">[{log.time}]</span>
-                  <span className="text-[var(--pixel-accent)] font-bold">
-                    {log.from}{log.to ? <span className="text-[#ffa500]"> → {log.to}</span> : null}:
-                  </span>
-                  <span>{log.text}</span>
-                </div>
-              ))}
-            </div>
+            {logs.length === 0 ? (
+              <div className="opacity-50 italic">시스템 준비 완료. 로그 대기 중...</div>
+            ) : (
+              logs.map(log => {
+                const plan = parseLeaderPlanMessage(log.text);
+                // 리더 로그 라인이 답변 전용인지 표식을 붙여, 긴 로그에서도 "분배"와
+                // "답변만" 을 한 눈에 구분하게 한다. plan.mode === 'reply' 이거나 tasks 가
+                // 비어 있으면 답변 전용으로 판정.
+                const isAnswerOnly = !!plan && (plan.mode === 'reply' || plan.tasks.length === 0);
+                return (
+                  <div key={log.id} className="mb-1 flex gap-3">
+                    <span className="shrink-0 text-[#888]">[{log.time}]</span>
+                    <span className="shrink-0 text-[var(--pixel-accent)] font-bold">
+                      {log.from}{log.to ? <span className="text-[#ffa500]"> → {log.to}</span> : null}:
+                    </span>
+                    {isAnswerOnly && (
+                      <span
+                        className="shrink-0 text-[9px] uppercase tracking-wider text-cyan-300 border border-cyan-300/50 bg-cyan-400/10 px-1 self-center"
+                        data-leader-kind="reply"
+                        title={LEADER_ANSWER_ONLY_TOOLTIP}
+                      >
+                        {LEADER_ANSWER_ONLY_LABEL}
+                      </span>
+                    )}
+                    <span className="kr-msg min-w-0 break-words">
+                      {plan ? (
+                        <LeaderPlanBubble plan={plan} agentById={agentById} />
+                      ) : (
+                        log.text
+                      )}
+                    </span>
+                  </div>
+                );
+              })
+            )}
           </div>
         )}
       </div>
@@ -1888,6 +2078,75 @@ export default function App() {
   );
 }
 
+// 리더가 보낸 분배 계획(JSON)을 브리핑 형식으로 펼친다. JSON 처럼 보이지 않도록
+// (1) 요약줄: 📋 아이콘 + accent 컬러 + 우측 "배정 N건" 카운트 칩
+// (2) 하위 태스크: 좌측 accent 레일 + 인덴트, 각 행은 [역할 배지] — 설명.
+//     배지 배경은 getRoleAccent, 이모지·툴팁은 getAgentEmoji/getRoleDescription.
+// assignedTo 를 agentById 로 치환한다. 매핑이 없으면(해고된 팀원 등) 중성 배지와
+// ID 끝 6자리를 보조 표기로 노출해 "정체불명 ID"가 통째로 화면을 차지하지 않도록 한다.
+function LeaderPlanBubble({
+  plan,
+  agentById,
+}: {
+  plan: LeaderPlan;
+  agentById: ReadonlyMap<string, Agent>;
+}) {
+  const count = plan.tasks.length;
+  return (
+    <span className="inline-block w-full align-top">
+      {plan.message && (
+        <span className="flex items-start gap-1.5">
+          <span aria-hidden="true" className="shrink-0 mt-[1px] text-[var(--pixel-accent)]">📋</span>
+          <span className="min-w-0 break-words text-[var(--pixel-accent)] font-bold leading-snug">
+            {plan.message}
+          </span>
+          {count > 0 && (
+            <span
+              className="ml-auto shrink-0 mt-[1px] px-1 border border-[var(--pixel-accent)]/50 text-[9px] font-normal text-[var(--pixel-accent)]/80 uppercase tracking-wider"
+              aria-label={`배정 태스크 ${count}건`}
+            >
+              배정 {count}건
+            </span>
+          )}
+        </span>
+      )}
+      {count > 0 && (
+        <span className="mt-1 block border-l-2 border-[var(--pixel-accent)]/40 pl-3 ml-2">
+          {plan.tasks.map((task, i) => {
+            const agent = agentById.get(task.assignedTo);
+            const accent = agent ? getRoleAccent(agent.role) : 'var(--pixel-border)';
+            const contrast = agent ? getRoleContrast(agent.role) : '#000';
+            const emoji = agent ? getAgentEmoji(agent.role) : '❔';
+            const name = agent?.name ?? `미지정 (${task.assignedTo.slice(-6)})`;
+            const title = agent
+              ? `${getRoleLabel(agent.role)} · ${getRoleDescription(agent.role)}`
+              : '배정 실패: 알 수 없는 팀원';
+            return (
+              <span
+                key={i}
+                className="flex items-start gap-2 mt-1 first:mt-0"
+                data-testid="leader-plan-task"
+              >
+                <span
+                  className="shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] text-[10px] font-bold border border-black/40"
+                  style={{ backgroundColor: accent, color: contrast }}
+                  title={title}
+                >
+                  <span aria-hidden="true">{emoji}</span>
+                  <span>{name}</span>
+                </span>
+                <span className="min-w-0 break-words text-white/85 leading-snug">
+                  {task.description}
+                </span>
+              </span>
+            );
+          })}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function AgentSprite({ agent, x, y, targetName, onClick, logs, workingFileName, translateStatus, highlighted }: { agent: Agent; x: number; y: number; targetName?: string; onClick: () => void | Promise<void>; logs?: AgentLogLine[]; workingFileName?: string; translateStatus?: (status: string) => string; highlighted?: boolean; key?: string }) {
   return (
     <motion.div
@@ -1923,7 +2182,7 @@ function AgentSprite({ agent, x, y, targetName, onClick, logs, workingFileName, 
             {targetName && (
               <div className="text-[9px] font-bold text-[#cc6600] mb-1 uppercase">→ {targetName}</div>
             )}
-            {agent.lastMessage}
+            {summarizeLeaderMessage(agent.lastMessage)}
             <div className="absolute bottom-[-10px] left-1/2 -translate-x-1/2 border-x-[5px] border-x-transparent border-t-[5px] border-t-white" />
           </motion.div>
         )}
@@ -2145,16 +2404,25 @@ function MembersForm({
         <div className="space-y-2">
           {members.map(agent => (
             <div key={agent.id} className="flex items-center justify-between bg-black/30 border-2 border-[var(--pixel-border)] p-2">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 min-w-0">
                 <div
-                  className="w-8 h-8 border-2 border-black flex items-center justify-center text-xs"
+                  className="w-8 h-8 border-2 border-black flex items-center justify-center text-xs shrink-0"
                   style={{ backgroundColor: getRoleAccent(agent.role) }}
                 >
                   {getAgentEmoji(agent.role)}
                 </div>
-                <div>
-                  <div className="text-[12px] font-bold text-[var(--pixel-accent)]">{agent.name}</div>
+                <div className="min-w-0">
+                  <div className="text-[12px] font-bold text-[var(--pixel-accent)] truncate">{agent.name}</div>
                   <div className="text-[10px] opacity-70">{translateRole(agent.role)}</div>
+                  {agent.persona && (
+                    <div
+                      className="text-[10px] opacity-60 italic truncate"
+                      title={agent.persona}
+                      data-testid="member-persona"
+                    >
+                      {agent.persona}
+                    </div>
+                  )}
                 </div>
               </div>
               <button
@@ -2180,16 +2448,25 @@ function MembersForm({
         <div className="space-y-2">
           {candidates.map(agent => (
             <div key={agent.id} className="flex items-center justify-between bg-black/20 border-2 border-[var(--pixel-border)] p-2">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 min-w-0">
                 <div
-                  className="w-8 h-8 border-2 border-black flex items-center justify-center text-xs"
+                  className="w-8 h-8 border-2 border-black flex items-center justify-center text-xs shrink-0"
                   style={{ backgroundColor: getRoleAccent(agent.role) }}
                 >
                   {getAgentEmoji(agent.role)}
                 </div>
-                <div>
-                  <div className="text-[12px] font-bold text-[var(--pixel-accent)]">{agent.name}</div>
+                <div className="min-w-0">
+                  <div className="text-[12px] font-bold text-[var(--pixel-accent)] truncate">{agent.name}</div>
                   <div className="text-[10px] opacity-70">{translateRole(agent.role)}</div>
+                  {agent.persona && (
+                    <div
+                      className="text-[10px] opacity-60 italic truncate"
+                      title={agent.persona}
+                      data-testid="candidate-persona"
+                    >
+                      {agent.persona}
+                    </div>
+                  )}
                 </div>
               </div>
               <button
