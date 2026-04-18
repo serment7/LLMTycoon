@@ -1,0 +1,359 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 760" font-family="ui-monospace, 'Segoe UI Mono', 'Noto Sans Mono CJK KR', monospace">
+  <!-- 배경 -->
+  <rect width="960" height="760" fill="#0a1a2e"/>
+
+  <!-- 팔레트 정의 -->
+  <defs>
+    <style>
+      .pixel-border { stroke: #4fc3f7; stroke-width: 2; fill: none; }
+      .pixel-border-dim { stroke: #385b7c; stroke-width: 2; fill: none; }
+      .bg-panel { fill: #0f3460; }
+      .bg-deep { fill: rgba(0,0,0,0.45); }
+      .txt-accent { fill: #7fd4ff; }
+      .txt-main { fill: #ffffff; }
+      .txt-mute { fill: rgba(255,255,255,0.55); }
+      .txt-dim { fill: rgba(255,255,255,0.35); }
+      .emerald { fill: #34d399; }
+      .emerald-bg { fill: rgba(52,211,153,0.15); stroke: #34d399; stroke-width: 2; }
+      .sky { fill: #60a5fa; }
+      .sky-bg { fill: rgba(96,165,250,0.15); stroke: #60a5fa; stroke-width: 2; }
+      .amber { fill: #f59e0b; }
+      .amber-bg { fill: rgba(245,158,11,0.15); stroke: #f59e0b; stroke-width: 2; }
+      .red { fill: #f87171; }
+      .red-bg { fill: rgba(248,113,113,0.15); stroke: #f87171; stroke-width: 2; }
+      .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+      .title { font-size: 14px; font-weight: bold; letter-spacing: 0.1em; text-transform: uppercase; }
+      .small { font-size: 10px; }
+      .tiny { font-size: 9px; letter-spacing: 0.05em; }
+      .mono { font-family: 'Consolas', 'Noto Sans Mono CJK KR', monospace; }
+    </style>
+  </defs>
+
+  <!-- 전체 타이틀 -->
+  <text x="24" y="32" class="txt-accent title">Git 자동화 · 단일 브랜치 리더 주도 통합 뷰 시안</text>
+  <text x="24" y="52" class="txt-mute small">2026-04-18 · 리더 Kai 주도 · 에이전트별 브랜치/색상 → 단일 파이프라인으로 접기</text>
+
+  <!-- ══════════════════════════════════════════════ BEFORE (현행) -->
+  <g transform="translate(24, 80)">
+    <text x="0" y="0" class="txt-mute label">① BEFORE · 현행 (에이전트별 분기)</text>
+    <rect x="0" y="10" width="440" height="250" class="bg-panel"/>
+    <rect x="0" y="10" width="440" height="250" class="pixel-border-dim"/>
+
+    <!-- Yuna branch row -->
+    <g transform="translate(14, 30)">
+      <circle cx="10" cy="10" r="8" fill="#fbbf24"/>
+      <text x="24" y="14" class="txt-main small">Yuna</text>
+      <text x="72" y="14" class="txt-dim tiny mono">chore/yuna-autopilot</text>
+      <g transform="translate(14, 28)">
+        <rect x="0" y="0" width="70" height="20" class="emerald-bg"/>
+        <text x="8" y="14" class="emerald tiny">◉ 커밋</text>
+        <rect x="78" y="0" width="70" height="20" class="sky-bg"/>
+        <text x="86" y="14" class="sky tiny">◔ 푸시</text>
+        <rect x="156" y="0" width="70" height="20" fill="none" stroke="rgba(255,255,255,0.2)" stroke-dasharray="3 2" stroke-width="2"/>
+        <text x="164" y="14" class="txt-dim tiny">○ PR</text>
+      </g>
+    </g>
+
+    <!-- Min branch row -->
+    <g transform="translate(14, 100)">
+      <circle cx="10" cy="10" r="8" fill="#a78bfa"/>
+      <text x="24" y="14" class="txt-main small">Min</text>
+      <text x="72" y="14" class="txt-dim tiny mono">feat/min-stages</text>
+      <g transform="translate(14, 28)">
+        <rect x="0" y="0" width="70" height="20" class="emerald-bg"/>
+        <text x="8" y="14" class="emerald tiny">◉ 커밋</text>
+        <rect x="78" y="0" width="70" height="20" class="red-bg"/>
+        <text x="86" y="14" class="red tiny">✕ 푸시</text>
+        <rect x="156" y="0" width="70" height="20" fill="none" stroke="rgba(255,255,255,0.2)" stroke-dasharray="3 2" stroke-width="2"/>
+        <text x="164" y="14" class="txt-dim tiny">○ PR</text>
+      </g>
+    </g>
+
+    <!-- Ari branch row -->
+    <g transform="translate(14, 170)">
+      <circle cx="10" cy="10" r="8" fill="#f472b6"/>
+      <text x="24" y="14" class="txt-main small">Ari</text>
+      <text x="72" y="14" class="txt-dim tiny mono">fix/ari-regress</text>
+      <g transform="translate(14, 28)">
+        <rect x="0" y="0" width="70" height="20" class="emerald-bg"/>
+        <text x="8" y="14" class="emerald tiny">◉ 커밋</text>
+        <rect x="78" y="0" width="70" height="20" class="emerald-bg"/>
+        <text x="86" y="14" class="emerald tiny">◉ 푸시</text>
+        <rect x="156" y="0" width="70" height="20" class="sky-bg"/>
+        <text x="164" y="14" class="sky tiny">◔ PR</text>
+      </g>
+    </g>
+
+    <!-- 단점 주석 -->
+    <text x="14" y="244" class="txt-dim tiny">⚠ 색상·브랜치 3갈래 → 시선 분산 · 머지 충돌 · 리더 판정 지연</text>
+  </g>
+
+  <!-- ══════════════════════════════════════════════ AFTER (제안) -->
+  <g transform="translate(496, 80)">
+    <text x="0" y="0" class="txt-accent label">② AFTER · 제안 (리더 주도 단일 브랜치)</text>
+    <rect x="0" y="10" width="440" height="250" class="bg-panel"/>
+    <rect x="0" y="10" width="440" height="250" class="pixel-border"/>
+
+    <!-- 헤더: 단일 브랜치 배지 -->
+    <g transform="translate(14, 26)">
+      <!-- 리더 Kai 왕관 아이콘 -->
+      <rect x="0" y="0" width="28" height="28" fill="#0891b2" stroke="#7fd4ff" stroke-width="2"/>
+      <text x="7" y="20" class="txt-main" font-size="14" font-weight="bold">K</text>
+      <text x="36" y="12" class="txt-accent tiny">LEADER</text>
+      <text x="36" y="24" class="txt-main small" font-weight="bold">Kai</text>
+
+      <!-- 단일 브랜치 칩 -->
+      <rect x="110" y="4" width="200" height="20" fill="rgba(8,145,178,0.18)" stroke="#7fd4ff" stroke-width="2"/>
+      <text x="118" y="18" class="txt-accent tiny">⎇ main · 단일 브랜치 운영</text>
+
+      <!-- 활성 점 -->
+      <circle cx="328" cy="14" r="4" fill="#34d399">
+        <animate attributeName="opacity" values="0.4;1;0.4" dur="1.6s" repeatCount="indefinite"/>
+      </circle>
+      <text x="338" y="18" class="emerald tiny">활성</text>
+    </g>
+
+    <!-- 기여 에이전트 스택 (통합) -->
+    <g transform="translate(14, 68)">
+      <text x="0" y="0" class="txt-mute tiny">기여 에이전트 (이번 턴)</text>
+      <g transform="translate(0, 8)">
+        <circle cx="10" cy="10" r="8" fill="#fbbf24" stroke="#0f3460" stroke-width="2"/>
+        <text x="6" y="14" font-size="9" fill="#0a1a2e" font-weight="bold">Y</text>
+        <circle cx="26" cy="10" r="8" fill="#a78bfa" stroke="#0f3460" stroke-width="2"/>
+        <text x="22" y="14" font-size="9" fill="#0a1a2e" font-weight="bold">M</text>
+        <circle cx="42" cy="10" r="8" fill="#f472b6" stroke="#0f3460" stroke-width="2"/>
+        <text x="38" y="14" font-size="9" fill="#0a1a2e" font-weight="bold">A</text>
+        <circle cx="58" cy="10" r="8" fill="#0891b2" stroke="#7fd4ff" stroke-width="2"/>
+        <text x="54" y="14" font-size="9" fill="#ffffff" font-weight="bold">K</text>
+        <text x="80" y="14" class="txt-mute tiny">Kai 가 3명 커밋 묶어 단일 흐름으로 진행</text>
+      </g>
+    </g>
+
+    <!-- 통합 파이프라인 가로 타임라인 -->
+    <g transform="translate(14, 120)">
+      <!-- 연결선 -->
+      <line x1="22" y1="22" x2="120" y2="22" stroke="#34d399" stroke-width="3"/>
+      <line x1="160" y1="22" x2="258" y2="22" stroke="#60a5fa" stroke-width="3" stroke-dasharray="4 3">
+        <animate attributeName="stroke-dashoffset" values="0;-14" dur="0.8s" repeatCount="indefinite"/>
+      </line>
+      <line x1="298" y1="22" x2="396" y2="22" stroke="rgba(255,255,255,0.2)" stroke-width="3" stroke-dasharray="4 3"/>
+
+      <!-- 단계 1: 커밋 (성공) -->
+      <g transform="translate(0, 0)">
+        <rect x="0" y="4" width="40" height="40" class="emerald-bg"/>
+        <text x="14" y="28" class="emerald" font-size="20">◉</text>
+        <text x="0" y="58" class="emerald tiny" font-weight="bold">커밋</text>
+        <text x="0" y="70" class="txt-main tiny">3건</text>
+      </g>
+
+      <!-- 단계 2: 푸시 (실행중) -->
+      <g transform="translate(140, 0)">
+        <rect x="0" y="4" width="40" height="40" class="sky-bg">
+          <animate attributeName="opacity" values="0.5;1;0.5" dur="1.4s" repeatCount="indefinite"/>
+        </rect>
+        <text x="14" y="28" class="sky" font-size="20">◔</text>
+        <text x="0" y="58" class="sky tiny" font-weight="bold">푸시</text>
+        <text x="0" y="70" class="txt-main tiny">진행 중</text>
+      </g>
+
+      <!-- 단계 3: PR (대기) -->
+      <g transform="translate(278, 0)">
+        <rect x="0" y="4" width="40" height="40" fill="none" stroke="rgba(255,255,255,0.3)" stroke-dasharray="3 2" stroke-width="2"/>
+        <text x="14" y="28" class="txt-dim" font-size="20">○</text>
+        <text x="0" y="58" class="txt-mute tiny" font-weight="bold">PR</text>
+        <text x="0" y="70" class="txt-dim tiny">대기</text>
+      </g>
+
+      <!-- 단계 4: 완료 (대기) -->
+      <g transform="translate(378, 0)">
+        <rect x="0" y="4" width="24" height="40" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="2"/>
+        <text x="6" y="28" class="txt-dim" font-size="14">✓</text>
+        <text x="-4" y="58" class="txt-dim tiny">완료</text>
+      </g>
+    </g>
+
+    <!-- 주석 -->
+    <text x="14" y="238" class="txt-accent tiny">✓ 브랜치 1개 · 리더 색상으로 통일 · 기여자만 아바타로 축약</text>
+    <text x="14" y="252" class="txt-dim tiny">   머지 충돌 0건 · 시선 분산 제거 · 파이프라인 상태 선명</text>
+  </g>
+
+  <!-- ══════════════════════════════════════════════ Stage Badge 매트릭스 -->
+  <g transform="translate(24, 370)">
+    <text x="0" y="0" class="txt-accent label">③ 스테이지 뱃지 상태 매트릭스 (공유 시각 스펙)</text>
+    <rect x="0" y="10" width="912" height="170" class="bg-deep"/>
+    <rect x="0" y="10" width="912" height="170" class="pixel-border-dim"/>
+
+    <!-- 컬럼 헤더 -->
+    <text x="110" y="36" class="txt-mute tiny" text-anchor="middle">idle · 대기</text>
+    <text x="290" y="36" class="txt-mute tiny" text-anchor="middle">running · 실행중</text>
+    <text x="470" y="36" class="txt-mute tiny" text-anchor="middle">success · 성공</text>
+    <text x="650" y="36" class="txt-mute tiny" text-anchor="middle">failed · 실패</text>
+    <text x="820" y="36" class="txt-mute tiny" text-anchor="middle">접근성 라벨</text>
+
+    <!-- 커밋 행 -->
+    <g transform="translate(20, 54)">
+      <text x="0" y="16" class="txt-main small" font-weight="bold">커밋</text>
+      <!-- idle -->
+      <g transform="translate(60, 0)">
+        <rect x="0" y="0" width="100" height="26" fill="none" stroke="rgba(255,255,255,0.35)" stroke-dasharray="4 3" stroke-width="2"/>
+        <text x="8" y="18" class="txt-mute tiny">○ 자동 커밋 대기</text>
+      </g>
+      <!-- running -->
+      <g transform="translate(240, 0)">
+        <rect x="0" y="0" width="100" height="26" class="sky-bg"/>
+        <text x="8" y="18" class="sky tiny">◔ 자동 커밋 실행중</text>
+      </g>
+      <!-- success -->
+      <g transform="translate(420, 0)">
+        <rect x="0" y="0" width="100" height="26" class="emerald-bg"/>
+        <text x="8" y="18" class="emerald tiny">◉ 자동 커밋 성공</text>
+      </g>
+      <!-- failed -->
+      <g transform="translate(600, 0)">
+        <rect x="0" y="0" width="100" height="26" class="red-bg">
+          <animate attributeName="opacity" values="0.65;1;0.65" dur="1.2s" repeatCount="indefinite"/>
+        </rect>
+        <text x="8" y="18" class="red tiny" font-weight="bold">✕ 자동 커밋 실패</text>
+      </g>
+      <text x="780" y="18" class="txt-dim tiny">aria-label="커밋 {상태}"</text>
+    </g>
+
+    <!-- 푸시 행 -->
+    <g transform="translate(20, 92)">
+      <text x="0" y="16" class="txt-main small" font-weight="bold">푸시</text>
+      <g transform="translate(60, 0)">
+        <rect x="0" y="0" width="100" height="26" fill="none" stroke="rgba(255,255,255,0.35)" stroke-dasharray="4 3" stroke-width="2"/>
+        <text x="8" y="18" class="txt-mute tiny">○ 원격 푸시 대기</text>
+      </g>
+      <g transform="translate(240, 0)">
+        <rect x="0" y="0" width="100" height="26" class="sky-bg"/>
+        <text x="8" y="18" class="sky tiny">◔ 원격 푸시 실행중</text>
+      </g>
+      <g transform="translate(420, 0)">
+        <rect x="0" y="0" width="100" height="26" class="emerald-bg"/>
+        <text x="8" y="18" class="emerald tiny">◉ 원격 푸시 성공</text>
+      </g>
+      <g transform="translate(600, 0)">
+        <rect x="0" y="0" width="100" height="26" class="red-bg"/>
+        <text x="8" y="18" class="red tiny" font-weight="bold">✕ 원격 푸시 실패</text>
+      </g>
+      <text x="780" y="18" class="txt-dim tiny">title="브랜치 · SHA"</text>
+    </g>
+
+    <!-- PR 행 -->
+    <g transform="translate(20, 130)">
+      <text x="0" y="16" class="txt-main small" font-weight="bold">PR</text>
+      <g transform="translate(60, 0)">
+        <rect x="0" y="0" width="100" height="26" fill="none" stroke="rgba(255,255,255,0.35)" stroke-dasharray="4 3" stroke-width="2"/>
+        <text x="8" y="18" class="txt-mute tiny">○ PR 생성 대기</text>
+      </g>
+      <g transform="translate(240, 0)">
+        <rect x="0" y="0" width="100" height="26" class="sky-bg"/>
+        <text x="8" y="18" class="sky tiny">◔ PR 생성 실행중</text>
+      </g>
+      <g transform="translate(420, 0)">
+        <rect x="0" y="0" width="100" height="26" class="emerald-bg"/>
+        <text x="8" y="18" class="emerald tiny">◉ PR 생성 성공</text>
+      </g>
+      <g transform="translate(600, 0)">
+        <rect x="0" y="0" width="100" height="26" class="red-bg"/>
+        <text x="8" y="18" class="red tiny" font-weight="bold">✕ PR 생성 실패</text>
+      </g>
+      <text x="780" y="18" class="txt-dim tiny">PR URL · 리뷰어</text>
+    </g>
+  </g>
+
+  <!-- ══════════════════════════════════════════════ AgentContextBubble 적용 -->
+  <g transform="translate(24, 570)">
+    <text x="0" y="0" class="txt-accent label">④ AgentContextBubble 적용 예 (폭 200px 컴팩트)</text>
+
+    <!-- 버블 1: Leader Kai (단일 브랜치 정보 노출) -->
+    <g transform="translate(0, 14)">
+      <text x="0" y="0" class="txt-mute tiny">리더 Kai · 통합 뷰 (단일 브랜치 칩 + 3뱃지)</text>
+      <rect x="0" y="6" width="240" height="120" fill="rgba(0,0,0,0.85)" class="pixel-border"/>
+      <!-- 상태 라인 -->
+      <text x="10" y="24" class="emerald tiny" font-weight="bold">▶ 작업중</text>
+      <text x="90" y="24" class="txt-accent tiny mono">mcp-agent-server.ts</text>
+      <!-- 단일 브랜치 칩 -->
+      <rect x="10" y="32" width="220" height="18" fill="rgba(8,145,178,0.18)" stroke="#7fd4ff" stroke-width="1"/>
+      <text x="16" y="45" class="txt-accent tiny">⎇ main</text>
+      <text x="66" y="45" class="txt-mute tiny">· 3명 통합 · Kai 주도</text>
+      <!-- 커런트 태스크 -->
+      <text x="10" y="64" class="txt-main tiny">▸ 스테이지 뱃지 통합</text>
+      <!-- 3 뱃지 스트립 -->
+      <g transform="translate(10, 72)">
+        <rect x="0" y="0" width="70" height="22" class="emerald-bg"/>
+        <text x="6" y="15" class="emerald tiny">◉ 커밋 성공</text>
+        <rect x="75" y="0" width="70" height="22" class="sky-bg"/>
+        <text x="81" y="15" class="sky tiny">◔ 푸시 진행</text>
+        <rect x="150" y="0" width="70" height="22" fill="none" stroke="rgba(255,255,255,0.35)" stroke-dasharray="3 2" stroke-width="2"/>
+        <text x="156" y="15" class="txt-mute tiny">○ PR 대기</text>
+      </g>
+      <!-- 아바타 도트 -->
+      <g transform="translate(10, 100)">
+        <text x="0" y="10" class="txt-dim tiny">기여:</text>
+        <circle cx="40" cy="6" r="5" fill="#fbbf24"/>
+        <circle cx="52" cy="6" r="5" fill="#a78bfa"/>
+        <circle cx="64" cy="6" r="5" fill="#f472b6"/>
+        <circle cx="76" cy="6" r="5" fill="#0891b2" stroke="#7fd4ff" stroke-width="1"/>
+      </g>
+      <!-- 꼬리 -->
+      <polygon points="110,126 120,134 130,126" fill="rgba(0,0,0,0.85)"/>
+    </g>
+
+    <!-- 버블 2: Yuna (비-리더: 브랜치 칩 축약, 기여 표식만) -->
+    <g transform="translate(260, 14)">
+      <text x="0" y="0" class="txt-mute tiny">팀원 Yuna · 통합 뷰에 기여자로만 노출</text>
+      <rect x="0" y="6" width="240" height="120" fill="rgba(0,0,0,0.85)" class="pixel-border-dim"/>
+      <text x="10" y="24" class="sky tiny" font-weight="bold">◉ 사고중</text>
+      <text x="90" y="24" class="txt-accent tiny mono">handoffLedger.ts</text>
+      <rect x="10" y="32" width="220" height="18" fill="rgba(251,191,36,0.12)" stroke="rgba(251,191,36,0.5)" stroke-width="1"/>
+      <text x="16" y="45" class="tiny" fill="#fbbf24">⎇ main · Kai 파이프라인에 기여중</text>
+      <text x="10" y="64" class="txt-main tiny">▸ 회귀 테스트 보강</text>
+      <!-- 통합 요약 축약 표시 -->
+      <g transform="translate(10, 72)">
+        <text x="0" y="10" class="txt-mute tiny">리더 진행:</text>
+        <rect x="58" y="0" width="14" height="14" class="emerald-bg"/>
+        <text x="61" y="11" class="emerald" font-size="10">◉</text>
+        <rect x="76" y="0" width="14" height="14" class="sky-bg"/>
+        <text x="79" y="11" class="sky" font-size="10">◔</text>
+        <rect x="94" y="0" width="14" height="14" fill="none" stroke="rgba(255,255,255,0.35)" stroke-dasharray="2 2"/>
+        <text x="97" y="11" class="txt-dim" font-size="10">○</text>
+        <text x="116" y="11" class="txt-dim tiny">(리더 상세 참조)</text>
+      </g>
+      <text x="10" y="108" class="txt-dim tiny">* 팀원 버블은 뱃지를 14px 도트로 축약</text>
+      <polygon points="110,126 120,134 130,126" fill="rgba(0,0,0,0.85)"/>
+    </g>
+
+    <!-- 레전드 -->
+    <g transform="translate(520, 20)">
+      <text x="0" y="0" class="txt-accent label">레전드</text>
+      <g transform="translate(0, 12)">
+        <rect x="0" y="0" width="10" height="10" fill="#34d399"/>
+        <text x="16" y="9" class="txt-mute tiny">success · emerald (정적)</text>
+      </g>
+      <g transform="translate(0, 26)">
+        <rect x="0" y="0" width="10" height="10" fill="#60a5fa"/>
+        <text x="16" y="9" class="txt-mute tiny">running · sky (1.4s 펄스)</text>
+      </g>
+      <g transform="translate(0, 40)">
+        <rect x="0" y="0" width="10" height="10" fill="#f87171"/>
+        <text x="16" y="9" class="txt-mute tiny">failed · red (1.2s 펄스 + halo)</text>
+      </g>
+      <g transform="translate(0, 54)">
+        <rect x="0" y="0" width="10" height="10" fill="none" stroke="rgba(255,255,255,0.35)" stroke-dasharray="2 2"/>
+        <text x="16" y="9" class="txt-mute tiny">idle · 점선 테두리 · 투명 55%</text>
+      </g>
+      <g transform="translate(0, 68)">
+        <circle cx="5" cy="5" r="5" fill="#0891b2" stroke="#7fd4ff" stroke-width="1"/>
+        <text x="16" y="9" class="txt-mute tiny">리더 색: 시안 — 통합 뷰의 앵커 톤</text>
+      </g>
+      <g transform="translate(0, 82)">
+        <circle cx="5" cy="5" r="5" fill="#fbbf24"/>
+        <circle cx="17" cy="5" r="5" fill="#a78bfa"/>
+        <circle cx="29" cy="5" r="5" fill="#f472b6"/>
+        <text x="40" y="9" class="txt-mute tiny">팀원 색: 기여 아바타에만 남김</text>
+      </g>
+    </g>
+  </g>
+</svg>

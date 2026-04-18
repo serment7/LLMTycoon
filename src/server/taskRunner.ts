@@ -5,7 +5,7 @@ import path from 'path';
 import { mkdirSync } from 'fs';
 
 import type { Agent, CodeFile, GameState, Project, Task, AutoDevSettings } from '../types';
-import { AgentWorkerRegistry, type TaskCompleteInfo } from './agentWorker';
+import { AgentWorkerRegistry } from './agentWorker';
 import {
   buildSystemPrompt,
   buildTaskPrompt,
@@ -26,10 +26,11 @@ import {
 import type { GitAutomationRunResult } from '../utils/gitAutomation';
 import { buildGitAutomationLogEntries } from '../utils/gitAutomation';
 
-// Git 자동화 트리거 경로 전용 디버그 스위치. 워커 성공 → handleWorkerTaskComplete
-// → runGitAutomation 중 어디서 누락됐는지 재현 로그로 좁혀 볼 때 켠다. 기본 OFF
-// 이며 운영 노이즈를 만들지 않는다. agentWorker.ts 의 동일 가드와 키를 공유해
-// 한 번의 환경변수 토글로 전 경로가 함께 기록된다.
+// Git 자동화 트리거 경로 전용 디버그 스위치. 리더 경유 단일 브랜치 경로
+// (handleImprovementReport → runGitAutomation) 에서 어느 단계가 누락됐는지
+// 재현 로그로 좁혀 볼 때 켠다. 기본 OFF 이며 운영 노이즈를 만들지 않는다.
+// agentWorker.ts 의 동일 가드와 키를 공유해 한 번의 환경변수 토글로 전 경로가
+// 함께 기록된다.
 const DEBUG_GIT_AUTO = process.env.DEBUG_GIT_AUTO === '1';
 
 // 서버가 보유한 태스크 dispatcher. 에이전트별 워커를 통해 지시를 흘려 넣고,
@@ -78,9 +79,6 @@ export class TaskRunner {
   private autoDevTimer: NodeJS.Timeout | null = null;
   // auto-dev 는 서버 메모리 + DB 영속화. 기동 시 DB 에서 복원한다.
   private autoDev: AutoDevSettings = { enabled: false, updatedAt: new Date(0).toISOString() };
-  // 워커 완료 훅에서 taskId 별 Git 자동화 트리거 중복을 막기 위한 디바운스 세트.
-  // handleWorkerTaskComplete 주석 참조.
-  private firedTaskIds = new Set<string>();
 
   private static readonly AUTO_DEV_TICK_MS = 12000;
   private static readonly SETTINGS_KEY = 'auto-dev';

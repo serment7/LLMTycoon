@@ -57,17 +57,17 @@ interface QueueItem {
 }
 
 // 태스크 턴이 성공적으로 결과(result.subtype === 'success')를 돌려줄 때 워커가
-// 바깥으로 흘려주는 이벤트 페이로드. TaskRunner 는 이 훅을 받아 Git 자동화
-// 트리거(서버 runGitAutomation — MCP 의 trigger_git_automation 과 동일 파이프라인)를
-// 개시한다. 실패 턴에서는 호출하지 않으며, 예외를 먹는 쪽은 훅 소비자 책임.
+// 바깥에 노출하는 페이로드 형태. 과거에는 에이전트 본인이 이 정보를 그대로 들고
+// Git 자동화 파이프라인을 개시하는 per-agent 트리거 훅의 인자였으나, 리더 단일
+// 브랜치 경로로 통합되면서 에이전트 단위 트리거 훅은 제거됐다. 지금은
+// reportImprovementToLeader 가 리더 큐로 리포트를 넘길 때 참조하는 데이터 셰이프
+// 로만 남아 있다.
 export interface TaskCompleteInfo {
   agentId: string;
   projectId: string;
   taskId?: string;
   text: string;
 }
-
-export type TaskCompleteHandler = (info: TaskCompleteInfo) => void;
 
 // 에이전트가 턴 종료 직후 자체 개선점을 뽑아 리더 큐로 흘려 보낼 때 쓰는 훅.
 // taskRunner 는 이 핸들러를 받아 리더 태스크로 재발행한다. 훅이 throw 해도 워커
@@ -81,10 +81,10 @@ interface WorkerInit {
   workspacePath: string;
   port?: number;
   systemPrompt?: string;
-  // 매 턴 성공 시 호출되는 완료 훅. 예: Git 자동화 파이프라인 개시.
-  onTaskComplete?: TaskCompleteHandler;
   // 턴 종료 직후 reportImprovementToLeader 가 리포트를 만들었을 때 호출되는 훅.
   // taskRunner 의 handleImprovementReport 가 이 경로로 리더 큐에 태스크를 투입한다.
+  // 리더 단일 브랜치 경로로 통합된 이후에는 Git 자동화 개시도 여기서 파생된 리더
+  // 태스크 흐름이 전담하므로, 에이전트 단위 완료 훅은 더 이상 존재하지 않는다.
   onImprovementReport?: ImprovementReportHandler;
 }
 
@@ -99,7 +99,6 @@ export class AgentWorker {
 
   private child: ChildProcessWithoutNullStreams | null = null;
   private mcpConfigPath: string | null = null;
-  private onTaskComplete?: TaskCompleteHandler;
   private onImprovementReport?: ImprovementReportHandler;
 
   private queue: QueueItem[] = [];
@@ -120,17 +119,10 @@ export class AgentWorker {
     this.workspacePath = init.workspacePath;
     this.port = init.port ?? DEFAULT_PORT;
     this.systemPrompt = init.systemPrompt;
-    this.onTaskComplete = init.onTaskComplete;
     this.onImprovementReport = init.onImprovementReport;
   }
 
-  // TaskRunner 가 워커 재사용 시 훅만 갱신하고 싶을 때 쓰는 setter.
-  // updateSystemPrompt 과 동일한 "라이프사이클 중 변경" 의도.
-  setOnTaskComplete(handler: TaskCompleteHandler | undefined) {
-    this.onTaskComplete = handler;
-  }
-
-  // 개선 보고 훅도 워커 재사용 경로에서 교체 가능해야 한다. ensure() 가 이미
+  // 개선 보고 훅은 워커 재사용 경로에서 교체 가능해야 한다. ensure() 가 이미
   // 존재하는 워커를 돌려줄 때 이 setter 로 최신 TaskRunner 바인딩을 덮어쓴다.
   setOnImprovementReport(handler: ImprovementReportHandler | undefined) {
     this.onImprovementReport = handler;
@@ -332,44 +324,20 @@ export class AgentWorker {
           this.consecutiveSpawnFailures = 0;
           this.warnIfLowKoreanRatio(text, item.taskId);
           item.onResult(text);
-          // 한 턴이 성공 종료되면 Git 자동화 등 외부 파이프라인을 개시할 수 있도록
-          // 완료 이벤트를 방출한다. 훅이 throw 해도 워커 루프는 계속 돌아야 하므로
-          // try/catch 로 감싸 예외를 삼킨다.
-          if (this.onTaskComplete) {
-            if (DEBUG_GIT_AUTO) {
-              console.log(
-                `[git-auto] worker success → onTaskComplete agent=${this.agentId} task=${item.taskId ?? 'n/a'} len=${text.length}`,
-              );
-            }
-            try {
-              this.onTaskComplete({
-                agentId: this.agentId,
-                projectId: this.projectId,
-                taskId: item.taskId,
-                text,
-              });
-            } catch (e) {
-              console.warn(`[worker:${this.agentId}] onTaskComplete threw:`, (e as Error).message);
-            }
-            // onTaskComplete 가 Git 자동화 같은 "외부 파이프라인" 을 여는 훅이라면,
-            // reportImprovementToLeader 는 "에이전트 자체 메타 협업" 훅이다. 둘은
-            // 독립적으로 작동하므로 순서 의존성 없이 연속 호출한다. 힌트가 없으면
-            // 내부에서 조용히 null 을 돌려 주어 노이즈가 남지 않는다.
-            this.reportImprovementToLeader({
-              agentId: this.agentId,
-              projectId: this.projectId,
-              taskId: item.taskId,
-              text,
-            });
-          } else if (DEBUG_GIT_AUTO) {
-            // 훅이 세팅되지 않은 상태로 완료된 성공 턴 — TaskRunner 안전망이 뒤이어
-            // 동일 taskId 로 handleWorkerTaskComplete 를 한 번 더 부르므로 실제 Git
-            // 자동화는 이어 진행된다. 다만 "여기서 훅이 비어 있었다" 는 사실 자체가
-            // 재사용 타이밍·워커 리셋 순서의 지표라 재현 추적용으로 남겨둔다.
-            console.warn(
-              `[git-auto] worker success but onTaskComplete is unset (agent=${this.agentId}, task=${item.taskId ?? 'n/a'})`,
+          // 리더 단일 브랜치 경로 통합 이후, 에이전트 본인은 Git 자동화를 개시하지
+          // 않는다. 성공 턴 직후에는 오직 "개선 보고 → 리더 큐" 경로만 발사해,
+          // 커밋/푸시/PR 은 전적으로 리더 태스크 흐름이 책임지게 한다.
+          if (DEBUG_GIT_AUTO) {
+            console.log(
+              `[git-auto] worker success (no per-agent trigger) agent=${this.agentId} task=${item.taskId ?? 'n/a'} len=${text.length}`,
             );
           }
+          this.reportImprovementToLeader({
+            agentId: this.agentId,
+            projectId: this.projectId,
+            taskId: item.taskId,
+            text,
+          });
         } else {
           const errText = typeof msg.result === 'string' && msg.result
             ? msg.result
@@ -586,7 +554,6 @@ export class AgentWorkerRegistry {
     if (existing) {
       if (existing.projectId === init.projectId && existing.workspacePath === init.workspacePath) {
         existing.updateSystemPrompt(init.systemPrompt);
-        existing.setOnTaskComplete(init.onTaskComplete);
         existing.setOnImprovementReport(init.onImprovementReport);
         return existing;
       }
