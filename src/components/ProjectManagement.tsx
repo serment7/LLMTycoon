@@ -3,6 +3,7 @@ import { Plus, Trash2, Download, Github, GitBranch, RefreshCw, FolderGit2, Link2
 import type { SourceIntegration, ManagedProject, SourceProvider, UserPreferences, GitAutomationPreference } from '../types';
 import { USER_PREFERENCES_KEY } from '../types';
 import { GitAutomationPanel, DEFAULT_AUTOMATION, type GitAutomationSettings, type GitFlowLevel } from './GitAutomationPanel';
+import { GitCredentialsSection } from './GitCredentialsSection';
 import { startGitAutomationScheduler } from '../utils/gitAutomation';
 
 // UX: PR 대상 라디오 선택은 "매번 다시 고르기"보다 "한 번 정해두면 그대로"가 실수를
@@ -1244,6 +1245,12 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
                 — {editingLabel.hasProject ? editingLabel.fullName : '프로젝트를 선택해 스코프를 고정하세요'}
               </span>
             </div>
+            {selectedProjectId && (
+              <GitCredentialsSection
+                projectId={selectedProjectId}
+                onLog={onLog}
+              />
+            )}
             <GitAutomationPanel
               initial={gitAutomationSettings}
               onSave={(next) => {

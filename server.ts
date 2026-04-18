@@ -754,11 +754,11 @@ async function startServer() {
   });
 
   // --- 프로젝트 설정 화면용 Git 자격증명 (GitCredentialsSection) ---
-  // localStorage 기반 토큰 저장을 걷어내고 전부 여기로 모은다. token 은 절대
-  // 응답에 실어 보내지 않고, hasToken 플래그만 돌려준다(UI 마스킹 배지용).
+  // localStorage 기반 토큰 저장을 걷어내고 전부 여기로 모은다. 저장은 AES-256-GCM
+  // 암호문으로만 이루어지고, 응답에는 암호문조차 노출하지 않는다(hasToken 배지로만 표기).
   const redactCredential = (c: GitCredential): GitCredentialRedacted => {
-    const { token, ...rest } = c;
-    return { ...rest, hasToken: typeof token === 'string' && token.length > 0 };
+    const { tokenEncrypted, ...rest } = c;
+    return { ...rest, hasToken: typeof tokenEncrypted === 'string' && tokenEncrypted.length > 0 };
   };
 
   app.get('/api/projects/:id/git-credentials', async (req, res) => {
@@ -783,12 +783,25 @@ async function startServer() {
       res.status(400).json({ error: 'username and token required' });
       return;
     }
+    let tokenEncrypted: string;
+    try {
+      tokenEncrypted = encryptToken(pat);
+    } catch (e) {
+      // GIT_TOKEN_ENC_KEY 미설정/잘못된 키 길이 등은 서버 운영 단계의 구성 오류다.
+      // 평문 토큰을 로그에 남기지 않기 위해 상세 메시지만 한국어로 돌려준다.
+      console.error('[git-credentials] encryption failed:', (e as Error).message);
+      res.status(500).json({ error: 'token encryption unavailable' });
+      return;
+    }
+    const existing = await gitCredentialsCol.findOne({ projectId }, { projection: { _id: 0 } });
+    const nowIso = new Date().toISOString();
     const next: GitCredential = {
       projectId,
       provider: provider as SourceProvider,
       username: user,
-      token: pat,
-      updatedAt: new Date().toISOString(),
+      tokenEncrypted,
+      createdAt: existing?.createdAt || nowIso,
+      updatedAt: nowIso,
     };
     await gitCredentialsCol.updateOne(
       { projectId },
@@ -804,6 +817,26 @@ async function startServer() {
     await gitCredentialsCol.deleteOne({ projectId });
     res.json({ success: true });
   });
+
+  // executeGitAutomation 의 push/pr 단계에서 호출되는 내부 조회 헬퍼.
+  // 성공 시 {username, token} 평문을 돌려주고, 실패(레코드 부재·복호 실패)는
+  // null 로 폴백해 호출자가 기존 경로(시스템 credential helper/대화형 프롬프트)
+  // 로 투명하게 내려가도록 한다.
+  async function loadDecryptedCredential(
+    projectId: string,
+  ): Promise<{ username: string; token: string } | null> {
+    const row = await gitCredentialsCol.findOne({ projectId }, { projection: { _id: 0 } });
+    if (!row || !row.tokenEncrypted) return null;
+    try {
+      const token = decryptToken(row.tokenEncrypted);
+      return { username: row.username, token };
+    } catch (e) {
+      console.warn(
+        `[git-credentials] decrypt failed project=${projectId}: ${(e as Error).message}`,
+      );
+      return null;
+    }
+  }
 
   async function fetchRepos(integration: SourceIntegration): Promise<ManagedProject[]> {
     const now = new Date().toISOString();
@@ -1045,12 +1078,15 @@ async function startServer() {
         const stdout = label === 'commit' || label === 'pr'
           ? (r.stdout || '').slice(0, 400)
           : undefined;
+        // 원격 URL 에 토큰이 인라인 주입된 상태라면, 실패 stderr 에 자격증명이 그대로
+        // 박힌 채 로그·소켓 페이로드로 흘러갈 위험이 있다. redactRemoteUrl 을 항상
+        // 통과시켜 `user:***@host` 로 마스킹한 뒤에만 외부에 노출한다.
         const step: GitAutomationStepResult = {
           label,
           ok,
           code: r.status,
-          stderr: ok ? undefined : stderrRaw.slice(0, 400),
-          stdout: stdout || undefined,
+          stderr: ok ? undefined : redactRemoteUrl(stderrRaw).slice(0, 400),
+          stdout: stdout ? redactRemoteUrl(stdout) : undefined,
         };
         results.push(step);
         if (!ok) {
@@ -1082,7 +1118,57 @@ async function startServer() {
             `[git-automation] push forced project=${projectId} branch=${branch} (flowLevel=${settings.flowLevel}, forcePush=true)`,
           );
         }
-        if (!runStep('push', ['git', '-C', cwd, 'push', '-u', 'origin', branch])) return finalize(false);
+        // 프로젝트별 저장된 자격증명(AES-256-GCM 복호화)을 원격 HTTPS URL 에 인라인
+        // 주입해 매 push 마다 대화형 인증 프롬프트가 뜨는 문제를 차단한다. 복구
+        // 가능성을 위해 원래 URL 을 snapshot 으로 보관하고, push 성공/실패 여부와
+        // 무관하게 finally 블록에서 원상 복구한다. SSH 원격 또는 자격증명이 없는
+        // 프로젝트는 기존 경로(시스템 credential helper)로 그대로 흘러간다.
+        let originalRemoteUrl: string | null = null;
+        try {
+          const cred = await loadDecryptedCredential(projectId);
+          if (cred) {
+            const cur = spawnSync('git', ['-C', cwd, 'remote', 'get-url', 'origin'], {
+              encoding: 'utf8',
+              windowsHide: true,
+            });
+            const currentUrl = (cur.stdout || '').trim();
+            if (cur.status === 0 && currentUrl) {
+              const injected = injectTokenIntoRemoteUrl(currentUrl, cred.username, cred.token);
+              if (injected) {
+                const setR = spawnSync(
+                  'git',
+                  ['-C', cwd, 'remote', 'set-url', 'origin', injected],
+                  { encoding: 'utf8', windowsHide: true },
+                );
+                if (setR.status === 0) {
+                  originalRemoteUrl = currentUrl;
+                } else {
+                  console.warn(
+                    `[git-automation] remote set-url failed project=${projectId}: ${(setR.stderr || '').trim().slice(0, 200)}`,
+                  );
+                }
+              }
+            }
+          }
+          if (!runStep('push', ['git', '-C', cwd, 'push', '-u', 'origin', branch])) {
+            return finalize(false);
+          }
+        } finally {
+          if (originalRemoteUrl) {
+            const restore = spawnSync(
+              'git',
+              ['-C', cwd, 'remote', 'set-url', 'origin', originalRemoteUrl],
+              { encoding: 'utf8', windowsHide: true },
+            );
+            if (restore.status !== 0) {
+              // 복구 실패는 설정 파일에 토큰이 박힌 채 남을 위험이 있다 — 운영자가
+              // 수동으로 `git remote set-url origin <원래 URL>` 을 돌리도록 한국어로 경고.
+              console.error(
+                `[git-automation] remote URL 복구 실패 project=${projectId} — .git/config 에서 수동으로 토큰을 제거하세요`,
+              );
+            }
+          }
+        }
       }
 
       // autoPR: gh CLI 가 인증돼 있어야 한다. 실패 로그는 호출자가 agent 워커로 전달.
