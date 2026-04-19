@@ -611,15 +611,26 @@ export async function generateVideo(
     );
   }
 
-  // 2) 예산 예약.
+  // 2) 예산 예약. 예약 성공 여부를 플래그로 추적해 어떤 실패 경로에서도 누수 없이
+  //    환불할 수 있게 한다(과거 pollJob 실패·maxAttempts 초과·abort 경로가 누수되던 문제).
   const cost = spec.durationSec * provider.costPerSecond();
-  if (runtime.budgetLimiter && !runtime.budgetLimiter.reserve(cost)) {
-    throw videoError(
-      'VIDEO_QUOTA_EXCEEDED',
-      `예상 비용 $${cost.toFixed(4)} 가 남은 예산 $${runtime.budgetLimiter.getRemaining().toFixed(4)} 을 초과합니다.`,
-      { cost, remaining: runtime.budgetLimiter.getRemaining() },
-    );
+  let budgetReserved = false;
+  if (runtime.budgetLimiter) {
+    if (!runtime.budgetLimiter.reserve(cost)) {
+      throw videoError(
+        'VIDEO_QUOTA_EXCEEDED',
+        `예상 비용 $${cost.toFixed(4)} 가 남은 예산 $${runtime.budgetLimiter.getRemaining().toFixed(4)} 을 초과합니다.`,
+        { cost, remaining: runtime.budgetLimiter.getRemaining() },
+      );
+    }
+    budgetReserved = true;
   }
+  const refundBudget = (): void => {
+    if (budgetReserved && runtime.budgetLimiter) {
+      runtime.budgetLimiter.refund(cost);
+      budgetReserved = false;
+    }
+  };
 
   // 3) 큐잉.
   const release = runtime.jobQueue ? await runtime.jobQueue.acquire() : () => undefined;
@@ -630,7 +641,7 @@ export async function generateVideo(
     currentJob = await provider.createJob(spec, options.signal);
   } catch (err) {
     release();
-    if (runtime.budgetLimiter) runtime.budgetLimiter.refund(cost);
+    refundBudget();
     throw mapProviderError(err, provider.id, spec, cost);
   }
 
@@ -674,12 +685,17 @@ export async function generateVideo(
     }
 
     if (currentJob.status === 'failed') {
-      if (runtime.budgetLimiter) runtime.budgetLimiter.refund(cost);
       throw videoError(
         'VIDEO_RENDER_ERROR',
         currentJob.errorMessage || `${provider.id} 렌더 실패`,
         { partial: currentJob, provider: provider.id },
       );
+    }
+    if (currentJob.status === 'canceled') {
+      throw new MediaAdapterError('ABORTED', '영상 생성이 공급자에서 취소되었습니다.', {
+        adapterId: VIDEO_REAL_ADAPTER_ID,
+        details: { partial: currentJob, provider: provider.id },
+      });
     }
 
     options.onProgress?.({ stage: 'finalize', ratio: 1, message: '영상 자산 확보' });
@@ -692,6 +708,11 @@ export async function generateVideo(
         policyFlags: policy.flags.length > 0 ? policy.flags : undefined,
       },
     };
+  } catch (err) {
+    // 성공 경로가 아닌 모든 종료 — abort/maxAttempts/poll 실패/failed/canceled —
+    // 여기서 일괄 환불한다. 이미 환불된 경우는 refundBudget 가 no-op.
+    refundBudget();
+    throw err;
   } finally {
     release();
   }

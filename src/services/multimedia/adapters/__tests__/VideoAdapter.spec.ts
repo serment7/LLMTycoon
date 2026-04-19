@@ -277,6 +277,155 @@ test('V7b. 공급자 500 → VIDEO_PROVIDER_ERROR', async () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
+// V7c. 실패 경로 예산 환불 — QA 잠금: pollJob 예외 / maxAttempts 초과 / 호출자
+//      abort / 공급자 canceled 4경로 모두에서 BudgetLimiter 가 복구되어야 한다.
+//      과거 구현은 `VIDEO_RENDER_ERROR` 를 던지기만 하고 예산을 남겨 두는 누수가
+//      있었다. 환불 누락 회귀를 막기 위한 잠금.
+// ────────────────────────────────────────────────────────────────────────────
+
+test('V7c-1. pollJob 이 던지면 BudgetLimiter 가 환불된다', async () => {
+  const provider = stubProvider({
+    id: 'runway',
+    costPerSecond: () => 0.1,
+    async createJob(spec) {
+      return {
+        id: 'x', status: 'rendering', progress: 0.2, provider: 'runway',
+        costEstimate: spec.durationSec * 0.1,
+        metadata: {
+          createdAtMs: 0, updatedAtMs: 0, prompt: spec.prompt, durationSec: spec.durationSec,
+          aspectRatio: spec.aspectRatio, fps: spec.fps, shotCount: 1, policyChecked: false,
+        },
+      };
+    },
+    async pollJob() { throw new VideoProviderHttpError('boom', 500); },
+  });
+  const budget = new BudgetLimiter({ maxCost: 10 });
+  await assert.rejects(
+    () => generateVideo(baseSpec({ durationSec: 5 }), { pollIntervalMs: 1 }, {
+      provider, budgetLimiter: budget, sleep: noSleep,
+    }),
+    (err: unknown) => {
+      assert.equal((err as MediaAdapterError).details?.videoCode, 'VIDEO_PROVIDER_ERROR');
+      return true;
+    },
+  );
+  assert.equal(budget.getUsed(), 0, '실패 시 예산이 환불되어 used=0 이어야 함');
+});
+
+test('V7c-2. maxPollAttempts 초과 시에도 BudgetLimiter 가 환불된다', async () => {
+  const provider = stubProvider({
+    id: 'runway',
+    costPerSecond: () => 0.2,
+    async createJob(spec) {
+      return {
+        id: 'x', status: 'rendering', progress: 0.2, provider: 'runway',
+        costEstimate: spec.durationSec * 0.2,
+        metadata: {
+          createdAtMs: 0, updatedAtMs: 0, prompt: spec.prompt, durationSec: spec.durationSec,
+          aspectRatio: spec.aspectRatio, fps: spec.fps, shotCount: 1, policyChecked: false,
+        },
+      };
+    },
+    async pollJob(id) {
+      return {
+        id, status: 'rendering', progress: 0.3, provider: 'runway', costEstimate: 0,
+        metadata: {
+          createdAtMs: 0, updatedAtMs: 0, prompt: '', durationSec: 4, aspectRatio: '16:9', fps: 24,
+          shotCount: 1, policyChecked: false,
+        },
+      };
+    },
+  });
+  const budget = new BudgetLimiter({ maxCost: 10 });
+  await assert.rejects(
+    () => generateVideo(baseSpec({ durationSec: 4 }), { maxPollAttempts: 2, pollIntervalMs: 1 }, {
+      provider, budgetLimiter: budget, sleep: noSleep,
+    }),
+    (err: unknown) => {
+      assert.equal((err as MediaAdapterError).details?.videoCode, 'VIDEO_RENDER_ERROR');
+      return true;
+    },
+  );
+  assert.equal(budget.getUsed(), 0, 'maxAttempts 초과 시 환불되어 used=0');
+});
+
+test('V7c-3. 호출자 abort 시에도 BudgetLimiter 가 환불된다', async () => {
+  const ac = new AbortController();
+  const provider = stubProvider({
+    id: 'pika',
+    costPerSecond: () => 0.05,
+    async createJob(spec) {
+      return {
+        id: 'c', status: 'rendering', progress: 0.1, provider: 'pika',
+        costEstimate: spec.durationSec * 0.05,
+        metadata: {
+          createdAtMs: 0, updatedAtMs: 0, prompt: spec.prompt, durationSec: spec.durationSec,
+          aspectRatio: spec.aspectRatio, fps: spec.fps, shotCount: 1, policyChecked: false,
+        },
+      };
+    },
+    async pollJob(id) {
+      return {
+        id, status: 'rendering', progress: 0.5, provider: 'pika', costEstimate: 0,
+        metadata: {
+          createdAtMs: 0, updatedAtMs: 0, prompt: '', durationSec: 4, aspectRatio: '16:9', fps: 24,
+          shotCount: 1, policyChecked: false,
+        },
+      };
+    },
+  });
+  const budget = new BudgetLimiter({ maxCost: 10 });
+  const p = generateVideo(
+    baseSpec({ durationSec: 4 }),
+    { signal: ac.signal, pollIntervalMs: 5, maxPollAttempts: 100 },
+    { provider, budgetLimiter: budget, sleep: noSleep },
+  );
+  queueMicrotask(() => ac.abort());
+  await assert.rejects(p, (err: unknown) => {
+    assert.equal((err as MediaAdapterError).code, 'ABORTED');
+    return true;
+  });
+  assert.equal(budget.getUsed(), 0, 'abort 시 환불되어 used=0');
+});
+
+test('V7c-4. 공급자 canceled 응답은 ABORTED 로 표면화되고 예산 환불', async () => {
+  const provider = stubProvider({
+    id: 'runway',
+    costPerSecond: () => 0.07,
+    async createJob(spec) {
+      return {
+        id: 'x', status: 'rendering', progress: 0.1, provider: 'runway',
+        costEstimate: spec.durationSec * 0.07,
+        metadata: {
+          createdAtMs: 0, updatedAtMs: 0, prompt: spec.prompt, durationSec: spec.durationSec,
+          aspectRatio: spec.aspectRatio, fps: spec.fps, shotCount: 1, policyChecked: false,
+        },
+      };
+    },
+    async pollJob(id) {
+      return {
+        id, status: 'canceled', progress: 0, provider: 'runway', costEstimate: 0,
+        metadata: {
+          createdAtMs: 0, updatedAtMs: 0, prompt: '', durationSec: 4, aspectRatio: '16:9', fps: 24,
+          shotCount: 1, policyChecked: false,
+        },
+      };
+    },
+  });
+  const budget = new BudgetLimiter({ maxCost: 10 });
+  await assert.rejects(
+    () => generateVideo(baseSpec({ durationSec: 3 }), { pollIntervalMs: 1 }, {
+      provider, budgetLimiter: budget, sleep: noSleep,
+    }),
+    (err: unknown) => {
+      assert.equal((err as MediaAdapterError).code, 'ABORTED');
+      return true;
+    },
+  );
+  assert.equal(budget.getUsed(), 0, 'canceled 응답 시 환불되어 used=0');
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 // V8. composeStoryboard
 // ────────────────────────────────────────────────────────────────────────────
 
