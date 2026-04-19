@@ -189,6 +189,41 @@
   --shared-goal-modal-counter-fg: rgba(255, 255, 255, 0.55);
   --shared-goal-modal-counter-error-fg: var(--shared-goal-modal-error-strip);
 
+  /* ── 멀티미디어 자산 카드(#c0ba95a1) · CollabTimeline · DirectivePrompt 공용 ──
+   * 설계 의도:
+   *   1) 4종 MediaKind(video/pdf/pptx/image) 를 "서로 겹치지 않는 hue" 로 구분하되,
+   *      CollabTimeline 의 HANDOFF 상태 tone 과도 부딪히지 않도록 색역을 고른다.
+   *        video   = indigo 계열(HANDOFF open 의 중성 회색과 확연히 분리)
+   *        pdf     = amber 계열(SharedGoalModal 의 editing/경고 amber 숫자와 일치 → 축 연속성)
+   *        pptx    = fuchsia 계열(태스크 경계 커밋 per-goal 의 violet 과 인접하지만
+   *                              명도를 한 단계 올려 육안 분리 가능)
+   *        image   = teal 계열(shared-goal-modal-field-focus 의 cyan 과 같은 계열이라
+   *                            "정보/기본" 의미가 이어진다)
+   *   2) `thumb-bg` 는 실제 썸네일이 로드되기 전의 회색 플레이스홀더 — 사이즈만 잡아
+   *      레이아웃 점프(CLS) 를 막는다. ClaudeTokenUsage 배너가 overlap 해도 이 블록이
+   *      시각적 "빈칸" 으로 남아 배너의 read-only 메시지가 읽히도록 의도.
+   *   3) border·strip 은 2px 의 좌측 스트립 + 1px 테두리 공용 변수로 분리해 색약 사용자가
+   *      "형태만으로" kind 를 식별할 수 있도록 유지(스트립 굵기 차이 없음).
+   */
+  --media-asset-surface-bg: rgba(0, 0, 0, 0.45);
+  --media-asset-surface-border: var(--pixel-border);
+  --media-asset-thumb-bg: rgba(255, 255, 255, 0.06);
+  --media-asset-thumb-border: rgba(255, 255, 255, 0.18);
+  --media-asset-name-fg: rgba(255, 255, 255, 0.92);
+  --media-asset-meta-fg: rgba(255, 255, 255, 0.55);
+  --media-asset-download-fg: var(--pixel-accent);
+  --media-asset-download-border: rgba(0, 210, 255, 0.45);
+  --media-asset-regenerate-fg: #fbbf24;
+  --media-asset-regenerate-border: rgba(251, 191, 36, 0.45);
+  /* readOnlyMode === true 일 때 regenerate 버튼에 덧씌우는 톤. focus-ring 은 유지해
+     키보드 사용자가 "비활성화됐지만 존재한다" 를 인지할 수 있게 한다. */
+  --media-asset-regenerate-disabled-fg: rgba(251, 191, 36, 0.35);
+  --media-asset-regenerate-disabled-border: rgba(251, 191, 36, 0.18);
+  --media-asset-video-strip:   #818cf8; /* indigo-400 */
+  --media-asset-pdf-strip:     #fbbf24; /* amber-400 */
+  --media-asset-pptx-strip:    #e879f9; /* fuchsia-400 */
+  --media-asset-image-strip:   #5eead4; /* teal-300 */
+
   /* ── ProjectSettingsPanel · 프로젝트 관리 옵션 패널 디자인 토큰 (2026-04-18) ─
    * 대상: src/components/ProjectSettingsPanel.tsx (신규) — 상세 페이지의
    * 우측 사이드바(≥1280px) 또는 탭(<1280px) 으로 편입.
@@ -360,6 +395,55 @@
   --git-alert-not-triggered-fg: #fde68a;
   --git-alert-not-triggered-icon: #facc15;
 
+  /* ── GitAutomationPanel · 브랜치 전략 선택 UI 로딩/스켈레톤 토큰 (2026-04-19) ─
+   * 대상: src/components/GitAutomationPanel.tsx — `initial` prop 이 비동기로
+   * 도착하는 동안 브랜치 전략 라디오 fieldset 자리를 가리는 스켈레톤과 "설정을
+   * 불러오는 중…" 보조 배지 전용. 시안 문서: tests/git-automation-loading-mockup.md
+   *
+   * 설계 의도:
+   *   1) amber 기반 `--git-alert-not-triggered-*` 와 의도적으로 다른 slate-blue
+   *      계열을 썼다. "경고/주의" 가 아니라 "중립 · 준비중" 이라는 의미 차이를
+   *      색 단계에서 드러내 amber 재사용 시의 "로드 지연이 곧 경고" 오독을 방지.
+   *   2) shimmer(1.4s) / fade-in(0.18s) 는 사람 지각의 "즉시" 한계(≈250ms) 안에
+   *      들어오도록 합산 0.22s 이내로 맞춘다. prefers-reduced-motion 에서는 모두
+   *      중단되고 정적 교체로 대체된다(관련 media-query 는 후속 컴포넌트 PR 에서).
+   *   3) focus-ring 은 스켈레톤 래퍼와 실제 라디오가 동일 토큰을 참조하도록
+   *      별도 alias 를 둔다. 로드 완료 시 포커스가 스켈레톤 → 라디오로 이관되어도
+   *      테두리 굵기·오프셋·색이 동일해 시각적 연속성이 유지된다.
+   *   4) error-* 한 짝은 본 시안의 주 범위는 아니나, 로드 실패 시 기본값 라디오
+   *      위에 얹는 배너용 자리로 함께 잠근다(토큰 중복 정의 방지).
+   *
+   * 대비(패널 배경 --pixel-card #16213e 기준):
+   *   hint-fg(#bfd4ff) on card         7.6:1 · AAA
+   *   skeleton-highlight on skeleton-bg 비의미 장식(순수 시각적 리듬) — 대비 비요구
+   *   error-fg(#fecaca) on error-bg    9.4:1 · AAA
+   *   focus-ring (accent cyan)         4.9:1 · AA 본문 — 기존 --pixel-accent 와 동치
+   *
+   * 색각 이상 대응: shimmer 애니메이션은 위치 변화(좌→우) 로도 인코딩되어 색
+   *   단독에 의존하지 않는다. 오류 배너는 red 색 + 아이콘(⚠) + 한국어 라벨 3중 표기.
+   */
+  --git-automation-loading-skeleton-bg: rgba(255, 255, 255, 0.06);
+  --git-automation-loading-skeleton-highlight: rgba(127, 212, 255, 0.18);
+  --git-automation-loading-skeleton-radius: 4px;
+  --git-automation-loading-shimmer-duration: 1.4s;
+
+  --git-automation-loading-hint-fg: #bfd4ff;
+  --git-automation-loading-hint-bg: rgba(127, 212, 255, 0.08);
+  --git-automation-loading-hint-border: rgba(127, 212, 255, 0.28);
+
+  --git-automation-loading-fade-duration: 0.18s;
+  --git-automation-loading-fade-out-duration: 0.12s;
+  --git-automation-loading-fade-translate: 2px;
+
+  --git-automation-loading-focus-ring: var(--pixel-accent);
+  --git-automation-loading-focus-ring-offset: 2px;
+  --git-automation-loading-focus-ring-width: 2px;
+
+  --git-automation-loading-error-bg: rgba(248, 113, 113, 0.14);
+  --git-automation-loading-error-border: rgba(248, 113, 113, 0.45);
+  --git-automation-loading-error-fg: #fecaca;
+  --git-automation-loading-error-icon: #fca5a5;
+
   /* ── GraphResetButton · '그래프 초기화' 버튼 디자인 토큰 (2026-04-19) ────────
    * 대상: src/App.tsx 좌측 사이드바 하단 툴바의 '에이전트 고용'(accent=cyan)과
    * '긴급중단'(red=#c23b4a) 사이에 위치하는 신규 버튼. 시안 문서:
@@ -500,6 +584,794 @@
   --token-usage-reset-hover-fg: #ffffff;
   --token-usage-reset-hover-bg: rgba(255, 255, 255, 0.06);
   --token-usage-reset-border: rgba(255, 255, 255, 0.22);
+
+  /* ── EmptyState · 빈 상태 일관 표기 디자인 토큰 (2026-04-19, Designer) ────────
+   * 대상: Joker 의 UX 정비 체크리스트(docs/ui-audit-2026-04-19.md — 합류 대기)
+   * 내 "빈 상태 가이드" 적용 지점. 프로젝트 전역에서 "아직 아무것도 없습니다"
+   * 표기가 세 장소(EmptyProjectPlaceholder, ClaudeTokenUsage 의 '호출 없음',
+   * AgentStatusPanel 의 '에이전트 없음', SharedGoalForm 의 'empty-create')
+   * 에서 각자 다른 톤으로 그려지던 불일치를 한 팔레트로 묶는다.
+   * 시안 문서: docs/ux-cleanup-visual-2026-04-19.md §4–§5
+   *
+   * 설계 의도:
+   *   1) **빈 상태는 "문제" 가 아니라 "초대"** 다. 배경을 어둡게 깔지 않고, 테두리도
+   *      점선 cyan 계열(accent 10%) 로 약하게 — 사용자가 "이건 실패가 아니다" 를
+   *      한눈에 느끼도록 한다.
+   *   2) **에러와 정적 의미 구분** — 빈 상태는 cyan 톤, 에러는 red 톤. 절대 같은
+   *      색 팔레트를 공유하지 않는다(색맹 대응 시 아이콘이 단서이지만, 기본 색도
+   *      의미를 가진다).
+   *   3) **--token-usage-* 와 네이밍 규칙 일치** — `{카테고리}-{변이}-{역할}-{부분}` 구조.
+   *      (예) `--empty-state-cta-border` ≈ `--token-usage-reset-border` 와 같은 층.
+   *   4) **CTA(주도적 동작 버튼) 는 secondary 톤** — 빈 상태에서 튀는 primary 버튼을
+   *      쓰면 "이건 꼭 해야 하는 일" 이라는 압박을 준다. 테두리만 남긴 secondary 로
+   *      두고, 정말 필요한 곳에서만 primary 로 승격.
+   *
+   * 대비(--pixel-card #16213e 기준):
+   *   title-fg(white/85%)      12.3:1 AAA
+   *   subtle-fg(white/60%)      7.9:1 AAA
+   *   icon(#7fd4ff)             8.1:1 AAA
+   *   cta-fg(white/80%)        11.9:1 AAA
+   *
+   * 색각 이상 대응: 모든 빈 상태는 아이콘(∅ · 📭 · 🫥) + 한국어 카피 + 점선 테두리
+   *   3중 인코딩. 에러 상태와 아이콘 모양을 의도적으로 분리(◯ 계열 vs △ 계열).
+   */
+  --empty-state-bg: transparent;
+  --empty-state-border: rgba(127, 212, 255, 0.22);
+  --empty-state-border-style: dashed;
+  --empty-state-title-fg: rgba(255, 255, 255, 0.85);
+  --empty-state-subtle-fg: rgba(255, 255, 255, 0.60);
+  --empty-state-icon-fg: #7fd4ff;
+  --empty-state-icon-halo: rgba(127, 212, 255, 0.12);
+  --empty-state-cta-border: rgba(127, 212, 255, 0.45);
+  --empty-state-cta-fg: rgba(255, 255, 255, 0.85);
+  --empty-state-cta-hover-bg: rgba(127, 212, 255, 0.08);
+  --empty-state-radius: 8px;
+  --empty-state-padding: 20px 24px;
+  --empty-state-min-height: 160px;
+
+  /* ── ErrorState · 에러 상태 일관 표기 디자인 토큰 (2026-04-19, Designer) ──────
+   * 빈 상태와 **명확히 다른 색·모양** 을 가져야 "실패 ≠ 비어 있음" 이 시각적으로
+   * 드러난다. `--git-alert-failure-*` / `--git-stage-failed-*` 와 숫자를 맞춰
+   * "빨강 = 조치 필요" 규칙을 프로젝트 전체에 일관 적용.
+   *
+   * 설계 의도:
+   *   1) **에러는 "조치 요청"** — primary 톤의 [재시도] 버튼이 CTA. 빈 상태와 달리
+   *      secondary 가 아니라 primary 로 승격.
+   *   2) **원인·해결책·재시도 3단 구조** — 제목, 한 줄 원인 카피, 우측 재시도.
+   *      Joker 체크리스트 B-08 "토큰 위젯 0 플리커" 같은 일시 오류 회귀도 이 3단
+   *      구조를 따르게 해 사용자 학습 비용을 낮춘다.
+   *   3) **warning 과 다름** — warning 은 "값이 위험해지고 있음"(상단바 빨강 펄스),
+   *      error 는 "작업이 실패했음"(패널/행 빨강 박스). 두 경고 축을 분리 유지.
+   *
+   * 대비(--pixel-card 기준):
+   *   title-fg(#fecaca)         9.4:1 AAA
+   *   subtle-fg(#fca5a5)        6.8:1 AAA
+   *   icon(#f87171)             5.9:1 AA 본문
+   *   retry-fg(#052e1b) on retry-bg(#f87171) 6.1:1 AA 본문
+   *
+   * 색각 이상 대응: 아이콘(⚠ · △), "오류" 한국어 명시, 좌측 4px 수직 스트립까지
+   *   색 아닌 형태로도 "에러" 를 전달.
+   */
+  --error-state-bg: rgba(248, 113, 113, 0.08);
+  --error-state-border: rgba(248, 113, 113, 0.45);
+  --error-state-border-style: solid;
+  --error-state-strip: #f87171;
+  --error-state-title-fg: #fecaca;
+  --error-state-subtle-fg: #fca5a5;
+  --error-state-icon-fg: #f87171;
+  --error-state-icon-halo: rgba(248, 113, 113, 0.18);
+  --error-state-retry-bg: #f87171;
+  --error-state-retry-border: #f87171;
+  --error-state-retry-fg: #2a0a0a;
+  --error-state-retry-hover-bg: #fca5a5;
+  --error-state-retry-disabled-bg: rgba(248, 113, 113, 0.25);
+  --error-state-secondary-fg: rgba(255, 255, 255, 0.70);
+  --error-state-secondary-border: rgba(255, 255, 255, 0.22);
+  --error-state-radius: 8px;
+  --error-state-padding: 16px 20px;
+  --error-state-strip-width: 4px;
+
+  /* ── FocusRing · 키보드 포커스 일관 시각 토큰 (2026-04-19, Designer) ──────────
+   * 대상: Joker 의 키보드 접근성·포커스 관리 정비(`docs/focus-ring-visual-2026-04-19.md`)
+   * 에서 교체될 모든 `:focus-visible` 스타일. 현재 저장소에는
+   *   • `outline: 2px solid var(--pixel-accent)` (9개 위치)
+   *   • `box-shadow: 0 0 0 2px var(--pixel-accent)` 단일 링
+   *   • `box-shadow: 0 0 0 2px accent, 0 0 0 4px rgba(248,113,113,0.3)` 더블 링
+   *   • `outline: 2px dashed var(--pixel-accent)` (log 탭)
+   * 네 가지 표기가 혼재해 "어떤 색/굵기/모양이 표준인가" 를 팀이 판별하기 어렵다.
+   * 본 토큰은 네 가지를 **단일 규약** 으로 수렴시킨다.
+   *
+   * 설계 의도:
+   *   1) **`:focus-visible` 전용** — 마우스 클릭으로 생기는 `:focus` 잔상은 허용하지
+   *      않는다. 브라우저 기본 outline 은 항상 `outline: none` 으로 제거하고,
+   *      본 토큰 기반 `box-shadow` 링으로 대체한다(기존 .code-graph-missing-node
+   *      에서 채택한 패턴과 동일).
+   *   2) **이중 링(halo 포함) 이 기본** — 첫 링은 `--focus-ring-color` (cyan accent),
+   *      배경과의 분리는 `--focus-ring-offset-color` (배경색 틴트) 로 1~2px 간격.
+   *      사용자가 다크 배경 위 어떤 컨트롤이어도 "여기에 포커스가 있다" 를 잃지
+   *      않게 한다. 단순 `outline` 은 둥근 모서리에서 잘려 보이는 회귀가 있어
+   *      `box-shadow` 로 통일.
+   *   3) **라이트/다크 모두** — 프로젝트 기본은 다크지만, 흰 배경 위에 놓이는 에디터
+   *      임베드·PDF 뷰어 등 후속 모듈을 위해 `--focus-ring-color-on-light` 도
+   *      선-도입. 내부 컴포넌트는 `@media (prefers-color-scheme: light)` 또는
+   *      `[data-theme="light"]` 에서 자동 전환되게 한다.
+   *   4) **의미 변이** — 기본(accent), 위험(danger=red, 긴급중단/취소), 성공(emerald,
+   *      저장 완료 직후 focus), 경고(amber, caution 단계) 4종. 모두 토큰 이름만
+   *      바꾸면 같은 규격으로 동작.
+   *   5) **기존 색과 숫자 일치** — `--focus-ring-color` = `--pixel-accent`.
+   *      `--focus-ring-color-danger` = `--error-state-strip` = `--token-usage-warning-border`.
+   *      "같은 의미 = 같은 색" 의 프로젝트 전역 규약 유지.
+   *
+   * 대비(어두운 배경 --pixel-card #16213e 기준):
+   *   color(#00d2ff)        7.9:1 AAA — WCAG 2.2 비텍스트 대비 3:1 여유 초과
+   *   color-danger(#f87171) 5.9:1 AA 본문
+   *   color-success(#34d399) 5.9:1 AA 본문
+   *   color-caution(#fbbf24) 8.7:1 AAA
+   *
+   * 색각 이상 대응: 의미 변이 4종은 색 + 컨텍스트(버튼 자체의 의미) + 두께(위험·경고는
+   *   halo 를 1px 더 두껍게) 3중 인코딩. 순수 색 단서만으로 구분하지 않는다.
+   *
+   * 사용 규칙(모든 인터랙티브 컴포넌트 공통):
+   *   .anything:focus-visible {
+   *     outline: none;
+   *     box-shadow:
+   *       0 0 0 var(--focus-ring-offset) var(--focus-ring-offset-color),
+   *       0 0 0 calc(var(--focus-ring-offset) + var(--focus-ring-width))
+   *             var(--focus-ring-color);
+   *   }
+   * 위험 컨텍스트(예: 긴급중단)는 `--focus-ring-color` 만 `--focus-ring-color-danger`
+   * 로 교체. 그 외 모든 규격(두께·오프셋·라운드) 은 동일 유지.
+   */
+
+  /* ▸ 기본 규격 */
+  --focus-ring-color: var(--pixel-accent);            /* = #00d2ff */
+  --focus-ring-color-on-light: #0284c7;               /* 라이트 배경용 대비 상향 */
+  --focus-ring-color-danger: #f87171;
+  --focus-ring-color-success: #34d399;
+  --focus-ring-color-caution: #fbbf24;
+  /* ▸ on-light variant 보완 (2026-04-19 최종 QA 발견 건, #6f3f2020).
+   *   danger/success/caution 의 on-light 가 누락되면 라이트 테마에서 대비가
+   *   떨어져 AA 본문 기준 4.5:1 을 하회한다. 아래 값은 흰 배경(#ffffff) 기준
+   *   각각 6.1:1, 4.6:1, 4.9:1 을 만족하도록 톤을 한 단계 어둡게 재매핑한다. */
+  --focus-ring-color-danger-on-light: #dc2626;        /* red-600 */
+  --focus-ring-color-success-on-light: #059669;       /* emerald-600 */
+  --focus-ring-color-caution-on-light: #b45309;       /* amber-700 */
+
+  /* ▸ 오프셋 배경(= 컨트롤 주변 1~2px 투명 틴트) */
+  --focus-ring-offset: 2px;
+  --focus-ring-offset-color: rgba(22, 33, 62, 0.95);  /* --pixel-card 에 맞춘 dark 틴트 */
+  --focus-ring-offset-color-on-light: rgba(255, 255, 255, 0.98);
+
+  /* ▸ 두께 — 일반/두꺼움(모달·위험 CTA 에서 한 단계 승격) */
+  --focus-ring-width: 2px;
+  --focus-ring-width-thick: 3px;
+
+  /* ▸ 둥근 정도 — 컨트롤 자체의 border-radius 보다 살짝 큰 값 */
+  --focus-ring-radius-sm: 4px;
+  --focus-ring-radius-md: 6px;
+  --focus-ring-radius-lg: 10px;
+
+  /* ▸ halo(외곽 2차 링) — 위험 컨텍스트나 warning 단계에서 선택적 사용 */
+  --focus-ring-halo-danger: rgba(248, 113, 113, 0.30);
+  --focus-ring-halo-caution: rgba(251, 191, 36, 0.28);
+  --focus-ring-halo-success: rgba(52, 211, 153, 0.28);
+
+  /* ▸ 전이(transition) — 포커스 in/out 시 0ms~120ms 짧은 페이드.
+   *   prefers-reduced-motion 존중은 아래 .focus-ring-* 규칙 스코프에서 처리. */
+  --focus-ring-transition: box-shadow 120ms ease-out;
+
+  /* ── Toast · 토스트/알림 일관 시각 토큰 (2026-04-19, Designer) ────────────────
+   * 대상: Joker 의 반응형 레이아웃 점검·정리와 맞물린 "토스트/알림 일관화" 시안.
+   *   시안 문서: docs/toast-notification-visual-2026-04-19.md
+   *   공용 컴포넌트(도입 예정): src/components/Toast.tsx · ToastContainer.tsx
+   *
+   * 설계 의도:
+   *   1) **분산된 피드백을 한 계층으로 수렴** — 저장소 전역에서 `alert()` · 인라인
+   *      배너 · `aria-live` 영역이 각자 다른 모양을 가졌다. 본 토큰은 4 변이
+   *      (success · info · warning · error) 를 한 팔레트로 묶어, 어떤 컴포넌트가
+   *      토스트를 띄우더라도 시각·지속 시간·닫기 버튼 모양이 동일하게 나오도록
+   *      제약한다.
+   *   2) **기존 상태 팔레트와 숫자 일치** — `--toast-success-*` ≈ `--git-stage-success-*`
+   *      계열, `--toast-error-*` ≈ `--error-state-*` ≈ `--token-usage-warning-*` ≈
+   *      `--git-stage-failed-*` 계열. "같은 의미 = 같은 색" 을 프로젝트 전역 규약
+   *      으로 유지한다.
+   *   3) **z-index 계층 고정** — 토스트는 모달 위(기본 1000, 에러 variant 만 1100
+   *      으로 1단계 승격). 상단바(30) · 툴팁(50) · 모달 backdrop(100) · 모달
+   *      dialog(110) 보다 항상 위.
+   *   4) **안전 영역(safe-area)** — 상단바 오른쪽의 `ClaudeTokenUsage` 배지와
+   *      겹치지 않도록 기본 앵커는 우상단. `--toast-safe-top` 72px (상단바 56 +
+   *      배지 여유 16), `--toast-safe-right` 16px. 반응형 축약 모드(<720px) 에서는
+   *      `--toast-safe-top-compact` 88px 로 늘려 축약된 배지가 세로 2줄로 접혀도
+   *      가리지 않는다.
+   *   5) **지속 시간 상수** — success 3s · info 4s · warning 6s · error 0(무기한).
+   *      모두 pause-on-hover 기본.
+   *
+   * 대비(--pixel-card #16213e 기준, 토스트가 상단바 위에 떠 있을 때):
+   *   success-icon(#34d399)  5.9:1 AA 본문
+   *   info-icon(#7fd4ff)     8.1:1 AAA
+   *   warning-icon(#fbbf24)  8.7:1 AAA
+   *   error-icon(#f87171)    5.9:1 AA 본문
+   *
+   * 색각 이상 대응: 4 변이는 색 + 아이콘(✓ · ℹ · ⚠ · ⛔) + 좌측 4px 수직 스트립
+   *   3중 인코딩.
+   */
+
+  /* ▸ 공통 규격 */
+  --toast-radius: 8px;
+  --toast-width-min: 260px;
+  --toast-width-max: 420px;
+  --toast-padding: 12px 14px;
+  --toast-gap: 10px;                            /* 아이콘↔본문 간격 */
+  --toast-stack-gap: 8px;                       /* 여러 토스트 세로 간격 */
+  --toast-shadow: 0 14px 36px rgba(0, 0, 0, 0.50);
+  --toast-strip-width: 4px;
+  --toast-z-index: 1000;
+  --toast-z-index-error: 1100;                  /* 에러는 모달 확정 다이얼로그와 나란히 */
+  --toast-enter-duration: 180ms;
+  --toast-exit-duration: 140ms;
+
+  /* ▸ 앵커(기본 우상단) · 반응형 축약 시 오프셋 확장 */
+  --toast-safe-top: 72px;                       /* 상단바 56 + 배지 여유 16 */
+  --toast-safe-top-compact: 88px;               /* <720px 축약 모드: 배지 2줄 대응 */
+  --toast-safe-right: 16px;
+  --toast-safe-right-compact: 12px;
+  --toast-safe-bottom: 16px;                    /* 하단 앵커 variant 사용 시 */
+
+  /* ▸ 공통 텍스트 */
+  --toast-title-fg: #ffffff;
+  --toast-subtle-fg: rgba(255, 255, 255, 0.75);
+  --toast-close-fg: rgba(255, 255, 255, 0.60);
+  --toast-close-hover-fg: #ffffff;
+  --toast-close-hover-bg: rgba(255, 255, 255, 0.08);
+
+  /* ▸ success — 저장/완료/전송 성공 */
+  --toast-success-bg: #0f2a1e;
+  --toast-success-border: rgba(52, 211, 153, 0.45);
+  --toast-success-strip: #34d399;
+  --toast-success-icon-fg: #34d399;
+  --toast-success-title-fg: #bef4dd;
+  --toast-success-duration: 3000ms;
+
+  /* ▸ info — 참고·진행 중 알림(중립) */
+  --toast-info-bg: #0f2133;
+  --toast-info-border: rgba(127, 212, 255, 0.45);
+  --toast-info-strip: #7fd4ff;
+  --toast-info-icon-fg: #7fd4ff;
+  --toast-info-title-fg: #d8f1ff;
+  --toast-info-duration: 4000ms;
+
+  /* ▸ warning — 임계 근접·주의 */
+  --toast-warning-bg: #2b2410;
+  --toast-warning-border: rgba(251, 191, 36, 0.50);
+  --toast-warning-strip: #fbbf24;
+  --toast-warning-icon-fg: #fbbf24;
+  --toast-warning-title-fg: #fde68a;
+  --toast-warning-duration: 6000ms;
+
+  /* ▸ error — 실패·장애. 자동 닫힘 없음. */
+  --toast-error-bg: #2a0f14;
+  --toast-error-border: rgba(248, 113, 113, 0.50);
+  --toast-error-strip: #f87171;
+  --toast-error-icon-fg: #f87171;
+  --toast-error-title-fg: #fecaca;
+  --toast-error-duration: 0;                    /* 0 = 무기한. 사용자가 ✕ 클릭 시 닫힘 */
+  --toast-error-retry-bg: #f87171;
+  --toast-error-retry-fg: #2a0a0a;
+  --toast-error-retry-border: #f87171;
+
+  /* ── MediaAttachmentPanel · 멀티미디어 업로드·미리보기 디자인 토큰 (2026-04-19) ─────
+   * 대상: src/components/MediaAttachmentPanel.tsx (Joker 합류 예정) — DirectivePrompt
+   * 의 dropzone/attachments 를 분리·승격해 PDF 썸네일·PPT 슬라이드·영상 생성 진행을
+   * 표현한다. 시안 문서: tests/media-attachment-panel-mockup.md
+   *
+   * 설계 의도:
+   *   1) **미리보기 우선** — 파일명·크기가 아니라 kind 별 실물 썸네일이 주인공. 타일
+   *      너비/라디우스/테두리를 단일 토큰으로 잠가 "그리드에 몇 개가 들어가는가" 를
+   *      디자인이 아닌 토큰으로 통제.
+   *   2) **숫자 공유로 규약 통일** — border-done/error 는 각각 --shared-goal-border-saved
+   *      (#34d399) · --error-state-strip (#f87171) 과 같은 숫자. "같은 의미 = 같은 색" 을
+   *      DirectivePrompt · SharedGoalForm · ErrorState 전반에 관철.
+   *   3) **kind 배지 5종 색상 고도화** — PDF(주홍) · PPT(오렌지) · 이미지(cyan) · 영상(violet) ·
+   *      텍스트(green). 한글 3~4자 라벨 병기 + 우하단 메타(페이지/슬라이드 번호) 로 색에만
+   *      의존하지 않음(색각 이상 대응). 문서 계열(PDF/PPT) 은 hue 만 한 단계 이동시켜
+   *      "문서" 공통 영역을 유지.
+   *   4) **영상 생성은 sky 계열** — 업로드 cyan 과 명확히 다른 hue 로 "업로드 ≠ 생성" 구분.
+   *      62% 이상일 때 --gauge-fill-generating-high 로 밝기 +6% 상승, "완료가 가까워온다" 의
+   *      정적 시각 단서(애니메이션 없이 색으로만).
+   *
+   * 상태 4단계(queued/uploading/done/error):
+   *   - 테두리 1px + 좌측 스트립 없음(shared-goal 패턴과 달리 "타일 자체가 하나의 단위")
+   *   - 게이지 색 1개 + 메타 아이콘(○↑✓⚠) 3중 인코딩
+   *
+   * 대비 (패널 배경 --pixel-card #16213e 기준):
+   *   --media-attach-tile-border-done(#34d399)       5.9:1 · AA 본문
+   *   --media-attach-tile-border-error(#f87171)      5.9:1 · AA 본문
+   *   --media-attach-kind-video-fg(#ede9fe) on video-bg(#6d28d9)  9.1:1 · AAA
+   *   --media-attach-kind-pdf-fg(#ffe5cc) on pdf-bg(#b54708)      6.2:1 · AA 본문
+   *   --media-attach-gauge-fill-generating(#60a5fa)  4.9:1 · AA 본문
+   */
+
+  /* ▸ 타일 기본 */
+  --media-attach-tile-width: 184px;
+  --media-attach-tile-radius: 8px;
+  --media-attach-tile-border: rgba(255, 255, 255, 0.18);
+  --media-attach-tile-border-active: #7fd4ff;          /* 업로드 중 cyan */
+  --media-attach-tile-border-done: #34d399;            /* 완료 emerald — shared-goal-border-saved 와 일치 */
+  --media-attach-tile-border-error: #f87171;           /* 실패 red — error-state-strip 과 일치 */
+  --media-attach-tile-hover-glow: rgba(127, 212, 255, 0.35);
+  --media-attach-tile-bg: rgba(0, 0, 0, 0.28);         /* 썸네일 뒤 바탕(token-usage-tooltip-row-bg 와 같은 층) */
+
+  /* ▸ kind 배지 5종 — 색 + 라벨 + 메타 3중 인코딩의 "색" 부분 */
+  --media-attach-kind-pdf-bg: #b54708;                 /* orange-700, 진한 주홍(문서 무게감) */
+  --media-attach-kind-pdf-fg: #ffe5cc;
+  --media-attach-kind-ppt-bg: #d97706;                 /* orange-600, PDF 보다 한 단계 밝은 오렌지(발표 활기) */
+  --media-attach-kind-ppt-fg: #fff4e0;
+  --media-attach-kind-image-bg: #0e7490;               /* cyan-700 */
+  --media-attach-kind-image-fg: #cffafe;
+  --media-attach-kind-video-bg: #6d28d9;               /* violet-700 — "움직이는 결과물" */
+  --media-attach-kind-video-fg: #ede9fe;
+  --media-attach-kind-text-bg: #166534;                /* green-800 */
+  --media-attach-kind-text-fg: #dcfce7;
+
+  /* ▸ 드롭존 4상태 — idle-empty/idle-has/drag-over/drag-reject */
+  --media-attach-dropzone-min-height: 160px;
+  --media-attach-dropzone-radius: 10px;
+  --media-attach-dropzone-border: rgba(127, 212, 255, 0.35);         /* idle-empty 점선 cyan(= empty-state-border 와 같은 층) */
+  --media-attach-dropzone-border-active: #7fd4ff;                    /* drag-over 실선 cyan(= shared-goal-modal-field-focus) */
+  --media-attach-dropzone-border-reject: #fbbf24;                    /* drag-reject 실선 amber(= shared-goal-modal-field-editing-border) */
+  --media-attach-dropzone-bg: transparent;
+  --media-attach-dropzone-bg-active: rgba(127, 212, 255, 0.08);
+  --media-attach-dropzone-bg-reject: rgba(251, 191, 36, 0.08);
+  --media-attach-dropzone-glow: rgba(127, 212, 255, 0.35);           /* drag-over 내부 inner-glow(box-shadow inset) */
+
+  /* ▸ 게이지(업로드 · 영상 생성 공용) */
+  --media-attach-gauge-height: 4px;
+  --media-attach-gauge-radius: 2px;
+  --media-attach-gauge-track: rgba(255, 255, 255, 0.08);
+  --media-attach-gauge-fill: #7fd4ff;                                /* 업로드 중 cyan */
+  --media-attach-gauge-fill-done: #34d399;                           /* 완료 emerald */
+  --media-attach-gauge-fill-error: #f87171;                          /* 실패 red */
+  --media-attach-gauge-fill-generating: #60a5fa;                     /* 영상 생성 중 sky */
+  --media-attach-gauge-fill-generating-high: #93c5fd;                /* 62% 이상 밝기 +6% */
+  --media-attach-gauge-shimmer-duration: 1.2s;
+
+  /* ▸ 영상 오버레이 */
+  --media-attach-video-overlay-bg: rgba(0, 0, 0, 0.55);
+  --media-attach-video-overlay-fg: #ffffff;
+  --media-attach-video-cancel-fg: rgba(255, 255, 255, 0.80);
+  --media-attach-video-cancel-hover-fg: #f87171;
+
+  /* ── ClaudeTokenFallback · 구독 토큰 만료 대비 폴백 디자인 토큰 (2026-04-19) ────
+   * 대상: src/components/ClaudeTokenUsage.tsx · ToastProvider.tsx · AuthGate.tsx —
+   * 구독 토큰 잔여/만료 시각을 4단계(F1 active / F2 approaching-limit / F3
+   * imminent-expiry / F4 fallback-readonly) 로 표현하는 공용 팔레트.
+   * 시안 문서: tests/token-fallback-states-mockup.md
+   *
+   * 명명 공간 분리 의도:
+   *   기존 --token-usage-* (누적 사용량 severity) 와 본 --token-fallback-* (구독 만료
+   *   축) 은 **독립된 상태 기계** 다. 한 사용자가 "사용량은 caution 인데 구독은 F4
+   *   readonly" 인 교차 상태를 가질 수 있으므로, 네임스페이스를 분리해 두 축을
+   *   동시에 그릴 수 있어야 한다(배지 렌더 우선도는 시안 §2).
+   *
+   * 숫자 공유 — "같은 의미 = 같은 색":
+   *   caution-border = #fbbf24  = --shared-goal-modal-field-editing-border
+   *                             = --token-usage-caution-border
+   *   warning-border = #f87171  = --shared-goal-modal-error-strip
+   *                             = --token-usage-warning-border
+   *   pulse-duration = 1.6s     = --token-usage-warning-pulse-duration
+   *   recover-flash  = #34d399  = --shared-goal-modal-confirm-bg (= 복귀/성공 emerald)
+   *
+   * 회색 실선(readonly): F4 전용 — 다른 단계와 "hue 자체가 없음" 으로 구분. 색각 이상
+   *   사용자도 🔒 아이콘 + "읽기 전용" 카피로 명확히 인지.
+   *
+   * 대비(--pixel-card #16213e 기준):
+   *   caution-fg(#fde68a)       11.0:1 · AAA
+   *   warning-fg(#fecaca)        9.4:1 · AAA
+   *   readonly-fg(white/80%)    11.9:1 · AAA
+   *   readonly-strip(white/45%)  5.7:1 · AA 본문
+   *
+   * 색각 이상 대응: 4단계는 색 + 아이콘(○ / ⚠ / ⚠-pulse / 🔒) + 카피("잔여 22%" ·
+   *   "3시간 남음" · "읽기 전용") 3중 인코딩. readonly 는 색상 없이도 자물쇠
+   *   기호로 명시되므로 색각 이상 환경에서도 오해 없음.
+   */
+
+  /* ▸ F2 approaching-limit (amber) */
+  --token-fallback-caution-border: #fbbf24;
+  --token-fallback-caution-strip: #fbbf24;
+  --token-fallback-caution-bg: rgba(251, 191, 36, 0.10);
+  --token-fallback-caution-fg: #fde68a;
+  --token-fallback-caution-icon: #fbbf24;
+
+  /* ▸ F3 imminent-expiry (red + pulse) */
+  --token-fallback-warning-border: #f87171;
+  --token-fallback-warning-strip: #f87171;
+  --token-fallback-warning-bg: rgba(248, 113, 113, 0.12);
+  --token-fallback-warning-fg: #fecaca;
+  --token-fallback-warning-icon: #fca5a5;
+  --token-fallback-warning-pulse-duration: 1.6s;
+
+  /* ▸ F4 fallback-readonly (회색 실선 + 🔒) */
+  --token-fallback-readonly-border: rgba(255, 255, 255, 0.35);
+  --token-fallback-readonly-strip: rgba(255, 255, 255, 0.45);
+  --token-fallback-readonly-bg: rgba(255, 255, 255, 0.06);
+  --token-fallback-readonly-fg: rgba(255, 255, 255, 0.80);
+  --token-fallback-readonly-icon: rgba(255, 255, 255, 0.75);
+
+  /* ▸ F4 전역 상단 배너(AuthGate 밑) */
+  --token-fallback-banner-height: 40px;
+  --token-fallback-banner-z-index: 29;                                /* 상단바 30 바로 아래 */
+  --token-fallback-banner-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --token-fallback-banner-cta-bg: var(--shared-goal-modal-confirm-bg);
+  --token-fallback-banner-cta-fg: var(--shared-goal-modal-confirm-fg);
+
+  /* ▸ 복귀(강등) 플래시 — F2↓F1, F3↓F2, F4↓F1 공용 */
+  --token-fallback-recover-flash-color: #34d399;
+  --token-fallback-recover-flash-ms: 160ms;
+
+  /* ── F4 영구 배너 · 재로그인 CTA 보강 토큰 (2026-04-19 추가 라운드) ──────────────
+   * 시안 문서: tests/fallback-readonly-banner-mockup.md
+   * 관련 체크리스트: tests/accessibility-audit-checklist.md §3 A2 (배지 레벨 F4 즉시 낭독).
+   *
+   * 설계 의도:
+   *   1) 기존 --token-fallback-readonly-* (5종) 은 "F4 상태 색 계열" 전반으로 사용 중이며
+   *      배지·설정 패널·배너에 공용 소비된다. 본 블록은 그 중 **배너 단일 맥락** 의 미세
+   *      조정 토큰을 서브셋으로 분리해, 배너 쪽만 독립 조정 가능하게 한다(배지는 그대로 유지).
+   *   2) CTA 는 단일 배경 색(emerald) 으로 "조치 가능" 을 색으로도 전달. 배너 배경(회색)
+   *      과 CTA(emerald) 의 색 대비가 "현재 상태 — 행동" 의 시각 언어를 유지한다.
+   *   3) 쓰기 잠금 CSS 규칙은 `html[data-fallback="F4"] [data-writable-guard]` 셀렉터로
+   *      개별 컴포넌트 코드 수정 없이 전역 일괄 적용. opacity 0.53 은 WCAG 비본문 대비
+   *      4.6:1 을 확보하는 하한값(AA 본문 4.5:1 바로 위).
+   *   4) 축소 모션(prefers-reduced-motion: reduce) 경로: enter/exit 의 translateY 는 제거하고
+   *      opacity 120ms 만 남긴다. 본 토큰 블록 하단의 @media 규칙에서 시행.
+   *
+   * 대비(--token-fallback-readonly-bg rgba(255,255,255,0.06) 위):
+   *   --token-fallback-banner-title-fg(white/92%)  13.5:1 · AAA
+   *   --token-fallback-readonly-fg(white/80%)      11.9:1 · AAA
+   *   CTA fg(#052e1b) on CTA bg(#34d399)            6.3:1 · AA 본문
+   *
+   * 색각 이상 대응: 배너 좌측 4px 회색 스트립 + 🔒 아이콘 + "읽기 전용" 카피 3중 인코딩.
+   *   CTA 는 회색 배너 위에 유일한 emerald 면적으로 색각 이상 환경에서도 명도 대비로 식별.
+   */
+
+  /* ▸ 배너 타이포·구조 */
+  --token-fallback-banner-title-fg: rgba(255, 255, 255, 0.92);
+  --token-fallback-banner-title-size: 13px;
+  --token-fallback-banner-title-weight: 700;
+  --token-fallback-banner-subtitle-size: 11px;
+  --token-fallback-banner-gap: 12px;
+  --token-fallback-banner-padding: 8px 16px;
+  --token-fallback-banner-radius: 0;                        /* sticky 배너는 둥근 모서리 없음(경계 명확) */
+  --token-fallback-banner-strip-width: 4px;
+  --token-fallback-banner-height-compact: 56px;             /* ≤ 640px 반응형 2행 */
+
+  /* ▸ CTA 상세 */
+  --token-fallback-banner-cta-padding: 4px 12px;
+  --token-fallback-banner-cta-height: 28px;
+  --token-fallback-banner-cta-radius: 4px;
+  --token-fallback-banner-cta-hover-bg: var(--shared-goal-modal-confirm-hover-bg);
+  --token-fallback-banner-cta-icon-size: 14px;
+  --token-fallback-banner-cta-shortcut-fg: rgba(5, 46, 27, 0.65);   /* confirm-fg 위 2차 위계 */
+
+  /* ▸ 진입·이탈 애니메이션 */
+  --token-fallback-banner-enter-duration: 220ms;
+  --token-fallback-banner-enter-easing: cubic-bezier(0.22, 1, 0.36, 1);
+  --token-fallback-banner-exit-duration: 180ms;
+  --token-fallback-banner-enter-y-amp: -100%;
+  --token-fallback-banner-exit-y-amp: -10%;
+
+  /* ▸ 쓰기 잠금 전역 규칙의 opacity 토큰(§6.4 시안 규약) */
+  --token-fallback-writable-guard-opacity: 0.53;
+
+  /* ── TaskCommitStrategy · 태스크 경계 커밋 설정·타임라인 디자인 토큰 (2026-04-19) ──
+   * 시안 문서: tests/task-commit-strategy-mockup.md
+   * 대상 컴포넌트(신규 예정):
+   *   src/components/TaskCommitStrategyField.tsx   — 3옵션 라디오 그룹(per-task / on-goal-done / manual)
+   *   src/components/CollabTimeline.tsx (확장)     — task-commit · task-commit-queued 두 행 종류 추가
+   *
+   * 명명 공간 분리 의도:
+   *   --task-commit-* 는 "커밋 이벤트 축" 의 단일 진원. SharedGoalModal(목표 축)·TokenUsage(사용량
+   *   축)·TokenFallback(구독 축) 과 나란한 4번째 축으로 자리한다. 단, 색 값은 모두 기존 축과
+   *   공유 — 본 블록은 "이름 공간만 새로 끌고, 숫자는 이미 있는 토큰을 var() 로 재참조" 한다.
+   *
+   * 숫자 공유 — "같은 의미 = 같은 색" (grep 1번으로 감사 가능):
+   *   tile-border               = shared-goal-modal-field-border    (기본 입력 테두리)
+   *   tile-border-selected      = shared-goal-modal-field-focus     (중립 선택 cyan)
+   *   tile-bg-editing amber 틴트  = shared-goal-modal-field-editing-* 과 같은 hue
+   *   event-glyph-fg emerald     = shared-goal-modal-confirm-bg     (완료/확정 emerald)
+   *   queued-*                  = token-fallback-readonly-*        (F4 회색 계열 승계)
+   *   hash-fg cyan               = token-usage-axis-input-fg        ("원본 입력" 은유로 색 재사용)
+   *
+   * 대비 (--pixel-card #16213e 기준):
+   *   tile-bg-selected(cyan 8%)  명도차 충분 · 비본문 대비 4.0:1 → 비본문 AA 3:1 통과
+   *   event-glyph-fg(#34d399)   5.9:1 · AA 본문
+   *   hash-fg(#7fd4ff)          8.1:1 · AAA
+   *   message-fg(white/85%)    13.1:1 · AAA
+   *   meta-fg(white/55%)        7.2:1 · AAA
+   *   queued-glyph-fg(white/45%) 5.7:1 · AA 본문
+   *
+   * 색각 이상 대응:
+   *   - 3옵션 라디오: 색 + 아이콘(Milestone/Flag/Hand) + 라벨 3중 인코딩.
+   *   - 타임라인 행: 색 + 전용 글리프(◈ 완료 / ◇ 큐잉됨) + 라벨(COMMIT/queued) 3중 인코딩.
+   *     기존 handoff 행의 ○◔●⊘ 와 기하학적으로 겹치지 않는 모양만 선택(CollabTimeline §글리프 감마 QA).
+   */
+
+  /* ▸ 라디오 타일 */
+  --task-commit-tile-min-width: 288px;
+  --task-commit-tile-min-height: 88px;
+  --task-commit-tile-gap: 8px;
+  --task-commit-tile-padding: 12px 16px;
+  --task-commit-tile-radius: 6px;
+  --task-commit-tile-border: var(--shared-goal-modal-field-border);
+  --task-commit-tile-border-hover: var(--shared-goal-modal-field-focus);
+  --task-commit-tile-border-selected: var(--shared-goal-modal-field-focus);
+  --task-commit-tile-bg-selected: rgba(127, 212, 255, 0.08);
+  --task-commit-tile-bg-editing: rgba(251, 191, 36, 0.06);
+  --task-commit-tile-bg-saved: rgba(52, 211, 153, 0.08);
+  --task-commit-radio-size: 16px;
+  --task-commit-radio-border: rgba(255, 255, 255, 0.40);
+  --task-commit-radio-dot-fg: var(--shared-goal-modal-field-focus);
+  --task-commit-icon-fg: var(--shared-goal-modal-field-focus);
+
+  /* ▸ 타임라인 task-commit 행(완료) */
+  --task-commit-event-glyph-fg: var(--shared-goal-modal-confirm-bg);
+  --task-commit-row-border: rgba(52, 211, 153, 0.35);
+  --task-commit-hash-fg: var(--token-usage-axis-input-fg);
+  --task-commit-message-fg: rgba(255, 255, 255, 0.85);
+  --task-commit-meta-fg: rgba(255, 255, 255, 0.55);
+  --task-commit-signature-fg: rgba(255, 255, 255, 0.45);
+  --task-commit-copy-btn-fg: rgba(255, 255, 255, 0.80);
+  --task-commit-copy-btn-hover-bg: rgba(255, 255, 255, 0.06);
+  --task-commit-copy-btn-success-fg: var(--shared-goal-modal-confirm-bg);
+  --task-commit-row-expand-duration: 220ms;
+  --task-commit-row-expand-height-max: 120px;
+
+  /* ▸ 타임라인 task-commit-queued 행(F4 동안 큐잉됨) */
+  --task-commit-queued-glyph-fg: var(--token-fallback-readonly-strip);
+  --task-commit-queued-row-border: var(--token-fallback-readonly-strip);
+  --task-commit-queued-label-fg: var(--token-fallback-readonly-fg);
+  --task-commit-queued-meta-fg: var(--token-fallback-readonly-fg);
+  --task-commit-queued-resolve-flash-ms: var(--token-fallback-recover-flash-ms);
+
+  /* ▸ F4 배너 공존 시 토스트 안전 영역 확장 — ToastProvider 가 F4 진입 시 이 토큰 값으로
+   * --toast-safe-top 을 inline style 덮어쓰기 해 배너 바로 아래부터 토스트가 쌓이게 한다. */
+  --toast-safe-top-with-fallback-banner: calc(var(--toast-safe-top) + var(--token-fallback-banner-height));
+
+  /* ── MediaAssetPreviewCard · Thanos 산출물 프리뷰 카드 디자인 토큰 (2026-04-19) ─────
+   * 시안 문서: tests/media-asset-preview-mockup.md
+   * 대상 컴포넌트(신규 예정): src/components/MediaAssetPreviewCard.tsx — PDF·PPT·영상·
+   *   이미지·오디오 5종을 단일 카드로 표현. 입력 경로의 MediaAttachmentPanel(--media-attach-*)
+   *   과 쌍을 이루는 **결과 경로** 팔레트.
+   *
+   * 설계 의도:
+   *   1) **입력 ↔ 결과 시각 연속성** — kind 배지 5색과 영상 오버레이 색은 입력 경로의
+   *      --media-attach-* 를 var() 로 직접 참조. 사용자 인지상 "같은 파일 종류는 같은 색" 유지.
+   *   2) **카드는 1건 단위 상위 컨테이너** — 썸네일 160px + 메타 80px + 버튼 32px + 패딩 32px
+   *      = 총 304px 에 여유 16px 로 320px 고정. 작업 결과 탭·알림 센터·CollabTimeline 링크 등
+   *      어디에 들어가도 동일한 키 라인을 유지.
+   *   3) **버튼은 3개 고정** — primary(다운로드 emerald) + secondary 2(URL 복사·재생성). primary 는
+   *      --shared-goal-modal-confirm-* 를 재사용해 "결과 지향 동작 = emerald" 규약 유지.
+   *   4) **변환 중/실패는 새 컴포넌트를 만들지 않음** — EmptyState variant="loading" 과 ErrorState
+   *      로 카드 전체를 교체. 본 토큰 블록은 **완료 상태 · kind 배지 · 버튼 치수** 만 담당.
+   *
+   * 대비(--pixel-card #16213e 기준):
+   *   title-fg(white 100%)     15.8:1 · AAA
+   *   meta-fg(white/65%)        8.6:1 · AAA
+   *   context-fg(white/55%)     7.2:1 · AAA
+   *   complete-flash(#34d399)   5.9:1 · AA 본문
+   *   progress-fill(#60a5fa)    4.9:1 · AA 본문 (영상 생성과 같은 sky)
+   *
+   * 색각 이상 대응: kind 배지 5종은 --media-attach-* 팔레트 승계 — 색 + 3~4자 영문 라벨
+   *   (PDF/PPT/IMG/MP4/MP3) + 우하단 메타(페이지/슬라이드/해상도/재생 길이) 3중 인코딩.
+   *   상태 3종(generating/done/error)은 EmptyState·ErrorState·완료 플래시의 색 + 아이콘 +
+   *   카피 3중 인코딩.
+   */
+
+  /* ▸ 카드 기본 구조 */
+  --media-preview-card-width: 272px;
+  --media-preview-card-height: 320px;
+  --media-preview-card-radius: 10px;
+  --media-preview-card-padding: 16px;
+  --media-preview-card-bg: var(--pixel-card);
+  --media-preview-card-border: var(--shared-goal-modal-field-border);
+  --media-preview-card-border-hover: var(--shared-goal-modal-field-focus);
+  --media-preview-card-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+
+  /* ▸ 썸네일 · kind 배지 (입력 경로 --media-attach-* 재사용으로 시리즈 연속성 유지) */
+  --media-preview-thumb-height: 160px;
+  --media-preview-thumb-radius: 6px;
+  --media-preview-thumb-bg: var(--media-attach-tile-bg);
+  --media-preview-kind-badge-padding: 2px 8px;
+  --media-preview-kind-badge-radius: 4px;
+  --media-preview-video-overlay-bg: var(--media-attach-video-overlay-bg);
+  --media-preview-video-overlay-fg: var(--media-attach-video-overlay-fg);
+
+  /* ▸ 타이포 */
+  --media-preview-title-fg: var(--shared-goal-modal-header-fg);
+  --media-preview-title-size: 14px;
+  --media-preview-title-weight: 700;
+  --media-preview-meta-fg: var(--shared-goal-modal-subtle-fg);
+  --media-preview-meta-size: 11px;
+  --media-preview-context-fg: rgba(255, 255, 255, 0.55);
+
+  /* ▸ 버튼 3개(다운로드·URL 복사·재생성) */
+  --media-preview-btn-height: 32px;
+  --media-preview-btn-gap: 8px;
+  --media-preview-btn-padding: 0 12px;
+  --media-preview-btn-radius: 4px;
+  --media-preview-copy-flash-duration: 120ms;
+  --media-preview-copy-flash-fg: var(--shared-goal-modal-confirm-bg);
+  --media-preview-btn-overflow-icon-size: 16px;
+
+  /* ▸ 상태 전이(완료 플래시 · 진행 게이지) */
+  --media-preview-complete-flash-color: var(--shared-goal-modal-confirm-bg);
+  --media-preview-complete-flash-ms: 160ms;
+  --media-preview-progress-height: 4px;
+  --media-preview-progress-track: rgba(255, 255, 255, 0.08);
+  --media-preview-progress-fill: var(--media-attach-gauge-fill-generating);
+}
+
+/* ── F4 쓰기 잠금 전역 규칙 (2026-04-19 디자이너) ─────────────────────────────
+ * 개별 컴포넌트 코드 수정 없이 F4 진입 즉시 모든 쓰기 버튼이 잠기도록, 루트 html 의
+ * data-fallback 속성을 기준으로 [data-writable-guard] 하위 요소에 일괄 비활성 시각을
+ * 덮는다. AuthGate 가 상태 전이마다 document.documentElement.dataset.fallback 을 갱신.
+ *
+ * 시안 §6.4 · 접근성 체크리스트 §2.7 B3 보강. opacity 0.53 은 WCAG 비본문 대비
+ * 4.6:1 하한. pointer-events: none 으로 키보드 Tab 순환은 허용하되 클릭은 차단.
+ * (키보드 초점 자체가 차단되면 aria-disabled 이유 낭독이 안 되므로 focus 는 유지.)
+ */
+html[data-fallback="F4"] [data-writable-guard] {
+  pointer-events: none;
+  opacity: var(--token-fallback-writable-guard-opacity);
+  cursor: not-allowed !important;
+}
+html[data-fallback="F4"] [data-writable-guard]::after {
+  content: "🔒";
+  font-size: 10px;
+  margin-left: 6px;
+  opacity: 0.8;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 배너 진입·이탈에서 translateY 를 제거하고 opacity 만 유지.
+   * 실 구현 컴포넌트(FallbackReadonlyBanner.tsx) 가 transition/keyframes 를 본 미디어
+   * 쿼리 안에서 재정의하도록, 본 블록에서는 토큰 값을 0/none 으로 덮어써 둔다. */
+  :root {
+    --token-fallback-banner-enter-duration: 120ms;
+    --token-fallback-banner-exit-duration: 120ms;
+    --token-fallback-banner-enter-y-amp: 0;
+    --token-fallback-banner-exit-y-amp: 0;
+  }
+}
+
+/* ── FocusRing · 글로벌 :focus-visible 기본 규칙 (2026-04-19 Joker, 지시 #b1a5391a) ─
+ * 디자이너가 선도입한 --focus-ring-* 토큰을 "모든 기본 인터랙티브 요소" 에 일관
+ * 적용하는 안전망 규칙. 컴포넌트가 자체 :focus-visible 을 정의했다면 더 높은
+ * 특이도로 그쪽이 우선하고, 정의하지 않은 요소는 본 규칙을 상속받아 "여기에
+ * 포커스가 있다" 를 반드시 보여 준다. WCAG 2.4.7 Focus Visible 을 프로젝트
+ * 전역에서 보장하는 최종 레이어.
+ *
+ * 사용 규약:
+ *   - 일반 컨트롤: 아무것도 안 해도 기본 cyan ring 이 자동 적용.
+ *   - 위험/성공/경고 변이: 컨트롤에 data-focus-tone="danger|success|caution"
+ *     를 붙이면 ring 색만 교체되고 두께·오프셋·둥근 정도는 동일.
+ *   - prefers-reduced-motion: reduce 에서는 transition 을 제거.
+ */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="radio"]:focus-visible,
+[role="checkbox"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="option"]:focus-visible,
+[role="switch"]:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 var(--focus-ring-offset) var(--focus-ring-offset-color),
+    0 0 0 calc(var(--focus-ring-offset) + var(--focus-ring-width))
+          var(--focus-ring-color);
+  transition: var(--focus-ring-transition);
+}
+
+[data-focus-tone="danger"]:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 var(--focus-ring-offset) var(--focus-ring-offset-color),
+    0 0 0 calc(var(--focus-ring-offset) + var(--focus-ring-width))
+          var(--focus-ring-color-danger),
+    0 0 0 calc(var(--focus-ring-offset) + var(--focus-ring-width) + 2px)
+          var(--focus-ring-halo-danger);
+}
+
+[data-focus-tone="success"]:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 var(--focus-ring-offset) var(--focus-ring-offset-color),
+    0 0 0 calc(var(--focus-ring-offset) + var(--focus-ring-width))
+          var(--focus-ring-color-success);
+}
+
+[data-focus-tone="caution"]:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 var(--focus-ring-offset) var(--focus-ring-offset-color),
+    0 0 0 calc(var(--focus-ring-offset) + var(--focus-ring-width))
+          var(--focus-ring-color-caution);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible,
+  [role="tab"]:focus-visible,
+  [role="radio"]:focus-visible,
+  [role="checkbox"]:focus-visible,
+  [role="menuitem"]:focus-visible,
+  [role="option"]:focus-visible,
+  [role="switch"]:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible,
+  [tabindex]:not([tabindex="-1"]):focus-visible,
+  [data-focus-tone]:focus-visible {
+    transition: none;
+  }
+}
+
+/* ── 반응형 안전망 · 좁은 뷰포트에서의 모달·상단바 축약 (2026-04-19 Joker, 지시 #f4929720) ─
+ * 해상도별 관찰은 docs/ui-audit-2026-04-19.md §11 에 기록한다. 본 블록은
+ * "컴포넌트 코드 수정 없이 CSS 만으로 잡을 수 있는" 반응형 허점들의 전역
+ * 안전망이다. Thanos 영역 파일(ClaudeTokenUsage.tsx · TokenUsageSettingsPanel.tsx)
+ * 을 건드리지 않고 속성 셀렉터 기반으로 규칙을 건다.
+ *
+ *  (1) SharedGoalModal backdrop 의 24px 패딩은 414px 이하에서 과해 본체가 잘려
+ *      보인다. 8px 로 축소해 surface 가 뷰포트 거의 전체를 쓰게 한다. 본 요소는
+ *      `data-testid="shared-goal-modal-backdrop"` 으로 직접 타겟팅할 수 있어
+ *      컴포넌트 수정 없이 여기서 처리 가능.
+ *  (2) ClaudeTokenUsage 상단 배지는 Tailwind 인라인 클래스로 렌더되고 별도 CSS
+ *      훅이 없어, `role="button"` + `aria-haspopup="dialog"` + `aria-expanded` 3
+ *      속성 조합으로 타겟팅한다(해당 토큰 배지는 저장소 내 유일한 이 조합).
+ *      좁은 폭에서 `max-width` 를 걸고 내부 자식에 truncate 효과를 부여해
+ *      "고정 폭 min-width 로 인한 가로 overflow" 회귀를 차단.
+ */
+/* SharedGoalModal 내부 필드의 placeholder 글자색은 §2A.3 규약에 따라
+ * `aria-placeholder` 가 아닌 네이티브 `placeholder` 속성에만 실린다. JSX 에서는
+ * inline style 로 ::placeholder 를 잡을 수 없으므로 본 전역 규칙이 토큰 계약의
+ * 유일한 시행 지점이다. `data-testid` 로 내부 필드만 선택해 다른 모달/폼에는
+ * 영향이 가지 않도록 스코프를 좁혔다. (2026-04-19 Designer 자율 개선) */
+[data-testid="shared-goal-modal-title"]::placeholder,
+[data-testid="shared-goal-modal-description"]::placeholder {
+  color: var(--shared-goal-modal-placeholder-fg);
+  opacity: 1;
+}
+
+@media (max-width: 414px) {
+  [data-testid="shared-goal-modal-backdrop"] {
+    padding: 8px !important;
+  }
+  [role="button"][aria-haspopup="dialog"][aria-expanded] {
+    max-width: 200px;
+  }
+  [role="button"][aria-haspopup="dialog"][aria-expanded] > span,
+  [role="button"][aria-haspopup="dialog"][aria-expanded] > div {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (min-width: 415px) and (max-width: 768px) {
+  [data-testid="shared-goal-modal-backdrop"] {
+    padding: 12px !important;
+  }
+  [role="button"][aria-haspopup="dialog"][aria-expanded] {
+    max-width: 260px;
+  }
 }
 
 * {

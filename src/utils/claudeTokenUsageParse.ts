@@ -30,14 +30,28 @@ function toInt(n: unknown): number {
 }
 
 function normalizeUsage(raw: UsageRaw, model?: string): ClaudeTokenUsage {
+  // 공백만 채워진 model("  ") 이 길이 검사를 통과해 스토어에 그대로 꽂히는 회귀를
+  // 차단하기 위해 trim 후 길이를 재검사한다. `byModel` 키 충돌(정상 모델명 vs " ")
+  // 을 방지하는 기본 위생 규칙.
+  const cleanModel = typeof model === 'string' ? model.trim() : '';
   return {
     input_tokens: toInt(raw.input_tokens),
     output_tokens: toInt(raw.output_tokens),
     cache_read_input_tokens: toInt(raw.cache_read_input_tokens),
     cache_creation_input_tokens: toInt(raw.cache_creation_input_tokens),
-    model: typeof model === 'string' && model.length > 0 ? model : undefined,
+    model: cleanModel.length > 0 ? cleanModel : undefined,
     at: new Date().toISOString(),
   };
+}
+
+// 전체 JSON / 한 줄 JSON 양쪽에서 model 을 찾는 공통 helper.
+// Anthropic 응답은 최상위 `model`, 또는 `message.model` 두 위치 모두에 둘 수 있어
+// (전체 JSON 응답 · stream-json `message_start` 이벤트), 두 경로를 함께 본다.
+function pickModel(obj: Record<string, unknown>): string | undefined {
+  if (typeof obj.model === 'string' && obj.model.trim().length > 0) return obj.model;
+  const msg = obj.message as Record<string, unknown> | undefined;
+  if (msg && typeof msg.model === 'string' && msg.model.trim().length > 0) return msg.model;
+  return undefined;
 }
 
 /**
@@ -55,8 +69,7 @@ export function parseClaudeUsageFromStdout(stdout: string): ClaudeTokenUsage | n
       const obj = JSON.parse(trimmed) as Record<string, unknown>;
       const usage = (obj.usage ?? (obj.message as Record<string, unknown> | undefined)?.usage) as UsageRaw | undefined;
       if (usage) {
-        const model = typeof obj.model === 'string' ? obj.model : undefined;
-        const normalized = normalizeUsage(usage, model);
+        const normalized = normalizeUsage(usage, pickModel(obj));
         return isEmpty(normalized) ? null : normalized;
       }
     } catch { /* 다음 전략으로 내려간다 */ }
@@ -72,17 +85,18 @@ export function parseClaudeUsageFromStdout(stdout: string): ClaudeTokenUsage | n
       const obj = JSON.parse(line) as Record<string, unknown>;
       const usage = (obj.usage ?? (obj.message as Record<string, unknown> | undefined)?.usage) as UsageRaw | undefined;
       if (usage) {
-        const model = typeof obj.model === 'string'
-          ? obj.model
-          : ((obj.message as Record<string, unknown> | undefined)?.model as string | undefined);
-        const normalized = normalizeUsage(usage, model);
+        const normalized = normalizeUsage(usage, pickModel(obj));
         if (!isEmpty(normalized)) return normalized;
       }
     } catch { /* 다음 줄로 */ }
   }
 
   // 3) "usage" 키를 포함한 첫 중괄호 블록 정규식 추출.
-  const match = trimmed.match(/"usage"\s*:\s*(\{[^{}]*\})/);
+  // usage 내부에 `by_tool`·`service_tier` 같은 1단계 중첩 객체가 들어오는 케이스를
+  // 놓치지 않도록 중첩 1단계까지 허용하는 패턴을 사용한다(과거 `[^{}]*` 는 중첩이
+  // 있으면 조기 종료해 이 경로 전체가 null 을 돌려 주었다). 더 깊은 중첩은 전략 1/2
+  // 에서 정식 JSON.parse 로 이미 커버된다.
+  const match = trimmed.match(/"usage"\s*:\s*(\{(?:[^{}]|\{[^{}]*\})*\})/);
   if (match) {
     try {
       const usage = JSON.parse(match[1]) as UsageRaw;

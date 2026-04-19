@@ -264,7 +264,78 @@ export interface GitAutomationSettings {
   // 'new' 모드에서 사용할 브랜치명. 빈/누락이면 server 가 Project.branchStrategy
   // 기반 resolveBranch 로 폴백해 기존 네이밍 정책을 유지한다.
   branchName?: string;
+  // 태스크 경계 커밋(#f1d5ce51) — 자동 개발 ON 상태에서 "언제 커밋을 잘라 낼 것인가" 를
+  // 결정하는 축. UI 라디오 3종(per-task/on-goal-complete/manual) 와 1:1 매핑된다.
+  // 본 필드는 과거 row 와 호환되도록 optional 로 두고, 누락되면 server/UI 둘 다
+  // `DEFAULT_TASK_BOUNDARY_COMMIT_CONFIG` 로 폴백한다.
+  commitStrategy?: CommitStrategy;
+  // 모든 자동 커밋 제목 앞에 무조건 붙이는 접두어. Conventional Commits 의 타입
+  // 접두어(예: "feat: ") 와 별개 축이며, 사용자가 팀 관례대로 "auto: " 같은 고정
+  // 표식을 강제하고 싶을 때 사용. 빈 문자열이면 접두어 없이 원문 그대로.
+  commitMessagePrefix?: string;
   updatedAt: string;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 태스크 경계 커밋 (#f1d5ce51 · Thanos 공유 타입) — agentWorker 의 실행 루프가
+// 에이전트 완료 신호를 관측할 때마다 onTaskBoundary 훅을 발사하고, 본 설정이
+// 분기를 결정한다. UI(GitAutomationPanel), 모달(SharedGoalModal), 타임라인
+// (CollabTimeline) 이 모두 이 열거·기본값을 재사용한다.
+// ────────────────────────────────────────────────────────────────────────────
+
+export type CommitStrategy = 'per-task' | 'per-goal' | 'manual';
+
+export const COMMIT_STRATEGY_VALUES: readonly CommitStrategy[] = Object.freeze([
+  'per-task', 'per-goal', 'manual',
+]) as readonly CommitStrategy[];
+
+/** UI 라벨 — 설정 패널/모달이 사용자에게 노출하는 한국어 요약. */
+export const COMMIT_STRATEGY_LABEL: Record<CommitStrategy, string> = {
+  'per-task': '태스크마다 커밋',
+  'per-goal': '공동 목표 완료 시 커밋',
+  'manual':   '수동(자동 커밋 안 함)',
+};
+
+export interface TaskBoundaryCommitConfig {
+  commitStrategy: CommitStrategy;
+  /**
+   * 세션이 `exhausted` 일 때 실제 git 실행을 차단하고 내부 큐에만 보관할지 여부.
+   * 기본 true — 세션 복구 후 `flushQueuedTaskBoundaries()` 로 되감기. false 면
+   * 즉시 실행하여(운영자가 의도적으로 통과시킨 경우) 실패를 감수.
+   */
+  queueOnExhausted: boolean;
+  /**
+   * 태스크 범위에 stage 된 변경이 전혀 없으면 경계 이벤트를 스킵할지 여부.
+   * 기본 true — 빈 커밋을 만들지 않는다.
+   */
+  skipIfNoStagedChanges: boolean;
+}
+
+export const DEFAULT_TASK_BOUNDARY_COMMIT_CONFIG: TaskBoundaryCommitConfig = {
+  commitStrategy: 'per-task',
+  queueOnExhausted: true,
+  skipIfNoStagedChanges: true,
+};
+
+/**
+ * CollabTimeline 이 HANDOFF/REPORT 와 같은 축에 렌더할 수 있는 "태스크 경계 커밋"
+ * 이벤트. 서버가 자동 커밋을 잘라 내면 이 페이로드를 socket 으로 푸시하고, 프론트
+ * 타임라인이 해당 태스크와 커밋 SHA 의 대응을 한 줄로 보여준다.
+ */
+export interface TaskCommitTimelineEvent {
+  id: string;
+  type: 'task-commit';
+  taskId: string;
+  // 태스크 이름. 서버가 조회해 채우지 못하면 undefined.
+  taskTitle?: string;
+  commitSha: string; // 7자 이상(풀 해시 허용), UI 는 앞 7자만 노출.
+  branch?: string;
+  // ISO 8601 타임스탬프. 정렬과 포맷 모두 문자열 그대로 사용.
+  at: string;
+  // 어떤 정책이 잘라 낸 커밋인지. 'manual' 경로로 들어온 커밋은 수동.
+  strategy: CommitStrategy;
+  // PR URL 이 있으면 함께 표기(UI 가 링크로 전환).
+  prUrl?: string;
 }
 
 // 프로젝트 단위 Git 자격증명. 기존 SourceIntegration 은 "저장소 임포트" 용으로
@@ -311,6 +382,40 @@ export interface SharedGoal {
   createdAt: string;
 }
 
+// Claude API 호출에서 발생할 수 있는 실패 유형. `src/server/claudeErrors.ts::classifyClaudeError`
+// 가 HTTP status·SDK type·Node code·Error name·메시지 패턴을 읽어 이 중 하나로 수렴한다.
+// 재시도 정책(`retryPolicyFor`) 이 각 카테고리별 maxRetries·백오프 기본값을 보유한다.
+// `token_exhausted` / `subscription_expired` (#cdaaabf3) 는 구독 세션이 소진되거나 만료된
+// 경우로, 둘 다 재시도 불가이며 UI 를 '읽기 전용' 모드로 전환시키는 근거가 된다.
+export type ClaudeErrorCategory =
+  | 'rate_limit'
+  | 'overloaded'
+  | 'api_error'
+  | 'bad_request'
+  | 'auth'
+  | 'timeout'
+  | 'network'
+  | 'token_exhausted'
+  | 'subscription_expired';
+
+export const CLAUDE_ERROR_CATEGORIES: readonly ClaudeErrorCategory[] = Object.freeze([
+  'rate_limit', 'overloaded', 'api_error', 'bad_request', 'auth', 'timeout', 'network',
+  'token_exhausted', 'subscription_expired',
+]) as readonly ClaudeErrorCategory[];
+
+// 세션 토큰 가용 상태 — 상단바 위젯·DirectivePrompt·SharedGoalForm·agentWorker 가
+// 공통으로 참조해 읽기 전용 모드 전환 여부를 결정한다. 디자이너가 정리한 4단계
+// 시각 언어(정상·경고·임박·만료) 중 '임박' 과 '경고' 는 모두 `warning` 으로 수렴하고,
+// `exhausted` 는 토큰 소진 또는 구독 만료가 확정된 시점을 의미한다.
+export type ClaudeSessionStatus = 'active' | 'warning' | 'exhausted';
+
+export const CLAUDE_SESSION_STATUSES: readonly ClaudeSessionStatus[] = Object.freeze([
+  'active', 'warning', 'exhausted',
+]) as readonly ClaudeSessionStatus[];
+
+// 카테고리별 누적 카운터. `claudeTokenUsageStore::recordError` 가 today/all 축에 누적한다.
+export type ClaudeErrorCounters = Record<ClaudeErrorCategory, number>;
+
 // Claude(앤트로픽) API/CLI 한 번 호출당 보고되는 토큰 사용량. Anthropic SDK 의
 // response.usage 필드 shape 을 그대로 수용하도록 네 필드를 스네이크 케이스로 유지
 // (input_tokens / output_tokens / cache_read_input_tokens / cache_creation_input_tokens).
@@ -326,6 +431,39 @@ export interface ClaudeTokenUsage {
   model?: string;
   // ISO 타임스탬프. 미설정 시 수집 시점이 들어간다.
   at?: string;
+}
+
+// 임계값 설정: 사용자가 "이 정도 쓰면 주의/경고로 표시" 를 본인 판단으로 설정.
+// tokens 또는 usd 중 하나 이상이 채워지면 활성. 본 프로젝트의 상단바 배지에서
+// estimatedCostUsd 와 inputTokens+outputTokens 합계를 각각 비교해 둘 중 가장 높은
+// severity 를 채택한다(warning > caution > normal). 미설정 시 항상 normal.
+export interface ClaudeTokenUsageThresholdEntry {
+  tokens?: number;
+  usd?: number;
+}
+
+export interface ClaudeTokenUsageThresholds {
+  caution: ClaudeTokenUsageThresholdEntry;
+  warning: ClaudeTokenUsageThresholdEntry;
+}
+
+export type ClaudeTokenUsageSeverity = 'normal' | 'caution' | 'warning';
+
+// localStorage 에 저장되는 영속 페이로드. 새로고침·세션 재시작 이후에도 일별 누적이
+// 유지되도록 today 블록을 보존하고, 다음 마운트 시점에 로컬 자정 경계를 넘었으면
+// today 만 0 으로 리셋한 뒤 all-time 은 그대로 유지한다. 스키마 버전을 키 접미
+// (`.v1`) 로 관리한다 — 구조가 바뀌면 `.v2` 로 올리고 deserialize 가 모르는 버전은
+// 조용히 무시해 새로고침이 실패하지 않게 한다.
+export interface ClaudeTokenUsagePersisted {
+  schemaVersion: 1;
+  all: ClaudeTokenUsageTotals;
+  today: ClaudeTokenUsageTotals;
+  // 오늘 날짜(로컬). 다음 마운트 시 이 문자열이 현재 로컬 날짜와 다르면 today 만 리셋.
+  todayDate: string; // 'YYYY-MM-DD'
+  // 과거 일자별 스냅샷(최신순). 자정 롤오버 시 이전 today 가 맨 앞에 push 된다.
+  // 구 v1 저장본은 history 가 누락되어 있을 수 있다 — deserialize 가 빈 배열로 초기화.
+  history?: { date: string; totals: ClaudeTokenUsageTotals }[];
+  savedAt: string; // ISO
 }
 
 // tokenUsageStore 가 유지하는 누적 총계. 한 UI 세션(=브라우저 탭) 이 시작된 이후의
@@ -352,6 +490,106 @@ export interface ClaudeTokenUsageTotals {
   }>;
   // 마지막 갱신 시각 ISO. 표시용.
   updatedAt: string;
+  // 카테고리별 에러 누적. 과거 저장본(v1) 에는 없을 수 있어 optional. 스토어는
+  // 항상 전체 카테고리 키를 채워서 유지한다.
+  errors?: ClaudeErrorCounters;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 멀티미디어 자산(#f6052a91) — 공동 목표가 추가로 요구하는 영상 생성·PDF/PPT 입출력
+// 의 공통 모델. 지시 첨부(DirectiveAttachment) 는 "현재 턴의 근거" 라서 일시적이지만,
+// MediaAsset 은 프로젝트 단위 리소스 축에 들어가 생성/파싱 결과를 재사용한다.
+// 서버는 업로드/생성 두 경로 모두 최종적으로 이 레코드를 돌려 준다.
+// ────────────────────────────────────────────────────────────────────────────
+
+export type MediaKind = 'video' | 'pdf' | 'pptx' | 'image';
+
+export const MEDIA_KINDS: readonly MediaKind[] = Object.freeze([
+  'video', 'pdf', 'pptx', 'image',
+]) as readonly MediaKind[];
+
+export interface MediaAsset {
+  id: string;
+  projectId: string;
+  kind: MediaKind;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  // ISO 8601. 서버가 채운다(클라이언트 시계 드리프트 방지).
+  createdAt: string;
+  // PDF/PPT 파싱 결과 본문. 모델에 그대로 주입 가능한 평문. 이미지/영상은 비움.
+  extractedText?: string;
+  // 썸네일(base64 data URL 또는 상대 경로). PDF 페이지 이미지·PPT 슬라이드 preview
+  // 를 모델이나 UI 가 재사용한다. 영상은 1프레임 포스터가 들어갈 수 있다.
+  thumbnails?: string[];
+  // 생성된 자산에만 채워진다. 업로드 자산은 undefined.
+  generatedBy?: { adapter: string; prompt: string };
+  // 업로드 후 영속 저장된 파일의 URL 또는 상대 경로. 1차 스켈레톤은 비워 둔다.
+  storageUrl?: string;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 협업 타임라인 이벤트 (#b425328e §3) — CollabTimeline 이 표시할 통합 이벤트 레코드.
+// 기존 handoffLedger 의 LedgerEntry 는 `docs/handoffs`·`docs/reports` frontmatter 에서
+// 파생된 텍스트 축 타임라인이다. 본 TimelineEvent 는 거기에 **생성된 MediaAsset** 을
+// 같은 타임라인에 끼워 넣기 위한 합집합 타입이다(1차 스켈레톤 — UI 통합은 후속).
+// ────────────────────────────────────────────────────────────────────────────
+
+export type TimelineEventKind = 'handoff' | 'report' | 'media';
+
+export interface BaseTimelineEvent {
+  id: string;
+  kind: TimelineEventKind;
+  /** ISO 8601. 서버가 채우거나 MediaAsset.createdAt 을 그대로 쓴다. */
+  at: string;
+  from?: string;
+  to?: string;
+  /** 스크린리더 낭독에 바로 쓸 수 있는 한 줄 요약. */
+  summary?: string;
+}
+
+export interface MediaTimelineEvent extends BaseTimelineEvent {
+  kind: 'media';
+  /** 원본 자산의 식별용 메타만 투영 — 본체 버퍼는 타임라인에 싣지 않는다. */
+  mediaAsset: Pick<MediaAsset, 'id' | 'kind' | 'name' | 'createdAt' | 'sizeBytes' | 'generatedBy'>;
+  /**
+   * 이벤트가 어떤 사유로 타임라인에 실렸는지. 에이전트 도구 호출(#bc9843bb)이
+   * 실제로 매체를 생성한 경우 'generated', 세션 소진 폴백으로 호출이 큐잉만 된
+   * 경우 'queued-exhausted'. 기존 업로드/수동 경로와의 구분은 UI 배지·스크린
+   * 리더 낭독에 그대로 노출되어, 사용자가 "왜 여기에 이 자산이 찍혔는가" 를
+   * 한 줄로 이해할 수 있게 한다. 선택 필드라 기존 호출자(업로드/수동)는 영향 없음.
+   */
+  reason?: 'generated' | 'queued-exhausted';
+}
+
+export type TimelineEvent =
+  | (BaseTimelineEvent & { kind: 'handoff' | 'report' })
+  | MediaTimelineEvent;
+
+/** MediaAsset 을 그대로 타임라인 이벤트로 투영. 서버/테스트 양쪽에서 공용. */
+export function mediaAssetToTimelineEvent(
+  asset: MediaAsset,
+  meta?: { from?: string; to?: string; reason?: 'generated' | 'queued-exhausted' },
+): MediaTimelineEvent {
+  const reason = meta?.reason ?? 'generated';
+  const reasonLabel = reason === 'queued-exhausted' ? ' · 토큰 소진 대기' : '';
+  return {
+    id: `media-${asset.id}`,
+    kind: 'media',
+    at: asset.createdAt,
+    from: meta?.from,
+    to: meta?.to,
+    summary: `${asset.kind.toUpperCase()} · ${asset.name}${reasonLabel}`,
+    reason,
+    mediaAsset: {
+      id: asset.id,
+      kind: asset.kind,
+      name: asset.name,
+      createdAt: asset.createdAt,
+      sizeBytes: asset.sizeBytes,
+      generatedBy: asset.generatedBy,
+    },
+  };
 }
 
 export interface ManagedProject {

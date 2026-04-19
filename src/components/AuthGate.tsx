@@ -88,30 +88,42 @@ export function AuthGate({ children }: AuthGateProps) {
 
   const handleLogin = async (username: string, password: string) => {
     setError(null);
-    const r = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    });
-    if (!r.ok) {
-      setError(await extractError(r, '로그인 실패'));
-      return;
+    try {
+      const r = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!r.ok) {
+        setError(await extractError(r, '로그인 실패'));
+        return;
+      }
+      setUser((await r.json()) as AuthUserDTO);
+    } catch (e) {
+      // 네트워크 끊김·DNS 실패 등은 fetch 자체가 throw 한다. 과거에는 포착되지
+      // 않은 Promise rejection 으로 콘솔에만 흘러 사용자에게는 "버튼이 먹통" 처럼
+      // 보였다. 한국어 메시지로 에러 상태를 명시해 LoginForm 의 `role="alert"`
+      // 배너로 흘려준다.
+      setError(`로그인 실패: ${(e as Error).message || '네트워크 오류'}`);
     }
-    setUser((await r.json()) as AuthUserDTO);
   };
 
   const handleSignup = async (username: string, password: string, email: string) => {
     setError(null);
-    const r = await fetch('/api/auth/signup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password, email }),
-    });
-    if (!r.ok) {
-      setError(await extractError(r, '회원가입 실패'));
-      return;
+    try {
+      const r = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, email }),
+      });
+      if (!r.ok) {
+        setError(await extractError(r, '회원가입 실패'));
+        return;
+      }
+      setUser((await r.json()) as AuthUserDTO);
+    } catch (e) {
+      setError(`회원가입 실패: ${(e as Error).message || '네트워크 오류'}`);
     }
-    setUser((await r.json()) as AuthUserDTO);
   };
 
   const handleOAuth = () => {
@@ -128,14 +140,34 @@ export function AuthGate({ children }: AuthGateProps) {
     setScreen('login');
   }, []);
 
-  if (!ready) return <div className="auth-loading">로딩 중…</div>;
+  if (!ready) {
+    return (
+      <div
+        className="auth-loading"
+        role="status"
+        aria-live="polite"
+        data-testid="auth-loading"
+      >
+        로딩 중…
+      </div>
+    );
+  }
 
   if (bootError || !cfg) {
     return (
-      <div className="auth-loading" role="alert" style={{ textAlign: 'center', padding: 32 }}>
+      <div
+        className="auth-loading"
+        role="alert"
+        data-testid="auth-boot-error"
+        style={{ textAlign: 'center', padding: 32 }}
+      >
         <p>인증 서버에 연결할 수 없습니다.</p>
         <p style={{ opacity: 0.7, fontSize: 12 }}>{bootError ?? 'unknown error'}</p>
-        <button type="button" onClick={() => { setReady(false); setReloadKey((k) => k + 1); }}>
+        <button
+          type="button"
+          aria-label="인증 서버 연결 다시 시도"
+          onClick={() => { setReady(false); setReloadKey((k) => k + 1); }}
+        >
           다시 시도
         </button>
       </div>

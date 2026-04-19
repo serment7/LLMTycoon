@@ -4,8 +4,9 @@ import type {
   GitAutomationLogStage,
   BranchStrategy,
   GitAutomationBranchStrategy,
+  CommitStrategy,
 } from '../types';
-import { GIT_AUTOMATION_BRANCH_STRATEGY_VALUES } from '../types';
+import { GIT_AUTOMATION_BRANCH_STRATEGY_VALUES, COMMIT_STRATEGY_VALUES } from '../types';
 
 // 커밋 → 푸시 → PR 의 어디까지 자동으로 실행할지. UI 토글과 일대일로 매핑된다.
 export type FlowLevel = 'commitOnly' | 'commitPush' | 'commitPushPR';
@@ -39,6 +40,10 @@ export interface GitAutomationConfig {
   branchStrategy?: GitAutomationBranchStrategy;
   // 'new' 모드에서 사용할 브랜치명. 빈 값이면 호출 측이 기존 resolveBranch 폴백.
   branchName?: string;
+  // 태스크 경계 커밋 축(#f1d5ce51). UI 라디오와 1:1. 누락되면 기본 'per-task'.
+  commitStrategy?: CommitStrategy;
+  // 자동 커밋 메시지 접두어. 비어 있으면 원문 그대로.
+  commitMessagePrefix?: string;
 }
 
 export const DEFAULT_GIT_AUTOMATION_CONFIG: GitAutomationConfig = {
@@ -633,6 +638,15 @@ export function validateGitAutomationConfig(
   }
   if (merged.branchName !== undefined && typeof merged.branchName !== 'string') {
     return { ok: false, error: `invalid branchName: ${String(merged.branchName)}` };
+  }
+  if (
+    merged.commitStrategy !== undefined
+    && !COMMIT_STRATEGY_VALUES.includes(merged.commitStrategy)
+  ) {
+    return { ok: false, error: `invalid commitStrategy: ${String(merged.commitStrategy)}` };
+  }
+  if (merged.commitMessagePrefix !== undefined && typeof merged.commitMessagePrefix !== 'string') {
+    return { ok: false, error: `invalid commitMessagePrefix: ${String(merged.commitMessagePrefix)}` };
   }
   return { ok: true, config: merged };
 }

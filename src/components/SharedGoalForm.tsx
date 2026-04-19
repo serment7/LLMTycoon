@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Target, Save, Lock, Check, AlertTriangle } from 'lucide-react';
 import type { SharedGoal, SharedGoalPriority } from '../types';
+import { EmptyState } from './EmptyState';
+import { ErrorState } from './ErrorState';
 
 // 공동 목표(SharedGoal) 입력 폼. ProjectManagement 화면에서 항상 렌더되어
 // 자동 개발 ON 의 전제조건(= 활성 목표 1건) 을 사용자가 "보고 입력" 할 수 있도록
@@ -20,6 +22,12 @@ import type { SharedGoal, SharedGoalPriority } from '../types';
 interface Props {
   projectId: string | null;
   onLog: (text: string, from?: string) => void;
+  /**
+   * 읽기 전용 모드(#cdaaabf3) — 토큰 소진/구독 만료로 서버 세션 상태가 exhausted 일 때
+   * 부모가 true 를 내려 준다. true 이면 저장 버튼(= 자동 개발 트리거)이 비활성화되어
+   * 새 공동 목표 등록이 불가능해지며, 이미 저장돼 있던 목표의 표시·읽기는 정상 유지한다.
+   */
+  readOnlyMode?: boolean;
 }
 
 type LoadState = 'loading' | 'ready' | 'error';
@@ -42,7 +50,7 @@ function toInputDate(iso: string | undefined): string {
   return iso.length >= 10 ? iso.slice(0, 10) : iso;
 }
 
-export function SharedGoalForm({ projectId, onLog }: Props) {
+export function SharedGoalForm({ projectId, onLog, readOnlyMode }: Props) {
   const [loadState, setLoadState] = useState<LoadState>(projectId ? 'loading' : 'ready');
   const [savedGoal, setSavedGoal] = useState<SharedGoal | null>(null);
   const [title, setTitle] = useState('');
@@ -117,6 +125,14 @@ export function SharedGoalForm({ projectId, onLog }: Props) {
   const submit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!projectId || !isValid || saving) return;
+    // 세션 폴백(#cdaaabf3) — 토큰 소진/구독 만료 상태에서는 저장 자체를 차단한다.
+    // 저장이 성공하면 서버 측이 자동 개발 루프를 돌릴 근거로 삼으므로, 사용자가 실수로
+    // 비활성 버튼을 우회해 form submit 을 전송하더라도 네트워크 호출 전에 멈춘다.
+    if (readOnlyMode) {
+      setSaveError('세션 토큰이 소진되어 저장이 잠시 중단되었습니다. 구독 상태 복구 후 다시 시도하세요.');
+      onLog('세션 토큰 소진으로 공동 목표 저장이 차단되었습니다');
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
@@ -159,6 +175,8 @@ export function SharedGoalForm({ projectId, onLog }: Props) {
       aria-labelledby={headingId}
       data-testid="shared-goal-form"
       data-goal-state={state}
+      data-read-only={readOnlyMode ? 'true' : 'false'}
+      aria-readonly={readOnlyMode || undefined}
       className="p-4 space-y-3"
       style={{
         border: `2px ${state === 'empty' ? 'dashed' : 'solid'} ${borderToken}`,
@@ -179,34 +197,32 @@ export function SharedGoalForm({ projectId, onLog }: Props) {
       </p>
 
       {loadState === 'loading' && (
-        <div
-          className="text-[11px] text-white/60"
-          role="status"
-          aria-live="polite"
-          data-testid="shared-goal-form-loading"
-        >
-          공동 목표를 불러오는 중…
-        </div>
+        <EmptyState
+          variant="loading"
+          title="공동 목표를 불러오는 중…"
+          description="잠시만 기다려 주세요. 저장된 목표가 있다면 곧 프리필됩니다."
+          fillMinHeight={false}
+          testId="shared-goal-form-loading"
+        />
       )}
 
       {loadState === 'error' && (
-        <div
-          className="text-[11px] text-red-300 flex items-center gap-1"
-          role="alert"
-          data-testid="shared-goal-form-load-error"
-        >
-          <AlertTriangle size={12} /> 공동 목표를 불러오지 못했습니다. 잠시 후 다시 시도하세요.
-        </div>
+        <ErrorState
+          title="공동 목표를 불러오지 못했습니다"
+          description="잠시 후 다시 시도하거나 네트워크 상태를 확인해 주세요."
+          testId="shared-goal-form-load-error"
+        />
       )}
 
       {!projectId && (
-        <div
-          className="text-[11px] flex items-center gap-1"
-          style={{ color: 'var(--shared-goal-lock-fg)' }}
-          data-testid="shared-goal-form-no-project"
-        >
-          <Lock size={12} /> 프로젝트를 먼저 선택하면 공동 목표를 입력할 수 있습니다.
-        </div>
+        <EmptyState
+          variant="empty"
+          icon={<Lock size={24} style={{ color: 'var(--empty-state-icon-fg)' }} />}
+          title="프로젝트를 먼저 선택하세요"
+          description="프로젝트를 선택하면 이 자리에 공동 목표 입력 폼이 표시됩니다."
+          fillMinHeight={false}
+          testId="shared-goal-form-no-project"
+        />
       )}
 
       {projectId && loadState !== 'loading' && (
@@ -303,8 +319,11 @@ export function SharedGoalForm({ projectId, onLog }: Props) {
           <div className="flex items-center justify-end gap-2">
             <button
               type="submit"
-              disabled={!isValid || saving}
+              disabled={!isValid || saving || !!readOnlyMode}
               data-testid="shared-goal-save"
+              data-read-only={readOnlyMode ? 'true' : 'false'}
+              aria-label={readOnlyMode ? '목표 저장 (읽기 전용 모드에서는 저장 불가)' : undefined}
+              title={readOnlyMode ? '토큰이 소진되어 저장이 잠시 중단되었습니다' : undefined}
               className="inline-flex items-center gap-1 px-3 py-1 border-2 border-[var(--pixel-accent)] bg-[var(--pixel-accent)]/20 text-[11px] text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--pixel-accent)]/30"
             >
               <Save size={12} /> {saving ? '저장 중…' : '목표 저장'}

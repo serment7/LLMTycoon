@@ -21,13 +21,17 @@ export function CurrentProjectBadge({ projectName }: CurrentProjectBadgeProps) {
   const display = hasProject ? trimmed : CURRENT_PROJECT_PLACEHOLDER;
   return (
     <div
-      className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] text-[var(--pixel-accent)]"
+      // 긴 프로젝트명이 상단바 다른 칩(토큰 사용량·자동 개발 토글 등) 을 밀어내지
+      // 않도록 240px 상한 + truncate. 실제 전체 이름은 aria-label/title 로 스크린
+      // 리더·툴팁을 통해 그대로 전달된다(B-06 원칙: "데이터 하나로 레이아웃이
+      // 깨지지 않는다").
+      className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] text-[var(--pixel-accent)] inline-block max-w-[240px] truncate"
       data-testid="current-project-badge"
       data-has-project={hasProject ? 'true' : 'false'}
       aria-label={hasProject ? `현재 프로젝트: ${display}` : CURRENT_PROJECT_PLACEHOLDER}
       title={hasProject ? `현재 프로젝트: ${display}` : CURRENT_PROJECT_PLACEHOLDER}
     >
-      프로젝트: {display}
+      현재 프로젝트: {display}
     </div>
   );
 }

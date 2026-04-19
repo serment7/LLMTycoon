@@ -156,10 +156,13 @@ export function LogPanelTabs(props: LogPanelTabsProps) {
           {unseenLogCount > 0 && (
             <span
               className="log-panel-tabs__badge"
+              // 스크린리더에는 실제 수치를 그대로 전달한다(정확성 우선). 시각
+              // 배지는 3자리 이상이 들어오면 "99+" 로 축약해 다른 상단 배지와의
+              // 레이아웃 정렬을 유지한다(App.tsx:1917 과 동일 규약).
               aria-label={`새 로그 ${unseenLogCount}건`}
               data-testid="log-unseen-badge"
             >
-              {unseenLogCount}
+              {unseenLogCount > 99 ? '99+' : unseenLogCount}
             </span>
           )}
         </button>
