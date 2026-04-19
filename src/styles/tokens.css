@@ -73,6 +73,12 @@
   --color-focus-ring: #7fd4ff;
   --focus-ring-width: 2px;
   --focus-ring-offset: 2px;
+
+  /* z-index 계층(#832360c2) — OnboardingTour 가 가장 위, 그 아래에 검색 오버레이, 그 아래 일반 토스트/모달. */
+  --z-toast: 1000;
+  --z-toast-error: 1100;
+  --conversation-search-z-index: 1150;
+  --onboarding-z-index: 1200;
 }
 
 /* 명시적 다크 선택 — :root 기본과 동일 값. 사용자가 시스템 라이트에서 다크를 고를 때 쓰인다. */

@@ -229,6 +229,10 @@ import {
 import {
   extractFilesFromClipboard,
   loadImageFile,
+  loadAudioFile,
+  createAudioRecorder,
+  toAudioChatAttachment,
+  isAudioFile,
 } from '../../src/utils/mediaLoaders.ts';
 import {
   __resetMediaMetricsForTests,
@@ -775,6 +779,83 @@ test('useMediaPasteCapture — 훅 표면 검증 (extractFilesFromClipboard 로 
   // 가 소유한다.
   const mod = await import('../../src/utils/useMediaPasteCapture.ts');
   assert.equal(typeof mod.useMediaPasteCapture, 'function');
+});
+
+// ─── 오디오 입력 + 마이크 녹음 (#222ece09 §1) ────────────────────────────────
+
+test('isAudioFile — 확장자·MIME 으로 오디오 판정', () => {
+  assert.equal(isAudioFile('voice.mp3'), true);
+  assert.equal(isAudioFile('clip.webm', 'audio/webm'), true);
+  assert.equal(isAudioFile('frame.png', 'image/png'), false);
+  assert.equal(isAudioFile('bin', 'audio/ogg'), true);
+});
+
+test('loadAudioFile — 정상 오디오는 파형·길이 프로브를 경유해 AudioPreview 를 돌려준다', async () => {
+  const file = new File([new Uint8Array([1, 2, 3, 4])], 'hello.webm', { type: 'audio/webm' });
+  const peaks = [0.1, 0.3, 0.6, 0.9, 0.5, 0.2, 0.0, 0.4];
+  const preview = await loadAudioFile(file, {
+    waveformAnalyzer: async () => peaks,
+    durationProbe: async () => 3200,
+  });
+  assert.equal(preview.kind, 'audio');
+  assert.equal(preview.durationMs, 3200);
+  assert.deepEqual(preview.waveformPeaks, peaks);
+  const att = toAudioChatAttachment(preview);
+  assert.equal(att.kind, 'audio');
+  assert.match(att.summary, /오디오/);
+  assert.match(att.summary, /3초/);
+});
+
+test('loadAudioFile — 오디오 아닌 파일은 UNSUPPORTED_KIND, 크기 초과는 FILE_TOO_LARGE', async () => {
+  const notAudio = new File(['x'], 'a.txt', { type: 'text/plain' });
+  await assert.rejects(
+    () => loadAudioFile(notAudio),
+    (err: unknown) => err instanceof MediaLoaderError && err.code === 'UNSUPPORTED_KIND',
+  );
+  const big = new File([new Uint8Array(16)], 'big.mp3', { type: 'audio/mpeg' });
+  await assert.rejects(
+    () => loadAudioFile(big, { maxBytes: 4 }),
+    (err: unknown) => err instanceof MediaLoaderError && err.code === 'FILE_TOO_LARGE',
+  );
+});
+
+test('createAudioRecorder — MediaRecorder 가 없는 환경은 AUDIO_UNSUPPORTED 로 수렴', async () => {
+  const saved = (globalThis as { MediaRecorder?: unknown }).MediaRecorder;
+  delete (globalThis as { MediaRecorder?: unknown }).MediaRecorder;
+  try {
+    const rec = createAudioRecorder({
+      mediaStreamProvider: async () => ({ getTracks: () => [] } as unknown as MediaStream),
+    });
+    await assert.rejects(
+      () => rec.start(),
+      (err: unknown) => err instanceof MediaLoaderError && err.code === 'AUDIO_UNSUPPORTED',
+    );
+  } finally {
+    if (saved !== undefined) (globalThis as { MediaRecorder?: unknown }).MediaRecorder = saved;
+  }
+});
+
+test('createAudioRecorder — 권한 거부(NotAllowedError)는 AUDIO_PERMISSION_DENIED', async () => {
+  // 가짜 MediaRecorder 팩토리 주입으로 Factory 존재 게이트를 통과시킨다.
+  const fakeFactory = () => ({
+    start() { /* noop */ },
+    stop() { /* noop */ },
+    ondataavailable: null,
+    onstop: null,
+    mimeType: 'audio/webm',
+  } as unknown as MediaRecorder);
+  const rec = createAudioRecorder({
+    mediaRecorderFactory: fakeFactory,
+    mediaStreamProvider: async () => {
+      const err = new Error('denied');
+      err.name = 'NotAllowedError';
+      throw err;
+    },
+  });
+  await assert.rejects(
+    () => rec.start(),
+    (err: unknown) => err instanceof MediaLoaderError && err.code === 'AUDIO_PERMISSION_DENIED',
+  );
 });
 
 test('요청 중단 — 사전 abort 된 signal 은 업로드·생성 모두 ABORTED', async () => {

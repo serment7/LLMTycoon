@@ -28,6 +28,11 @@ import { EmptyProjectPlaceholder, EmptyProjectPlaceholderSkeleton } from './comp
 import { DirectivePrompt, AttachmentPreviewModal, classifyAttachment, type DirectiveAttachment as UiDirectiveAttachment } from './components/DirectivePrompt';
 import { MediaPipelinePanel } from './components/MediaPipelinePanel';
 import type { MediaChatAttachment } from './utils/mediaLoaders';
+import { createDraftStore, type DraftStore } from './utils/draftStore';
+import { createShortcutRegistry, DEFAULT_MEDIA_SHORTCUTS, type MediaShortcutId, type ShortcutRegistry } from './utils/keyboardShortcuts';
+import { createPendingRequestQueue, type PendingRequestQueue } from './utils/pendingRequestQueue';
+import { useOnlineStatus } from './hooks/useOnlineStatus';
+import { toastBus } from './components/ToastProvider';
 import { CurrentProjectBadge } from './components/CurrentProjectBadge';
 import { ClaudeTokenUsage } from './components/ClaudeTokenUsage';
 import { TokenUsageIndicator } from './components/TokenUsageIndicator';
@@ -36,6 +41,8 @@ import { ToastProvider, useToast } from './components/ToastProvider';
 import { UploadDropzone } from './components/UploadDropzone';
 import { OnboardingTour } from './components/OnboardingTour';
 import { ThemeToggle } from './components/ThemeToggle';
+import { ConversationSearch } from './components/ConversationSearch';
+import type { SearchableMessage } from './utils/conversationSearch';
 import { loadMediaFile } from './utils/mediaLoaders';
 import { mapUnknownError, messageToToastInput } from './utils/errorMessages';
 import { claudeTokenUsageStore } from './utils/claudeTokenUsageStore';
@@ -190,6 +197,28 @@ function App() {
   // 유지하므로 (MediaPipelinePanel 미관리) 본 배열을 비우지는 않는다 — 사용자가
   // panel 에서 명시적으로 제거해야만 사라진다.
   const [mediaChatAttachments, setMediaChatAttachments] = useState<MediaChatAttachment[]>([]);
+  // 드래프트(초안) 저장·복원 — 탭 새로고침/토큰 만료 이후에도 commandInput + 멀티미디어
+  // 첨부가 유지되도록 대화별(= 프로젝트별) 키로 IDB 에 쓴다. Node/SSR 환경은 내부
+  // 폴백 메모리 어댑터로 수렴해 런타임 오류가 나지 않는다(#222ece09 §2).
+  const draftStoreRef = useRef<DraftStore>();
+  if (!draftStoreRef.current) draftStoreRef.current = createDraftStore();
+  // 키보드 단축키 중앙 레지스트리 — App.tsx 가 소유해 OnboardingTour 등 다른
+  // 구독자와 충돌 없이 하나의 진원을 유지한다(#222ece09 §4). 기본 바인딩은 모듈이
+  // 제공하고, 필요 시 추가 등록이 런타임에 가능하다.
+  const shortcutRegistryRef = useRef<ShortcutRegistry<MediaShortcutId>>();
+  if (!shortcutRegistryRef.current) {
+    const reg = createShortcutRegistry<MediaShortcutId>();
+    for (const s of DEFAULT_MEDIA_SHORTCUTS) reg.register(s);
+    shortcutRegistryRef.current = reg;
+  }
+  // 실패 요청 영속 재시도 큐 — 네트워크 단절·5xx 류 일시 오류만 대상. 레이트리밋·
+  // 토큰 만료 같은 세션 신호는 `claudeSubscriptionSession` 의 pending 큐가 책임진다
+  // (#3f1b7597 §3 책임 분리).
+  const pendingQueueRef = useRef<PendingRequestQueue>();
+  if (!pendingQueueRef.current) pendingQueueRef.current = createPendingRequestQueue();
+  // 오프라인 상태 훅 — 상단바 배너·전송 버튼 라벨·재시도 트리거 세 축이 같은
+  // 신호를 구독한다.
+  const online = useOnlineStatus();
   // DirectivePrompt 토스트. 업로드 사전검증(프로젝트 미선택 등) 에러를 여기로 흘려보낸다.
   const [directiveErrorToast, setDirectiveErrorToast] = useState<string | null>(null);
   // 첨부 미리보기 상태. previewUrl 은 image/pdf 모달에 주입할 blob/서버 URL,
@@ -1126,12 +1155,113 @@ function App() {
         }),
       });
       setPendingAttachments([]);
+      // 전송 성공 — 대응 대화의 초안을 제거한다. 실패는 의도적으로 무시해 다음
+      // 실행 때 유령 항목이 남더라도 본 흐름을 막지 않는다(#222ece09 §2).
+      draftStoreRef.current?.remove(project.id).catch(() => { /* noop */ });
     } catch (e) {
       addLog(`리더 지시 전달 실패: ${(e as Error).message}`);
+      // 네트워크·일시 오류는 영속 재시도 큐에 보관해 온라인 복귀·앱 재기동 후에도
+      // 유실 없이 이어 간다. 세션 신호(레이트리밋·토큰 만료) 는 별도 축에서
+      // 처리되므로 여기에서는 enqueue 하지 않는다(#3f1b7597 §3).
+      const code = (e as { code?: string })?.code ?? '';
+      if (!/rate_limit|token_exhausted|subscription_expired/i.test(code)) {
+        pendingQueueRef.current?.enqueue({
+          id: `task-${project.id}-${Date.now()}`,
+          payload: {
+            endpoint: '/api/tasks',
+            method: 'POST',
+            body: {
+              projectId: project.id,
+              assignedTo: leader.id,
+              description: instruction,
+              source: 'user',
+              attachments: serverAttachments.length > 0 ? serverAttachments : undefined,
+              mediaAttachments: mediaChatAttachments.length > 0 ? mediaChatAttachments : undefined,
+            },
+            conversationId: project.id,
+          },
+          errorMessage: (e as Error).message,
+        }).catch(() => { /* 큐 저장 실패 자체는 추가 부작용 없음 */ });
+      }
     } finally {
       setCommandBusy(false);
     }
   };
+
+  // 온라인 복귀 시 영속 재시도 큐를 한 번 돌린다. runRetryPass 는 nextAttemptAtMs
+  // 필터를 통해 아직 백오프 대기 중인 항목을 건드리지 않는다.
+  useEffect(() => {
+    if (!online || !pendingQueueRef.current) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const report = await pendingQueueRef.current!.runRetryPass({
+          execute: async (req) => {
+            try {
+              await safeFetch(req.payload.endpoint, {
+                method: req.payload.method ?? 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(req.payload.body),
+              });
+              return { ok: true };
+            } catch (err) {
+              return {
+                ok: false,
+                errorCode: (err as { code?: string })?.code,
+                errorMessage: (err as Error).message,
+              };
+            }
+          },
+          onRecovered: (req) => {
+            toastBus.emit({
+              variant: 'success',
+              title: '대기 중이던 요청이 전송되었습니다',
+              body: req.payload.conversationId
+                ? `대화 ${req.payload.conversationId} 의 지시가 복구됐어요.`
+                : undefined,
+            });
+          },
+        });
+        if (!cancelled && report.failed.length + report.droppedPermanent.length > 0) {
+          addLog(`재시도 ${report.failed.length}건 보류 · ${report.droppedPermanent.length}건 영구 실패`);
+        }
+      } catch {
+        /* 재시도 패스 자체 실패는 조용히 무시 — 다음 online 이벤트에 재도전 */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [online]);
+
+  // 드래프트 자동 저장/복원 — 마운트·프로젝트 전환 시 복원, 입력/첨부 변경 시 저장.
+  useEffect(() => {
+    if (!selectedProjectId || !draftStoreRef.current) return;
+    let cancelled = false;
+    draftStoreRef.current.load(selectedProjectId).then(draft => {
+      if (cancelled || !draft) return;
+      // 프로젝트 진입 직후에만 복원한다 — 이미 사용자가 입력 중이면 덮어쓰지 않음.
+      setCommandInput(prev => prev.length > 0 ? prev : draft.bodyText);
+      setMediaChatAttachments(prev => prev.length > 0 ? prev : draft.attachments);
+    }).catch(() => { /* idb 실패는 조용히 무시 */ });
+    return () => { cancelled = true; };
+  }, [selectedProjectId]);
+
+  useEffect(() => {
+    if (!selectedProjectId || !draftStoreRef.current) return;
+    const hasAny = commandInput.trim().length > 0 || mediaChatAttachments.length > 0;
+    const store = draftStoreRef.current;
+    if (!hasAny) {
+      store.remove(selectedProjectId).catch(() => { /* noop */ });
+      return;
+    }
+    const t = setTimeout(() => {
+      store.save(selectedProjectId, {
+        conversationId: selectedProjectId,
+        bodyText: commandInput,
+        attachments: mediaChatAttachments,
+      }).catch(() => { /* noop */ });
+    }, 400);
+    return () => clearTimeout(t);
+  }, [selectedProjectId, commandInput, mediaChatAttachments]);
 
   // 그래프 초기화: 현재 프로젝트의 코드그래프(파일 노드·의존성 엣지)를 비운다.
   //  - 선택된 프로젝트가 있으면 해당 프로젝트만, 없으면 전체 그래프를 리셋한다.
@@ -1368,8 +1498,18 @@ function App() {
     }
   };
 
+  // 대화 영역 전역 검색(#832360c2) — logs 의 from/to/text 를 SearchableMessage 로 투영한다.
+  // 매치된 messageId 는 현재 가상 리스트 연결 전이라 스크롤 점프는 비활성이지만, Ctrl+F
+  // 오버레이·매치 카운트·하이라이트 스니펫은 즉시 동작한다. 가상 리스트 연결은 후속 턴.
+  const conversationSearchMessages: SearchableMessage[] = logs.map(log => ({
+    id: log.id,
+    text: log.text,
+    attachmentSummary: log.from ? `${log.from}${log.to ? ` → ${log.to}` : ''}` : undefined,
+  }));
+
   return (
     <div className="min-h-screen bg-[var(--pixel-bg)] text-[var(--pixel-white)] font-game flex flex-col overflow-hidden h-screen">
+      <ConversationSearch messages={conversationSearchMessages} />
       {/* Header */}
       <header className="h-[60px] bg-[#0f3460] border-b-4 border-[var(--pixel-border)] flex items-center justify-between px-6 z-20">
         <div className="text-2xl font-bold text-[var(--pixel-accent)] uppercase tracking-[2px]">
