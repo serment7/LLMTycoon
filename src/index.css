@@ -549,6 +549,13 @@
   --token-usage-warning-glow: rgba(248, 113, 113, 0.55);
   --token-usage-warning-pulse-duration: 1.6s;
 
+  /* ▸ 리셋 재개 펄스 — 5시간 창이 새로 열린 직후 1회성 "안도" 피드백.
+   *    안전/절약 의미로 emerald 톤(= --token-usage-axis-cache-read-fg) 을 쓴다.
+   *    warning 의 red 펄스와 의미/색이 구분돼 "리셋" 과 "한도 임박" 을 혼동하지
+   *    않게 한다. duration 은 warning pulse 와 동일한 1.6s 로 정렬. */
+  --token-usage-reset-pulse-glow: rgba(52, 211, 153, 0.55);
+  --token-usage-reset-pulse-duration: 1.6s;
+
   /* ▸ 축별 의미 색 (배지 요약·툴팁 행 공용) */
   --token-usage-axis-input-fg: #7fd4ff;       /* 입력 — cyan, accent 와 일치 */
   --token-usage-axis-output-fg: #fbbf24;      /* 출력 — amber, 산출 */
@@ -5503,6 +5510,36 @@ body {
 .branch-mode__prefix-chip:focus-visible {
   outline: 2px solid var(--pixel-accent);
   outline-offset: 2px;
+}
+
+/* ── TokenUsageIndicator — 리셋 재개 펄스 ──────────────────────────────────
+ * 컴포넌트(src/components/TokenUsageIndicator.tsx) 가 5시간 창 리셋을
+ * 감지하면 wrapper 에 `data-just-reset="true"` 를 3초간 켠다. 본 블록은
+ * 그 3초 동안 배지 주위에 emerald 톤 글로우를 1회 흘려 "새 창이 열렸다"
+ * 라는 안도 피드백을 준다.
+ *
+ * 스코프: `.token-usage-indicator` 는 wrapper 용 식별 클래스, 배지 본체는
+ * `.token-usage-indicator__badge`. 데이터 속성과 클래스를 함께 요구해
+ * 다른 위젯이 우연히 `data-just-reset` 을 쓰더라도 충돌하지 않는다.
+ *
+ * prefers-reduced-motion: reduce 에서는 애니메이션을 제거하되, 글로우 자체는
+ * 유지하지 않는다(깜빡임을 원치 않는 사용자에게 3초간 정적 글로우가 오히려
+ * 혼란일 수 있어). 리셋 발생 사실은 aria-label "약 <1분 뒤 리셋 → 4시간
+ * 59분 뒤" 문구가 이미 운반한다. */
+@keyframes token-usage-just-reset-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--token-usage-reset-pulse-glow); }
+  40%  { box-shadow: 0 0 14px 3px var(--token-usage-reset-pulse-glow); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+}
+
+.token-usage-indicator[data-just-reset="true"] .token-usage-indicator__badge {
+  animation: token-usage-just-reset-pulse var(--token-usage-reset-pulse-duration) ease-out 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .token-usage-indicator[data-just-reset="true"] .token-usage-indicator__badge {
+    animation: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

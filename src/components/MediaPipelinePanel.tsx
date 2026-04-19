@@ -13,10 +13,16 @@ import { MediaAttachmentPanel, useMediaAttachmentPanel } from './MediaAttachment
 import {
   detectMediaKind,
   loadMediaFile,
-  requestVideoGeneration,
   MediaLoaderError,
   type MediaPreview,
 } from '../utils/mediaLoaders';
+import {
+  exportPdfReport,
+  exportPptxDeck,
+  exportVideo,
+  prepareDownload,
+  MediaExporterError,
+} from '../utils/mediaExporters';
 
 export interface MediaPipelinePanelProps {
   projectId: string | null;
@@ -89,17 +95,19 @@ export function MediaPipelinePanel(props: MediaPipelinePanelProps) {
       setError('프로젝트를 먼저 선택해 주세요.');
       return;
     }
-    if (kind !== 'video') {
-      setError('현재 1차 스켈레톤은 영상 생성만 지원합니다.');
+    if (kind === 'image') {
+      setError('이미지 생성은 아직 지원되지 않습니다.');
       return;
     }
     setError(null);
     setBusy(true);
     try {
-      const preview = await requestVideoGeneration(
-        { prompt, projectId: props.projectId },
-        { fetcher: props.fetcher },
-      );
+      const exOpts = { projectId: props.projectId, fetcher: props.fetcher };
+      const preview = kind === 'video'
+        ? await exportVideo({ prompt }, exOpts)
+        : kind === 'pdf'
+          ? await exportPdfReport({ template: { title: prompt, sections: [] } }, exOpts)
+          : await exportPptxDeck({ slides: [{ title: prompt }] }, exOpts);
       setPreviews((prev) => [...prev, preview]);
       const asset: MediaAsset = {
         id: preview.id,
@@ -114,7 +122,10 @@ export function MediaPipelinePanel(props: MediaPipelinePanelProps) {
       addAssets([asset]);
       props.onAssetReady?.(asset);
     } catch (err) {
-      setError(err instanceof MediaLoaderError ? err.message : '영상 생성 요청 실패');
+      const msg = err instanceof MediaExporterError || err instanceof MediaLoaderError
+        ? err.message
+        : '미디어 생성 요청 실패';
+      setError(msg);
     } finally {
       setBusy(false);
     }
@@ -173,6 +184,19 @@ export function MediaPipelinePanel(props: MediaPipelinePanelProps) {
                     생성자: {p.generatedBy.adapter} · "{p.generatedBy.prompt}"
                   </p>
                 )}
+                {(() => {
+                  const dl = prepareDownload(p);
+                  return (
+                    <a
+                      href={dl.url}
+                      download={dl.filename}
+                      data-testid={`media-preview-download-${p.id}`}
+                      className="inline-block mt-1 text-[10px] underline opacity-80 hover:opacity-100"
+                    >
+                      다운로드 ({dl.filename})
+                    </a>
+                  );
+                })()}
               </li>
             ))}
           </ul>

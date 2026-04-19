@@ -200,7 +200,7 @@ export function TokenUsageIndicator({
 
   return (
     <div
-      className="relative"
+      className="relative token-usage-indicator"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => setHovered(true)}
@@ -216,7 +216,7 @@ export function TokenUsageIndicator({
         aria-label={ariaLabel}
         tabIndex={0}
         title={`구독 세션 남은 토큰 — ${untilReset} 뒤(${resetClock}) 리셋`}
-        className="px-3 py-1 border-2 border-l-[6px] flex items-center gap-2 cursor-help"
+        className="token-usage-indicator__badge px-3 py-1 border-2 border-l-[6px] flex items-center gap-2 cursor-help"
         style={{
           background: palette.bg,
           borderColor: 'var(--pixel-border)',

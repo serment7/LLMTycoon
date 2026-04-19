@@ -31,7 +31,12 @@ import { CurrentProjectBadge } from './components/CurrentProjectBadge';
 import { ClaudeTokenUsage } from './components/ClaudeTokenUsage';
 import { TokenUsageIndicator } from './components/TokenUsageIndicator';
 import { claudeTokenUsageStore } from './utils/claudeTokenUsageStore';
-import type { ClaudeTokenUsage as ClaudeTokenUsageDelta, ClaudeTokenUsageTotals } from './types';
+import {
+  SUBSCRIPTION_SESSION_STORAGE_KEY,
+  deserializePersistedSession,
+  reconcileRestoredWithServer,
+} from './utils/claudeSubscriptionSession';
+import type { ClaudeTokenUsage as ClaudeTokenUsageDelta, ClaudeTokenUsageTotals, ClaudeSessionStatus } from './types';
 import { computeWorkspaceInsights } from './utils/workspaceInsights';
 import type { LedgerEntry } from './utils/handoffLedger';
 import { EXCLUDED_PATHS } from './utils/codeGraphFilter';
@@ -599,7 +604,48 @@ export default function App() {
       claudeTokenUsageStore.hydrate(totals);
     });
 
+    // 구독 세션 상태 복원 → 서버 응답으로 치환 (#8e18c173).
+    //   1) localStorage 에서 마지막으로 알려진 세션 상태를 즉시 복원해 새로고침 직후의
+    //      "배지가 한 번 비었다가 다시 채워지는" 깜빡임을 제거한다.
+    //   2) 서버 `GET /api/claude/session-status` 응답이 오면 reconcileRestoredWithServer
+    //      가 권위값으로 치환 — 로컬이 exhausted 여도 서버가 active 이면 즉시 복귀한다.
+    //   3) 서버 API 가 아직 없으면(404/오프라인) 복원값을 그대로 유지해 UX 회귀를 피한다.
+    //   4) 소켓 'claude-session:status' 푸시는 이후 실시간 전환을 담당한다.
+    try {
+      const now = Date.now();
+      const raw = typeof window !== 'undefined' ? window.localStorage?.getItem(SUBSCRIPTION_SESSION_STORAGE_KEY) : null;
+      const restored = deserializePersistedSession(raw, now);
+      if (restored) claudeTokenUsageStore.setSessionStatus(restored.status, restored.statusReason);
+
+      fetch('/api/claude/session-status')
+        .then(r => r.ok ? r.json() as Promise<{ status: ClaudeSessionStatus; reason?: string }> : null)
+        .then(resp => {
+          const reconciled = reconcileRestoredWithServer({
+            restored,
+            serverStatus: resp?.status ?? null,
+            serverStatusReason: resp?.reason,
+            nowMs: Date.now(),
+          });
+          claudeTokenUsageStore.setSessionStatus(reconciled.status, reconciled.statusReason);
+        })
+        .catch(() => { /* 엔드포인트 미존재/오프라인 — 복원값 유지 */ });
+    } catch { /* localStorage 차단(시크릿 모드 등) 은 조용히 무시 */ }
+
+    newSocket.on('claude-session:status', (payload: { status: ClaudeSessionStatus; reason?: string }) => {
+      if (payload?.status) claudeTokenUsageStore.setSessionStatus(payload.status, payload.reason);
+    });
+
+    // 다중 탭 동기화 — 같은 origin 의 다른 탭이 localStorage 키를 덮어쓰면 storage 이벤트가
+    // 발생한다. 동일 탭 내 setItem 은 이벤트를 쏘지 않으므로 자기 에코 방지 코드가 없어도 안전.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== SUBSCRIPTION_SESSION_STORAGE_KEY) return;
+      const next = deserializePersistedSession(e.newValue, Date.now());
+      if (next) claudeTokenUsageStore.setSessionStatus(next.status, next.statusReason);
+    };
+    if (typeof window !== 'undefined') window.addEventListener('storage', onStorage);
+
     return () => {
+      if (typeof window !== 'undefined') window.removeEventListener('storage', onStorage);
       newSocket.close();
     };
   }, []);

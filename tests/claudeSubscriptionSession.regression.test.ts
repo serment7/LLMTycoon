@@ -25,15 +25,24 @@ import {
   DEFAULT_SUBSCRIPTION_TOKEN_LIMIT,
   SUBSCRIPTION_SESSION_WINDOW_MS,
   EMPTY_PENDING_QUEUE,
+  buildSessionSyncEnvelope,
   computeSubscriptionSessionSnapshot,
   dequeuePendingRequest,
+  deserializePersistedSession,
   enqueuePendingRequest,
   flushPendingOnReset,
   formatResetClock,
   formatTimeUntilReset,
+  parseSessionSyncEnvelope,
+  reconcileRestoredWithServer,
+  resolveSessionStateConflict,
+  serializePersistedSession,
   severityFromRatio,
+  shouldAcceptSyncEnvelope,
   shouldFlushPendingQueue,
   type PendingSessionQueue,
+  type PersistedSubscriptionSession,
+  type SessionSyncEnvelope,
   type SubscriptionSessionState,
 } from '../src/utils/claudeSubscriptionSession.ts';
 
@@ -313,4 +322,198 @@ test('Q3 — dequeuePendingRequest: 중간 취소 시 해당 id 만 제거하고
   // 존재하지 않는 id 는 참조 동일성을 유지 — React state 에 그대로 넣어도 리렌더가 튀지 않는다.
   const noop = dequeuePendingRequest(removed, 'missing');
   assert.equal(noop, removed);
+});
+
+// ---------------------------------------------------------------------------
+// B — 다중 탭 브로드캐스트: 한 탭의 리셋/만료가 다른 탭으로 즉시 수렴한다.
+// 배경: BroadcastChannel 또는 storage 이벤트로 전달되는 envelope 가 자기 자신의
+// 에코·시계 틀어진 메시지·손상된 페이로드를 어떻게 처리하는지 계약을 고정한다.
+// ---------------------------------------------------------------------------
+
+test('B1 — buildSessionSyncEnvelope → JSON roundtrip → parseSessionSyncEnvelope 동일값 복원', () => {
+  const state: SubscriptionSessionState = { windowStartMs: 1_700_000_000_000, tokensAtWindowStart: 123_456 };
+  const env = buildSessionSyncEnvelope({
+    kind: 'state',
+    tabId: 'tab-A',
+    emittedAtMs: 1_700_000_100_000,
+    state,
+  });
+  const round = parseSessionSyncEnvelope(JSON.parse(JSON.stringify(env)));
+  assert.ok(round, '정상 JSON 라운드트립 후 null 이 나오면 직렬화 계약이 깨진다');
+  assert.equal(round!.kind, 'state');
+  assert.equal(round!.tabId, 'tab-A');
+  assert.deepEqual(round!.state, state);
+
+  // 손상된 입력은 null — UI 가 깨지지 않도록 조용히 무시되어야 한다.
+  assert.equal(parseSessionSyncEnvelope(null), null);
+  assert.equal(parseSessionSyncEnvelope({ schemaVersion: 2, kind: 'state', tabId: 't', emittedAtMs: 0 }), null,
+    '스키마 버전 불일치는 null — v1/v2 혼합 배포 중 구 탭이 신 탭 envelope 를 오해석하면 안 된다');
+  assert.equal(parseSessionSyncEnvelope({ schemaVersion: 1, kind: 'status', tabId: '', emittedAtMs: 0 }), null,
+    '빈 tabId 는 거부 — 자기 에코 방지가 불가능해진다');
+  assert.equal(parseSessionSyncEnvelope({ schemaVersion: 1, kind: 'status', tabId: 'x', emittedAtMs: 0 }), null,
+    'status envelope 에 status 페이로드가 없으면 거부');
+
+  // status 페이로드 유효성.
+  const statusEnv = buildSessionSyncEnvelope({
+    kind: 'status',
+    tabId: 'tab-B',
+    emittedAtMs: 1,
+    status: { value: 'exhausted', reason: '한도 도달' },
+  });
+  const statusRound = parseSessionSyncEnvelope(JSON.parse(JSON.stringify(statusEnv)));
+  assert.equal(statusRound!.status?.value, 'exhausted');
+  assert.equal(statusRound!.status?.reason, '한도 도달');
+});
+
+test('B2 — shouldAcceptSyncEnvelope: 자기 에코/오래된/미래 메시지 차단, 정상만 통과', () => {
+  const now = 1_700_000_300_000;
+  const base = (overrides: Partial<SessionSyncEnvelope> = {}): SessionSyncEnvelope => ({
+    schemaVersion: 1,
+    kind: 'state',
+    tabId: 'remote',
+    emittedAtMs: now - 5_000,
+    state: { windowStartMs: 1, tokensAtWindowStart: 0 },
+    ...overrides,
+  });
+
+  // 정상: 5초 전 메시지 → accept.
+  assert.equal(shouldAcceptSyncEnvelope({ envelope: base(), localTabId: 'local', nowMs: now }), true);
+
+  // 자기 에코: 자기 탭 id 는 거절. BroadcastChannel 은 자기 자신한테도 쏘므로 이 가드가 필수.
+  assert.equal(
+    shouldAcceptSyncEnvelope({ envelope: base({ tabId: 'local' }), localTabId: 'local', nowMs: now }),
+    false,
+    '자기 탭 envelope 를 받아들이면 send → 수신 → re-send 의 피드백 루프가 생긴다',
+  );
+
+  // 오래됨: 2분 전 메시지는 거절(기본 maxAge 60초).
+  assert.equal(
+    shouldAcceptSyncEnvelope({ envelope: base({ emittedAtMs: now - 120_000 }), localTabId: 'local', nowMs: now }),
+    false,
+    '재생 공격/지연된 storage 이벤트가 세션을 역행 전환시키면 안 된다',
+  );
+
+  // 미래 타임스탬프: 다른 탭 시계가 10분 앞서도 거절.
+  assert.equal(
+    shouldAcceptSyncEnvelope({ envelope: base({ emittedAtMs: now + 600_000 }), localTabId: 'local', nowMs: now }),
+    false,
+  );
+
+  // 커스텀 maxAgeMs: 30초로 줄이면 45초 전 메시지가 거절된다.
+  assert.equal(
+    shouldAcceptSyncEnvelope({ envelope: base({ emittedAtMs: now - 45_000 }), localTabId: 'local', nowMs: now, maxAgeMs: 30_000 }),
+    false,
+  );
+});
+
+test('B3 — resolveSessionStateConflict: 더 최근 windowStartMs 를 선호, 동률이면 tokensAtWindowStart 작은 쪽', () => {
+  const oldWin: SubscriptionSessionState = { windowStartMs: 100, tokensAtWindowStart: 500 };
+  const newWin: SubscriptionSessionState = { windowStartMs: 200, tokensAtWindowStart: 0 };
+
+  // 한 쪽이 null → non-null 사용.
+  assert.equal(resolveSessionStateConflict(null, oldWin), oldWin);
+  assert.equal(resolveSessionStateConflict(newWin, null), newWin);
+
+  // windowStartMs 가 더 큰 쪽(=리셋이 더 최근) 을 사용.
+  assert.equal(resolveSessionStateConflict(oldWin, newWin), newWin,
+    '리셋 사실이 유실되면 탭 간 "한쪽만 새 창, 한쪽은 옛 창" 상태가 무한히 엇갈린다');
+  assert.equal(resolveSessionStateConflict(newWin, oldWin), newWin);
+
+  // 동률 windowStartMs → 더 작은 tokensAtWindowStart 선호.
+  const sameWinLow: SubscriptionSessionState = { windowStartMs: 100, tokensAtWindowStart: 200 };
+  const sameWinHigh: SubscriptionSessionState = { windowStartMs: 100, tokensAtWindowStart: 800 };
+  assert.equal(resolveSessionStateConflict(sameWinHigh, sameWinLow), sameWinLow,
+    'tokensAtWindowStart 가 작은 쪽을 쓰지 않으면 cumulative 가 내려간 직후 used 가 음수로 튄다');
+});
+
+// ---------------------------------------------------------------------------
+// R — 새로고침 복원: localStorage 스냅샷과 서버 응답의 순서 방어.
+// 배경: 네트워크가 느려도 이전 화면을 재현해야 하고, 서버 응답이 도착하면 그 즉시
+// 권위값으로 치환해야 한다. 특히 "로컬=exhausted, 서버=active" 레이스는 배지가
+// 새로고침 뒤에도 잘못 남아 있는 UX 회귀를 만드는 대표 경로다.
+// ---------------------------------------------------------------------------
+
+test('R1 — serialize → deserialize 라운드트립: 유효 스냅샷은 복원되고 오래되거나 손상된 값은 null', () => {
+  const now = 2_000_000_000_000;
+  const payload = serializePersistedSession({
+    state: { windowStartMs: now - 10 * 60_000, tokensAtWindowStart: 777 },
+    status: 'warning',
+    statusReason: '80% 임계',
+    savedAtMs: now - 60_000,
+  });
+  const raw = JSON.stringify(payload);
+
+  // 정상 복원.
+  const restored = deserializePersistedSession(raw, now);
+  assert.ok(restored);
+  assert.equal(restored!.status, 'warning');
+  assert.equal(restored!.statusReason, '80% 임계');
+  assert.equal(restored!.state.tokensAtWindowStart, 777);
+
+  // 창이 이미 지난 경우: 5시간 + 1분 지나면 null 반환.
+  const tooOldState = serializePersistedSession({
+    state: { windowStartMs: now - SUBSCRIPTION_SESSION_WINDOW_MS - 60_000, tokensAtWindowStart: 0 },
+    status: 'active',
+    savedAtMs: now - 60_000,
+  });
+  assert.equal(deserializePersistedSession(JSON.stringify(tooOldState), now), null,
+    '이미 창이 지난 스냅샷을 복원하면 카운터가 이월돼 used 가 터진다');
+
+  // 저장 시각이 너무 오래됨(기본 maxAge=WINDOW) → null.
+  assert.equal(
+    deserializePersistedSession(
+      JSON.stringify({ ...payload, savedAtMs: now - SUBSCRIPTION_SESSION_WINDOW_MS - 10_000 }),
+      now,
+    ),
+    null,
+  );
+
+  // 손상된 입력/스키마 불일치.
+  assert.equal(deserializePersistedSession('{"not":"json-session"}', now), null);
+  assert.equal(deserializePersistedSession('not-json', now), null);
+  assert.equal(deserializePersistedSession(null, now), null);
+  assert.equal(
+    deserializePersistedSession(JSON.stringify({ ...payload, schemaVersion: 99 }), now),
+    null,
+    '다음 버전 스키마는 읽지 않는다 — 구버전 탭이 신버전 페이로드를 오해석하면 안 된다',
+  );
+});
+
+test('R2 — reconcileRestoredWithServer: 서버 응답이 오면 권위값 치환, 없으면 복원값 유지', () => {
+  const now = 2_000_000_100_000;
+  const restored: PersistedSubscriptionSession = {
+    schemaVersion: 1,
+    state: { windowStartMs: now - 60_000, tokensAtWindowStart: 100 },
+    status: 'exhausted',
+    statusReason: '구 배지',
+    savedAtMs: now - 30_000,
+  };
+
+  // 서버가 active 로 응답 → 즉시 active 복귀. 이 경로를 잠그지 않으면 새로고침
+  // 이후 서버는 이미 리셋됐는데 UI 만 exhausted 로 남는 회귀가 재발한다.
+  const activeOverride = reconcileRestoredWithServer({
+    restored, serverStatus: 'active', nowMs: now,
+  });
+  assert.equal(activeOverride.status, 'active');
+  assert.equal(activeOverride.state, restored.state, '상태는 치환됐지만 state 스냅은 유지 — 잔량 표시에 이어쓴다');
+  assert.equal(activeOverride.statusReason, undefined,
+    '서버가 reason 을 주지 않으면 과거 사유를 남겨 두지 않는다');
+
+  // 서버 응답이 아직 없음(네트워크 차단/404) → 복원값 유지.
+  const held = reconcileRestoredWithServer({ restored, serverStatus: null, nowMs: now });
+  assert.equal(held.status, 'exhausted');
+  assert.equal(held.statusReason, '구 배지');
+
+  // 복원도 없고 서버도 없음 → 안전 폴백(active + state=null).
+  const fallback = reconcileRestoredWithServer({ restored: null, serverStatus: null, nowMs: now });
+  assert.equal(fallback.status, 'active');
+  assert.equal(fallback.state, null);
+
+  // 서버 응답은 있으나 복원 없음 → 서버 값만 사용, state 는 null(컴포넌트가 prev=null 로 시작).
+  const serverOnly = reconcileRestoredWithServer({
+    restored: null, serverStatus: 'warning', serverStatusReason: '경계', nowMs: now,
+  });
+  assert.equal(serverOnly.status, 'warning');
+  assert.equal(serverOnly.statusReason, '경계');
+  assert.equal(serverOnly.state, null);
 });

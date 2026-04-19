@@ -228,6 +228,12 @@
 
 ## 8. 회귀 테스트 잠금 레지스트리
 
+> **2026-04-19 후속 재검증(#21931b23)**: 본 §1.1~§2.4 7건 결함은
+> `docs/qa-ui-smoke-regression-2026-04-19-followup.md` 2회차 감사 시점에도
+> **전부 미수정** 상태. 재검증 스위트 45 pass / 6 skip / 0 fail 로 계약 레지스트리
+> 자체는 녹색이나 런타임 결함은 1회차와 동일하게 잔존한다.
+
+
 본 보고서의 블로커·중대 결함은 `tests/uiSmokeReportBlockerContracts.regression.test.ts`
 에 소스 레벨 정규식 계약으로 승격되었다(2026-04-19 추가, 13 테스트 중 7건 통과 / 6건
 `test.skip`). 각 `CONTRACT §x.y` 테스트는 **현재 skip 상태**로, 해당 블로커가 수정

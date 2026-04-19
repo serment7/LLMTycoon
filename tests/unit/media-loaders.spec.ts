@@ -352,6 +352,56 @@ test('requestVideoGeneration — 어댑터 미등록 503 은 ADAPTER_NOT_REGISTE
   );
 });
 
+// ─── 방어적 오류 처리 회귀 점검 (#f3eca898) ──────────────────────────────────
+//
+// 서버가 손상 파일·미지원 MIME 응답(415/500) 을 돌려줬을 때 mediaLoaders 가 조용히
+// 실패하지 않고 `UPLOAD_FAILED` 로 분류해 UI 가 사용자 안내 토스트를 낼 수 있음을
+// 잠근다. `ADAPTER_NOT_REGISTERED`(501) 와는 반드시 구분돼야 한다.
+
+test('loadPdfFile — 서버가 415(UNSUPPORTED) 를 돌려 주면 UPLOAD_FAILED 로 분류', async () => {
+  const file = new File(['CORRUPT'], 'bad.pdf', { type: 'application/pdf' });
+  const fetcher = async () => jsonResponse({ error: '지원하지 않는 미디어 형식입니다.' }, 415);
+  await assert.rejects(
+    () => loadPdfFile(file, { projectId: 'proj-1', fetcher }),
+    (err: unknown) => err instanceof MediaLoaderError
+      && err.code === 'UPLOAD_FAILED'
+      && err.status === 415,
+  );
+});
+
+test('loadPdfFile — 서버 500(손상 파일 파싱 실패) 은 UPLOAD_FAILED', async () => {
+  const file = new File(['CORRUPT'], 'bad.pdf', { type: 'application/pdf' });
+  const fetcher = async () => jsonResponse({ error: 'PDF 해석에 실패했습니다.' }, 500);
+  await assert.rejects(
+    () => loadPdfFile(file, { projectId: 'proj-1', fetcher }),
+    (err: unknown) => err instanceof MediaLoaderError
+      && err.code === 'UPLOAD_FAILED'
+      && err.status === 500,
+  );
+});
+
+test('detectMediaKind — 빈 이름과 빈 MIME 모두 null 을 돌려준다', () => {
+  assert.equal(detectMediaKind('', ''), null);
+  assert.equal(detectMediaKind('noext', ''), null);
+  // 확장자·MIME 모두 엉망이면 호출자가 업로드 시도를 하지 않도록 null.
+  assert.equal(detectMediaKind('.', 'application/octet-stream'), null);
+});
+
+test('loadMediaFile — fetcher 미주입 + 전역 fetch 없음 → UPLOAD_FAILED', async () => {
+  // globalThis.fetch 를 일시적으로 가려 "실행 환경에 fetch 가 없을 때" 경로를 잠근다.
+  const file = new File(['%PDF-1.4'], 'a.pdf', { type: 'application/pdf' });
+  const saved = (globalThis as { fetch?: unknown }).fetch;
+  (globalThis as { fetch?: unknown }).fetch = undefined;
+  try {
+    await assert.rejects(
+      () => loadMediaFile(file, { projectId: 'proj-1' }),
+      (err: unknown) => err instanceof MediaLoaderError && err.code === 'UPLOAD_FAILED',
+    );
+  } finally {
+    (globalThis as { fetch?: unknown }).fetch = saved;
+  }
+});
+
 test('요청 중단 — 사전 abort 된 signal 은 업로드·생성 모두 ABORTED', async () => {
   const ac = new AbortController();
   ac.abort();

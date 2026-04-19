@@ -108,20 +108,24 @@ test('§1-b 스냅샷은 95%·99%·100% 세 구간에서 모두 critical 로 수
   // 현재 구현은 0.95 를 별도 단계로 분리하지 않는다(문서 §1 UX 관찰). 본 테스트는
   // 그 사실을 "계약" 으로 고정해, 이후 severityFromRatio 가 임계를 추가할 때 반드시
   // 동반 업데이트되도록 한다 — 단계 추가가 본 테스트를 깨뜨리면 문서도 같이 갱신.
+  //
+  // 주의: prev 를 null 로 주면 computeSubscriptionSessionSnapshot 이 "최초 마운트"
+  // 규칙에 따라 `tokensAtWindowStart = cumulative` 로 시작해 used=0 으로 튄다. 따라서
+  // 테스트는 "이미 열려 있는 창" 기준점(누적 0)을 고정해 누적 퍼센트 = used 퍼센트가
+  // 되도록 prev 를 명시적으로 고정한다.
+  const basePrev: SubscriptionSessionState = { windowStartMs: T0, tokensAtWindowStart: 0 };
   const cases = [
     { used: 0.95, expectedRemaining: Math.floor(LIMIT * 0.05) },
     { used: 0.99, expectedRemaining: Math.floor(LIMIT * 0.01) },
     { used: 1.0, expectedRemaining: 0 },
   ];
-  let state: SubscriptionSessionState | null = null;
   for (const { used, expectedRemaining } of cases) {
     const snap = computeSubscriptionSessionSnapshot({
-      prev: state,
+      prev: basePrev, // 창 시작 시점 누적 0 을 고정
       cumulativeTokens: Math.round(LIMIT * used),
       nowMs: T0 + 60_000, // 같은 윈도우 안에서 누적만 늘어남
       limit: LIMIT,
     });
-    state = snap.state;
     assert.equal(snap.severity, 'critical', `${used * 100}% 에서 critical 이어야 한다`);
     // remaining 은 정확히 limit - used. 반올림 오차 허용 1 토큰.
     assert.ok(

@@ -233,6 +233,228 @@ export function flushPendingOnReset<T>(
   return { next: EMPTY_PENDING_QUEUE as unknown as PendingSessionQueue<T>, released };
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// 다중 탭 동기화 — 한 탭에서 리셋/만료가 일어나면 다른 탭도 즉시 수렴
+// ────────────────────────────────────────────────────────────────────────────
+//
+// 브라우저가 지원하면 BroadcastChannel, 미지원 환경은 `storage` 이벤트로 폴백한다.
+// 본 모듈은 두 경로가 공유하는 **직렬화·충돌 해결 순수 함수** 만 제공하고, 실제
+// 채널 인스턴스(BroadcastChannel 또는 window.storage 리스너) 는 호출자가 소유한다.
+// 그래야 Node(테스트) 에서도 envelope 파싱/충돌 해결 계약을 그대로 검증할 수 있다.
+
+/** 동기화 채널이 exchange 하는 최소 메시지 모양. 작은 JSON 으로 직렬화 가능. */
+export interface SessionSyncEnvelope {
+  schemaVersion: 1;
+  /** state: 윈도우 시작점·누적 스냅샷 / status: 만료·활성 전환. */
+  kind: 'state' | 'status';
+  /** 탭 고유 id — 자기 자신이 보낸 envelope 를 수신측에서 무시(에코 방지). */
+  tabId: string;
+  /** envelope 발신 시각(epoch ms). 너무 오래된/미래 메시지 필터링에 사용. */
+  emittedAtMs: number;
+  /** kind='state' 일 때의 state 페이로드. null 이면 "세션 상태 리셋" 신호. */
+  state?: SubscriptionSessionState | null;
+  /** kind='status' 일 때의 상태 페이로드. 사유는 배너/토스트 용. */
+  status?: { value: 'active' | 'warning' | 'exhausted'; reason?: string };
+}
+
+/** envelope 를 만든다. 페이로드 유효성 검증은 parse 쪽에서 담당. */
+export function buildSessionSyncEnvelope(params: {
+  kind: 'state' | 'status';
+  tabId: string;
+  emittedAtMs: number;
+  state?: SubscriptionSessionState | null;
+  status?: { value: 'active' | 'warning' | 'exhausted'; reason?: string };
+}): SessionSyncEnvelope {
+  return {
+    schemaVersion: 1,
+    kind: params.kind,
+    tabId: params.tabId,
+    emittedAtMs: params.emittedAtMs,
+    state: params.kind === 'state' ? (params.state ?? null) : undefined,
+    status: params.kind === 'status' ? params.status : undefined,
+  };
+}
+
+/** 파싱 실패/스키마 불일치는 null 을 반환해 호출자가 조용히 무시할 수 있도록 한다. */
+export function parseSessionSyncEnvelope(raw: unknown): SessionSyncEnvelope | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Partial<SessionSyncEnvelope> & { state?: unknown; status?: unknown };
+  if (r.schemaVersion !== 1) return null;
+  if (r.kind !== 'state' && r.kind !== 'status') return null;
+  if (typeof r.tabId !== 'string' || r.tabId.length === 0) return null;
+  if (typeof r.emittedAtMs !== 'number' || !Number.isFinite(r.emittedAtMs)) return null;
+  const out: SessionSyncEnvelope = {
+    schemaVersion: 1,
+    kind: r.kind,
+    tabId: r.tabId,
+    emittedAtMs: r.emittedAtMs,
+  };
+  if (r.kind === 'state') {
+    const s = r.state as Partial<SubscriptionSessionState> | null | undefined;
+    if (s && typeof s === 'object'
+      && typeof s.windowStartMs === 'number' && Number.isFinite(s.windowStartMs)
+      && typeof s.tokensAtWindowStart === 'number' && Number.isFinite(s.tokensAtWindowStart)) {
+      out.state = { windowStartMs: s.windowStartMs, tokensAtWindowStart: s.tokensAtWindowStart };
+    } else {
+      out.state = null;
+    }
+  }
+  if (r.kind === 'status') {
+    const st = r.status as { value?: unknown; reason?: unknown } | undefined;
+    if (st && (st.value === 'active' || st.value === 'warning' || st.value === 'exhausted')) {
+      out.status = { value: st.value, reason: typeof st.reason === 'string' ? st.reason : undefined };
+    } else {
+      return null;
+    }
+  }
+  return out;
+}
+
+/**
+ * 수신 envelope 가 로컬 상태에 반영돼야 하는지 판단한다.
+ *   - 자기 탭이 보낸 에코는 무시
+ *   - emittedAtMs 가 maxAgeMs(기본 60초) 보다 오래됐거나 미래이면 무시
+ *     (탭 시계 틀어짐·재생 공격 방지)
+ */
+export function shouldAcceptSyncEnvelope(params: {
+  envelope: SessionSyncEnvelope;
+  localTabId: string;
+  nowMs: number;
+  maxAgeMs?: number;
+}): boolean {
+  if (params.envelope.tabId === params.localTabId) return false;
+  const maxAge = params.maxAgeMs && params.maxAgeMs > 0 ? params.maxAgeMs : 60_000;
+  const skew = params.nowMs - params.envelope.emittedAtMs;
+  if (skew > maxAge) return false;
+  if (skew < -maxAge) return false;
+  return true;
+}
+
+/**
+ * 두 세션 상태(로컬 vs 원격 탭) 의 충돌을 해결한다.
+ * 규칙:
+ *   1) 한 쪽이 null 이면 non-null 쪽 사용.
+ *   2) windowStartMs 가 더 큰(=더 최근에 리셋된) 쪽을 선호 — 리셋 사실이 유실되지 않는다.
+ *   3) 동률이면 tokensAtWindowStart 가 더 작은(=덜 사용한 시점) 쪽 — 서버 reset 직후
+ *      누적이 내려간 탭과 그대로인 탭이 섞여도 `used` 가 음수로 튀지 않는다.
+ */
+export function resolveSessionStateConflict(
+  local: SubscriptionSessionState | null,
+  remote: SubscriptionSessionState | null,
+): SubscriptionSessionState | null {
+  if (!local) return remote;
+  if (!remote) return local;
+  if (remote.windowStartMs > local.windowStartMs) return remote;
+  if (remote.windowStartMs < local.windowStartMs) return local;
+  if (remote.tokensAtWindowStart < local.tokensAtWindowStart) return remote;
+  return local;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 새로고침 복원 — localStorage 스냅샷 + 서버 응답 치환
+// ────────────────────────────────────────────────────────────────────────────
+
+/** localStorage 키 — 스키마 변경 시 v1 → v2 로 올려 역호환을 끊는다. */
+export const SUBSCRIPTION_SESSION_STORAGE_KEY = 'llmtycoon.subscriptionSession.v1';
+
+/** 디스크 영속 형태. 서버가 알지 못하는 "마지막으로 본 상태" 를 새로고침 틈을 막는 용도. */
+export interface PersistedSubscriptionSession {
+  schemaVersion: 1;
+  state: SubscriptionSessionState;
+  status: 'active' | 'warning' | 'exhausted';
+  statusReason?: string;
+  savedAtMs: number;
+}
+
+export function serializePersistedSession(params: {
+  state: SubscriptionSessionState;
+  status: 'active' | 'warning' | 'exhausted';
+  statusReason?: string;
+  savedAtMs: number;
+}): PersistedSubscriptionSession {
+  return {
+    schemaVersion: 1,
+    state: { windowStartMs: params.state.windowStartMs, tokensAtWindowStart: params.state.tokensAtWindowStart },
+    status: params.status,
+    statusReason: params.statusReason,
+    savedAtMs: params.savedAtMs,
+  };
+}
+
+/**
+ * 저장된 JSON 을 해석해 복원 가능한 스냅샷만 돌려준다. 다음 조건에서 null 을 반환:
+ *   - 파싱 실패 / 스키마 불일치
+ *   - savedAtMs 가 nowMs 기준 maxAgeMs(기본 WINDOW_MS) 초과 → 이미 "창 밖" 데이터
+ *   - state 의 windowStartMs 가 nowMs 기준 WINDOW_MS 이상 지남 → 어차피 새 창이 열림
+ */
+export function deserializePersistedSession(
+  raw: unknown,
+  nowMs: number,
+  options?: { maxAgeMs?: number; windowMs?: number },
+): PersistedSubscriptionSession | null {
+  if (!raw) return null;
+  let parsed: unknown = raw;
+  if (typeof raw === 'string') {
+    try { parsed = JSON.parse(raw); }
+    catch { return null; }
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const r = parsed as Partial<PersistedSubscriptionSession>;
+  if (r.schemaVersion !== 1) return null;
+  if (!r.state || typeof r.state.windowStartMs !== 'number' || typeof r.state.tokensAtWindowStart !== 'number') return null;
+  if (!Number.isFinite(r.state.windowStartMs) || !Number.isFinite(r.state.tokensAtWindowStart)) return null;
+  if (r.status !== 'active' && r.status !== 'warning' && r.status !== 'exhausted') return null;
+  if (typeof r.savedAtMs !== 'number' || !Number.isFinite(r.savedAtMs)) return null;
+
+  const windowMs = options?.windowMs && options.windowMs > 0 ? options.windowMs : SUBSCRIPTION_SESSION_WINDOW_MS;
+  const maxAge = options?.maxAgeMs && options.maxAgeMs > 0 ? options.maxAgeMs : windowMs;
+  if (nowMs - r.savedAtMs > maxAge) return null;
+  if (nowMs - r.state.windowStartMs >= windowMs) return null;
+
+  return {
+    schemaVersion: 1,
+    state: { windowStartMs: r.state.windowStartMs, tokensAtWindowStart: r.state.tokensAtWindowStart },
+    status: r.status,
+    statusReason: typeof r.statusReason === 'string' ? r.statusReason : undefined,
+    savedAtMs: r.savedAtMs,
+  };
+}
+
+/**
+ * 새로고침 직후 "localStorage 복원 → 서버 응답" 두 입력을 하나의 권위값으로 치환한다.
+ *
+ * 네트워크 복구 순서 방어:
+ *   - 서버가 응답하면 서버 status 가 진실로 승격(치환). 로컬이 exhausted 였어도
+ *     서버가 active 라고 말하면 즉시 active 로 복귀 — "만료 배지가 새로고침 뒤에도
+ *     남아 있는" UX 회귀를 막는다.
+ *   - 서버 응답이 아직 없으면(null) 복원값 유지 — 네트워크가 느려도 이전 화면을
+ *     재현해 사용자 체감 대기를 줄인다.
+ *   - 두 쪽 모두 없으면 state=null, status='active' 로 초기값 폴백.
+ */
+export function reconcileRestoredWithServer(params: {
+  restored: PersistedSubscriptionSession | null;
+  serverStatus: 'active' | 'warning' | 'exhausted' | null;
+  serverStatusReason?: string;
+  nowMs: number;
+}): {
+  state: SubscriptionSessionState | null;
+  status: 'active' | 'warning' | 'exhausted';
+  statusReason?: string;
+} {
+  const restored = params.restored;
+  if (params.serverStatus !== null) {
+    return {
+      state: restored ? restored.state : null,
+      status: params.serverStatus,
+      statusReason: params.serverStatusReason,
+    };
+  }
+  if (restored) {
+    return { state: restored.state, status: restored.status, statusReason: restored.statusReason };
+  }
+  return { state: null, status: 'active' };
+}
+
 /** 지정 시각(ms) 을 HH:MM 형식의 로컬 시간 문자열로 포매팅. 툴팁 라벨 용. */
 export function formatResetClock(resetAtMs: number, locale: string = 'ko-KR'): string {
   if (!Number.isFinite(resetAtMs)) return '--:--';
