@@ -27,8 +27,10 @@ import {
 import { createPdfAdapter } from './PdfAdapter';
 import { createRealPdfAdapter } from './adapters/PdfAdapter';
 import { createPptAdapter } from './PptAdapter';
+import { createRealPptAdapter } from './adapters/PptAdapter';
 import { createVideoAdapter } from './VideoAdapter';
 import { createWebSearchAdapter } from './WebSearchAdapter';
+import { createWebSearchRealAdapter, WEB_SEARCH_ALIAS } from './adapters/WebSearchAdapter';
 import { createResearchAdapter } from './ResearchAdapter';
 import { createInputAutomationAdapter } from './InputAutomationAdapter';
 
@@ -148,8 +150,9 @@ export function createDefaultRegistry(
 ): MultimediaRegistry {
   const reg = new MultimediaRegistry(options);
   void createPdfAdapter; // 구 스켈레톤 재수출 경로 유지(직접 테스트 용)
+  void createPptAdapter;
   reg.register(createRealPdfAdapter, createRealPdfAdapter(reg.getConfig()).descriptor);
-  reg.register(createPptAdapter, createPptAdapter(reg.getConfig()).descriptor);
+  reg.register(createRealPptAdapter, createRealPptAdapter(reg.getConfig()).descriptor);
   reg.register(createVideoAdapter, createVideoAdapter(reg.getConfig()).descriptor);
   reg.register(createWebSearchAdapter, createWebSearchAdapter(reg.getConfig()).descriptor);
   reg.register(createResearchAdapter, createResearchAdapter(reg.getConfig()).descriptor);

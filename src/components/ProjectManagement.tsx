@@ -15,7 +15,7 @@ import { ProjectEditingHeader } from './EmptyProjectPlaceholder';
 import { FileHistoryPanel } from './FileHistoryPanel';
 import { ProjectSkillsPanel } from './ProjectSkillsPanel';
 import { ProjectMcpServersPanel } from './ProjectMcpServersPanel';
-import { ProjectCodeRulesPanel } from './ProjectCodeRulesPanel';
+import { CodeRulesSettings } from '../views/settings/CodeRulesSettings';
 import { startGitAutomationScheduler } from '../utils/gitAutomation';
 
 // UX: PR 대상 라디오 선택은 "매번 다시 고르기"보다 "한 번 정해두면 그대로"가 실수를
@@ -2124,7 +2124,7 @@ function AgentContextTabs({ projectId, onLog }: { projectId: string; onLog: (mes
       >
         {active === 'skills' && <ProjectSkillsPanel projectId={projectId} onLog={onLog} />}
         {active === 'mcpServers' && <ProjectMcpServersPanel projectId={projectId} onLog={onLog} />}
-        {active === 'codeRules' && <ProjectCodeRulesPanel projectId={projectId} onLog={onLog} />}
+        {active === 'codeRules' && <CodeRulesSettings projectId={projectId} onLog={onLog} />}
       </div>
     </section>
   );

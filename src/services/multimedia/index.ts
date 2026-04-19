@@ -24,7 +24,29 @@ export {
   type GeneratePdfOptions,
   type RealPdfAdapterOptions,
 } from './adapters/PdfAdapter';
-export { createPptAdapter, PPT_ADAPTER_ID } from './PptAdapter';
+export { createPptAdapter } from './PptAdapter';
+export {
+  PptAdapter,
+  createRealPptAdapter,
+  parsePpt,
+  generatePpt,
+  PPT_ADAPTER_ID,
+  type ParsedPpt,
+  type PptSlide,
+  type PptImageRef as PptSlideImageRef,
+  type PptShapeRef,
+  type PptTableRef,
+  type PptMetadata,
+  type DeckTree,
+  type DeckSlide,
+  type DeckNode,
+  type PptParseDriver,
+  type PptGenerateDriver,
+  type PptAdapterErrorCode,
+  type ParsePptOptions,
+  type GeneratePptOptions,
+  type RealPptAdapterOptions,
+} from './adapters/PptAdapter';
 export { createVideoAdapter, VIDEO_ADAPTER_ID } from './VideoAdapter';
 export { createWebSearchAdapter, WEB_SEARCH_ADAPTER_ID } from './WebSearchAdapter';
 export { createResearchAdapter, RESEARCH_ADAPTER_ID } from './ResearchAdapter';
