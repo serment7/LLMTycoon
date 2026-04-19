@@ -306,6 +306,14 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const gameWorldRef = useRef<HTMLDivElement>(null);
+  /** 게임 탭 휠: 부모 `overflow-auto` 스크롤과 충돌하지 않도록 passive:false 로만 구독한다. */
+  const gameWheelViewportRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef(zoom);
+  const panRef = useRef(pan);
+  useEffect(() => {
+    zoomRef.current = zoom;
+    panRef.current = pan;
+  }, [zoom, pan]);
   const [layoutPositions, setLayoutPositions] = useState<Record<string, { x: number; y: number }>>({});
   // 팀 축 협업 타임라인 데이터. 서버가 docs/handoffs · docs/reports frontmatter를 파싱해 반환.
   const [collabEntries, setCollabEntries] = useState<LedgerEntry[]>([]);
@@ -934,33 +942,35 @@ function App() {
     return () => cancelAnimationFrame(rafId);
   }, [selectedProjectId, fileIdsKey, agentIdsKey, depsKey]);
 
-  const handleWheel = (e: React.WheelEvent) => {
+  // React 합성 onWheel 은 브라우저에 따라 passive 로 등록되어 preventDefault 가 먹지 않고,
+  // 상위 `overflow-auto` 영역이 휠로 스크롤되는 문제가 생긴다. 게임 탭일 때만
+  // DOM 에 { passive:false } 휠 리스너를 붙여 브라우저 기본 스크롤을 막는다.
+  useEffect(() => {
     if (activeTab !== 'game') return;
-    e.preventDefault();
-    // 포인터의 캔버스 내부 좌표(offsetX/Y)는 getBoundingClientRect 기준으로 계산한다.
-    // 사이드바 폭·레이아웃 변화가 있어도 실제 컨테이너 경계에 맞춰 보정되므로
-    // 포인터 아래 월드 좌표가 줌 전후로 정확히 고정된다.
-    const rect = e.currentTarget.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    const delta = e.deltaY > 0 ? -0.1 : 0.1;
-    const prevZoom = zoom;
-    const newZoom = Math.max(0.5, Math.min(3, prevZoom + delta));
-    if (newZoom === prevZoom) return;
-    // transformOrigin='0 0' 기준 커서 고정 줌 공식.
-    //   worldX  = (mouseX - panX) / prevZoom           — 포인터 아래 월드 좌표
-    //   newPanX = mouseX - worldX * newZoom
-    //           = mouseX - (mouseX - panX) * (newZoom / prevZoom)
-    // 두 표현은 대수적으로 동일하지만, worldX 중간값을 남겨두면 테스트·디버깅 시
-    // 포인터가 가리키는 요소를 반사적으로 확인할 수 있다.
-    const worldX = (mouseX - pan.x) / prevZoom;
-    const worldY = (mouseY - pan.y) / prevZoom;
-    setZoom(newZoom);
-    setPan({
-      x: mouseX - worldX * newZoom,
-      y: mouseY - worldY * newZoom,
-    });
-  };
+    const el = gameWheelViewportRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = el.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+      const delta = e.deltaY > 0 ? -0.1 : 0.1;
+      const prevZoom = zoomRef.current;
+      const p = panRef.current;
+      const newZoom = Math.max(0.5, Math.min(3, prevZoom + delta));
+      if (newZoom === prevZoom) return;
+      const worldX = (mouseX - p.x) / prevZoom;
+      const worldY = (mouseY - p.y) / prevZoom;
+      setZoom(newZoom);
+      setPan({
+        x: mouseX - worldX * newZoom,
+        y: mouseY - worldY * newZoom,
+      });
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [activeTab]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (activeTab !== 'game') return;
@@ -1848,11 +1858,13 @@ function App() {
 
         {/* Main Content Area */}
         <main className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-auto p-0 relative">
+          <div
+            className={`flex-1 min-h-0 p-0 relative ${activeTab === 'game' ? 'overflow-hidden' : 'overflow-auto'}`}
+          >
           {activeTab === 'game' && (
             <div
-              className="h-full flex flex-col p-0 overflow-hidden relative cursor-grab active:cursor-grabbing infinite-grid"
-              onWheel={handleWheel}
+              ref={gameWheelViewportRef}
+              className="h-full flex flex-col p-0 overflow-hidden relative cursor-grab active:cursor-grabbing infinite-grid overscroll-contain"
               onMouseDown={handleMouseDown}
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
