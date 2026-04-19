@@ -11,7 +11,9 @@ import {
   buildTaskPrompt,
   buildLeaderPlanPrompt,
   extractLeaderPlan,
+  type CodeRulesForPrompt,
 } from './prompts';
+import { buildAgentDispatchContext } from '../services/agentDispatcher';
 import {
   collectNaturalLanguageSample,
   isMostlyKorean,
@@ -388,7 +390,17 @@ export class TaskRunner {
         .find({ id: { $in: project.agents || [] } }, { projection: { _id: 0 } })
         .toArray()).filter(p => p.id !== agent.id);
       const peer = peerPool.length > 0 ? peerPool[Math.floor(Math.random() * peerPool.length)] : null;
-      prompt = buildTaskPrompt({ agent, task, project, candidateFile, peer });
+      // 지시 #87cbd107 — 코드 컨벤션/룰을 디스패처에서 조달해 프롬프트 상단에 주입.
+      // provider 가 미등록이거나 조회 실패시 dispatcher 는 codeRules=null 을 돌려주며,
+      // renderCodeRulesBlock 가 빈 배열을 반환해 프롬프트에는 블록이 추가되지 않는다.
+      let codeRules: CodeRulesForPrompt | null = null;
+      try {
+        const ctx = await buildAgentDispatchContext(project.id);
+        codeRules = ctx.codeRules;
+      } catch {
+        codeRules = null;
+      }
+      prompt = buildTaskPrompt({ agent, task, project, candidateFile, peer, codeRules });
     }
 
     try {

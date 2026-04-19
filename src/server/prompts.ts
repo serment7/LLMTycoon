@@ -1,6 +1,51 @@
 import type { Agent, AgentRole, CodeFile, Project, Task, SharedGoal } from '../types';
 import { findBalancedJsonCandidates } from './promptsJsonExtract';
 
+// 지시 #87cbd107 — 코드 컨벤션/룰을 프롬프트 블록으로 직렬화하는 경량 타입.
+// `src/stores/codeRulesStore.ts` 의 CodeRulesRecord 와 같은 모양을 갖지만, 서버
+// 프롬프트 모듈이 브라우저 스토어(IndexedDB) 에 의존하지 않도록 타입만 복제한다.
+// (실 값은 디스패처(src/services/agentDispatcher.ts) 가 조달한다.)
+export interface CodeRulesForPrompt {
+  scope: 'local' | 'global';
+  indentation: { style: 'space' | 'tab'; size: number };
+  quotes: 'single' | 'double' | 'backtick';
+  semicolons: 'required' | 'omit';
+  filenameConvention: string;
+  linterPreset: string;
+  forbiddenPatterns: { name: string; pattern: string; message?: string }[];
+  extraInstructions?: string;
+}
+
+/**
+ * 코드 컨벤션 블록을 프롬프트 라인 배열로 직렬화한다. null 이면 빈 배열.
+ * 시스템/태스크 프롬프트 상단(언어 규칙 바로 아래) 에 삽입하는 용도.
+ */
+export function renderCodeRulesBlock(rules: CodeRulesForPrompt | null | undefined): string[] {
+  if (!rules) return [];
+  const lines: string[] = [];
+  lines.push('[코드 컨벤션 / 룰]');
+  lines.push(`- 스코프: ${rules.scope === 'local' ? '프로젝트 전용' : '전역 공통'}`);
+  lines.push(`- 들여쓰기: ${rules.indentation.style} × ${rules.indentation.size}`);
+  lines.push(`- 따옴표: ${rules.quotes}`);
+  lines.push(`- 세미콜론: ${rules.semicolons}`);
+  lines.push(`- 파일명 규칙: ${rules.filenameConvention}`);
+  lines.push(`- 린터 프리셋: ${rules.linterPreset}`);
+  if (rules.forbiddenPatterns.length > 0) {
+    lines.push('- 금지 패턴(regex) — 아래 패턴에 매치되는 코드를 새로 작성하지 마세요:');
+    for (const p of rules.forbiddenPatterns) {
+      const msg = p.message ? ` — ${p.message}` : '';
+      lines.push(`    · ${p.name}: \`${p.pattern}\`${msg}`);
+    }
+  }
+  if (rules.extraInstructions && rules.extraInstructions.trim()) {
+    lines.push('- 추가 지시:');
+    for (const l of rules.extraInstructions.split('\n')) lines.push(`    ${l}`);
+  }
+  lines.push('위 규칙을 위반하는 기존 코드는 새 변경분에 한해 점진적으로 수정하라.');
+  lines.push('');
+  return lines;
+}
+
 // 프롬프트 생성 로직은 기존에 클라이언트(App.tsx)에 있었다. 워커 아키텍처로
 // 전환하면서 서버가 태스크를 직접 dispatch 하게 되므로, 같은 규칙을 서버에서
 // 재사용할 수 있도록 순수 함수로 분리한다.
@@ -72,14 +117,17 @@ interface TaskPromptInput {
   project?: Project | null;
   candidateFile?: CodeFile | null;
   peer?: Agent | null;
+  /** 지시 #87cbd107 — 로컬/전역 코드 컨벤션 블록. 디스패처가 조달해 주입. */
+  codeRules?: CodeRulesForPrompt | null;
 }
 
 export function buildTaskPrompt(input: TaskPromptInput): string {
-  const { agent, task, project, candidateFile, peer } = input;
+  const { agent, task, project, candidateFile, peer, codeRules } = input;
   const lines: string[] = [];
   lines.push('[언어 규칙 — 최우선]');
   lines.push('반드시 한국어(한글)로만 응답한다. 코드·식별자·파일명을 제외하고 영어 단어를 섞어 쓰지 않는다. 기술 용어는 가능하면 한국어로 번역하거나 괄호 병기한다.');
   lines.push('');
+  for (const l of renderCodeRulesBlock(codeRules)) lines.push(l);
   lines.push(`[새 지시 #${task.id.slice(0, 8)}]`);
   lines.push(`할당된 업무: ${task.description}`);
   if (project) lines.push(`프로젝트: ${project.name}${project.description ? ` — ${project.description}` : ''}`);

@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Trash2, Download, Github, GitBranch, RefreshCw, FolderGit2, Link2Off, Server, BarChart3, Search, AlertTriangle, GitPullRequest, Check, Clock, FileDown, Sparkles, ClipboardCopy, Pin, Pencil } from 'lucide-react';
+import { Plus, Trash2, Download, Github, GitBranch, RefreshCw, FolderGit2, Link2Off, Server, BarChart3, Search, AlertTriangle, GitPullRequest, Check, Clock, FileDown, Sparkles, ClipboardCopy, Pin, Pencil, Rocket } from 'lucide-react';
 import type { SourceIntegration, ManagedProject, SourceProvider, UserPreferences, GitAutomationPreference, BranchStrategy, CommitStrategy } from '../types';
 import {
   USER_PREFERENCES_KEY,
@@ -15,6 +15,7 @@ import { ProjectEditingHeader } from './EmptyProjectPlaceholder';
 import { FileHistoryPanel } from './FileHistoryPanel';
 import { ProjectSkillsPanel } from './ProjectSkillsPanel';
 import { ProjectMcpServersPanel } from './ProjectMcpServersPanel';
+import { ProjectCodeRulesPanel } from './ProjectCodeRulesPanel';
 import { startGitAutomationScheduler } from '../utils/gitAutomation';
 
 // UX: PR 대상 라디오 선택은 "매번 다시 고르기"보다 "한 번 정해두면 그대로"가 실수를
@@ -2079,7 +2080,10 @@ function IntegrationForm({ onSubmit, onCancel }: {
 // 하나만 편집하며, 탭 전환 시 상대 패널의 폼 상태는 내부 state 로 보존된다(언마운트하지
 // 않는 대신 hidden 으로 숨기면 필드 초기화 회귀가 남으므로, 단순히 조건부 렌더 + 각 패널이
 // 자체 useEffect 로 목록을 재로딩하는 방식을 택한다).
-type AgentContextTab = 'skills' | 'mcpServers';
+// 지시 #87cbd107 — "코드 컨벤션/룰" 탭을 추가해 에이전트 프롬프트에 규칙을
+// 주입하는 단일 진입점을 제공한다. 언마운트 대신 조건부 렌더 + 각 패널의 자체
+// 재로딩 useEffect 로 필드 초기화 회귀를 막는다.
+type AgentContextTab = 'skills' | 'mcpServers' | 'codeRules';
 
 function AgentContextTabs({ projectId, onLog }: { projectId: string; onLog: (message: string) => void }) {
   const [active, setActive] = React.useState<AgentContextTab>('skills');
@@ -2102,6 +2106,14 @@ function AgentContextTabs({ projectId, onLog }: { projectId: string; onLog: (mes
         >
           <Server size={12} aria-hidden /> MCP 서버 설정
         </button>
+        <button
+          role="tab"
+          aria-selected={active === 'codeRules'}
+          onClick={() => setActive('codeRules')}
+          className={`px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider flex items-center gap-1 transition ${active === 'codeRules' ? 'bg-[var(--pixel-accent)] text-black' : 'text-white/70 hover:text-white'} ${focusRing}`}
+        >
+          <Rocket size={12} aria-hidden /> 코드 컨벤션
+        </button>
       </div>
       <div
         className="p-4 border-2"
@@ -2110,9 +2122,9 @@ function AgentContextTabs({ projectId, onLog }: { projectId: string; onLog: (mes
           borderColor: 'var(--pixel-border)',
         }}
       >
-        {active === 'skills'
-          ? <ProjectSkillsPanel projectId={projectId} onLog={onLog} />
-          : <ProjectMcpServersPanel projectId={projectId} onLog={onLog} />}
+        {active === 'skills' && <ProjectSkillsPanel projectId={projectId} onLog={onLog} />}
+        {active === 'mcpServers' && <ProjectMcpServersPanel projectId={projectId} onLog={onLog} />}
+        {active === 'codeRules' && <ProjectCodeRulesPanel projectId={projectId} onLog={onLog} />}
       </div>
     </section>
   );

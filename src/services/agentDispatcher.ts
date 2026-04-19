@@ -26,6 +26,10 @@ import {
   type McpServerRecord,
 } from '../stores/projectMcpServersStore';
 import {
+  loadCodeRulesForAgent as defaultLoadCodeRulesForAgent,
+  type CodeRulesRecord,
+} from '../stores/codeRulesStore';
+import {
   getPendingUserInstructionsStore,
   type EnqueueInput,
   type PendingInstruction,
@@ -48,17 +52,32 @@ export interface AgentMcpServerContext {
   env: Record<string, string>;
 }
 
+export interface AgentCodeRulesContext {
+  scope: 'local' | 'global';
+  indentation: { style: 'space' | 'tab'; size: number };
+  quotes: 'single' | 'double' | 'backtick';
+  semicolons: 'required' | 'omit';
+  filenameConvention: string;
+  linterPreset: string;
+  forbiddenPatterns: { name: string; pattern: string; message?: string }[];
+  extraInstructions?: string;
+}
+
 export interface AgentDispatchContext {
   projectId: string;
   skills: AgentSkillContext[];
   mcpServers: AgentMcpServerContext[];
+  /** 지시 #87cbd107 — 로컬(프로젝트) 규칙 우선, 없으면 전역으로 폴백. */
+  codeRules: AgentCodeRulesContext | null;
 }
 
 export type SkillsProvider = (projectId: string) => Promise<SkillRecord[]>;
 export type McpServersProvider = (projectId: string) => Promise<McpServerRecord[]>;
+export type CodeRulesProvider = (projectId: string) => Promise<CodeRulesRecord | null>;
 
 let skillsProvider: SkillsProvider | null = null;
 let mcpServersProvider: McpServersProvider | null = null;
+let codeRulesProvider: CodeRulesProvider | null = null;
 
 /**
  * 스킬 제공자 등록. null 을 넘기면 초기화 — 기본 브라우저 스토어 폴백이 적용된다.
@@ -73,6 +92,14 @@ export function setMcpServersProvider(provider: McpServersProvider | null): void
 }
 
 /**
+ * 코드 규칙 제공자 등록. null 을 넘기면 초기화 — 기본 브라우저 스토어 폴백이 적용된다.
+ * 서버 환경에서는 `.llmtycoon/rules.json` 을 디스크에서 읽는 프로바이더를 끼워 넣을 수 있다.
+ */
+export function setCodeRulesProvider(provider: CodeRulesProvider | null): void {
+  codeRulesProvider = provider;
+}
+
+/**
  * 에이전트 런타임이 디스패치 직전에 호출해 현재 프로젝트의 스킬·MCP 서버를
  * 한 묶음으로 가져온다. 각 프로바이더가 실패하더라도 한쪽이 비어 있는 결과를
  * 돌려주며 전체 디스패치가 멈추지 않는다(에이전트 컨텍스트는 "있으면 좋고
@@ -82,7 +109,7 @@ export async function buildAgentDispatchContext(
   projectId: string,
 ): Promise<AgentDispatchContext> {
   if (!projectId) {
-    return { projectId: '', skills: [], mcpServers: [] };
+    return { projectId: '', skills: [], mcpServers: [], codeRules: null };
   }
 
   const skillsPromise: Promise<SkillRecord[]> = (async () => {
@@ -103,7 +130,16 @@ export async function buildAgentDispatchContext(
     }
   })();
 
-  const [skillRecords, mcpRecords] = await Promise.all([skillsPromise, mcpPromise]);
+  const rulesPromise: Promise<CodeRulesRecord | null> = (async () => {
+    try {
+      const p = codeRulesProvider ?? defaultLoadCodeRulesForAgent;
+      return await p(projectId);
+    } catch {
+      return null;
+    }
+  })();
+
+  const [skillRecords, mcpRecords, rulesRecord] = await Promise.all([skillsPromise, mcpPromise, rulesPromise]);
 
   return {
     projectId,
@@ -121,6 +157,16 @@ export async function buildAgentDispatchContext(
       args: [...m.args],
       env: { ...m.env },
     })),
+    codeRules: rulesRecord ? {
+      scope: rulesRecord.scope,
+      indentation: { ...rulesRecord.indentation },
+      quotes: rulesRecord.quotes,
+      semicolons: rulesRecord.semicolons,
+      filenameConvention: rulesRecord.filenameConvention,
+      linterPreset: rulesRecord.linterPreset,
+      forbiddenPatterns: rulesRecord.forbiddenPatterns.map((p) => ({ ...p })),
+      extraInstructions: rulesRecord.extraInstructions,
+    } : null,
   };
 }
 
@@ -131,7 +177,7 @@ export async function buildAgentDispatchContext(
  * 구성을 재현 가능하도록 원문을 싣는다.
  */
 export function formatDispatchContextForPrompt(ctx: AgentDispatchContext): string {
-  if (ctx.skills.length === 0 && ctx.mcpServers.length === 0) return '';
+  if (ctx.skills.length === 0 && ctx.mcpServers.length === 0 && !ctx.codeRules) return '';
   const lines: string[] = [];
   lines.push('## 에이전트 컨텍스트 주입');
   if (ctx.skills.length > 0) {
@@ -154,6 +200,26 @@ export function formatDispatchContextForPrompt(ctx: AgentDispatchContext): strin
       lines.push(`- ${m.name}: \`${m.command}${args}\`${envSummary}`);
     }
   }
+  if (ctx.codeRules) {
+    const r = ctx.codeRules;
+    lines.push('', '### 코드 컨벤션 / 룰', `[${r.scope === 'local' ? '프로젝트 전용' : '전역 공통'}]`);
+    lines.push(`- 들여쓰기: ${r.indentation.style} × ${r.indentation.size}`);
+    lines.push(`- 따옴표: ${r.quotes}`);
+    lines.push(`- 세미콜론: ${r.semicolons}`);
+    lines.push(`- 파일명 규칙: ${r.filenameConvention}`);
+    lines.push(`- 린터 프리셋: ${r.linterPreset}`);
+    if (r.forbiddenPatterns.length > 0) {
+      lines.push('- 금지 패턴(regex):');
+      for (const p of r.forbiddenPatterns) {
+        const msg = p.message ? ` — ${p.message}` : '';
+        lines.push(`    · ${p.name}: \`${p.pattern}\`${msg}`);
+      }
+    }
+    if (r.extraInstructions && r.extraInstructions.trim()) {
+      lines.push('- 추가 지시:');
+      for (const l of r.extraInstructions.split('\n')) lines.push(`    ${l}`);
+    }
+  }
   return lines.join('\n');
 }
 
@@ -161,6 +227,7 @@ export function formatDispatchContextForPrompt(ctx: AgentDispatchContext): strin
 export function resetAgentDispatcherForTests(): void {
   skillsProvider = null;
   mcpServersProvider = null;
+  codeRulesProvider = null;
   autoModeProvider = null;
   workingAgentsProvider = null;
   instructionDispatcher = null;
