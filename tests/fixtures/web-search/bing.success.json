@@ -1,0 +1,31 @@
+{
+  "_meta": {
+    "provider": "bing",
+    "httpStatus": 200,
+    "contentType": "application/json",
+    "scenarios": ["N-01", "P-02", "K-01", "K-02", "K-03", "K-04", "K-05"]
+  },
+  "_type": "SearchResponse",
+  "webPages": {
+    "value": [
+      {
+        "name": "Claude API — Anthropic 공식 문서",
+        "url": "https://example.com/docs/claude-api",
+        "snippet": "Claude 4.7 Opus/Sonnet 모델의 메시지·도구·프롬프트 캐싱 엔드포인트 요약.",
+        "dateLastCrawled": "2026-04-10T12:00:00Z"
+      },
+      {
+        "name": "Anthropic API 시작하기",
+        "url": "https://example.com/blog/getting-started",
+        "snippet": "첫 요청·키 발급·샘플 코드로 Claude 를 1분 안에 붙이는 가이드.",
+        "dateLastCrawled": "2026-03-28T09:30:00Z"
+      },
+      {
+        "name": "프롬프트 캐싱 가이드",
+        "url": "https://example.com/blog/prompt-caching",
+        "snippet": "대화 컨텍스트 재사용으로 비용을 90% 절감하는 전략과 한계.",
+        "dateLastCrawled": "2026-04-01T00:00:00Z"
+      }
+    ]
+  }
+}

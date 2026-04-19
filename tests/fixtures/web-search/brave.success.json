@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "provider": "brave",
+    "httpStatus": 200,
+    "contentType": "application/json",
+    "scenarios": ["P-01", "P-04"]
+  },
+  "query": {
+    "original": "claude api"
+  },
+  "web": {
+    "results": [
+      {
+        "title": "Claude API — Anthropic 공식 문서",
+        "url": "https://example.com/docs/claude-api",
+        "description": "Claude 4.7 메시지·도구·캐싱 엔드포인트.",
+        "age": "2 days ago"
+      },
+      {
+        "title": "Anthropic API 튜토리얼",
+        "url": "https://example.com/tutorial/anthropic",
+        "description": "키 발급부터 첫 호출까지 한 페이지로.",
+        "age": "1 week ago"
+      }
+    ]
+  }
+}

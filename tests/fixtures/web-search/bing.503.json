@@ -1,0 +1,13 @@
+{
+  "_meta": {
+    "provider": "bing",
+    "httpStatus": 503,
+    "contentType": "application/json",
+    "scenarios": ["R-02", "R-03", "ER-03"]
+  },
+  "error": {
+    "code": "503",
+    "subCode": "ServiceUnavailable",
+    "message": "The service is temporarily unavailable. Please retry."
+  }
+}

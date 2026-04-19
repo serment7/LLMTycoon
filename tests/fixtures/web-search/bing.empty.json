@@ -1,0 +1,12 @@
+{
+  "_meta": {
+    "provider": "bing",
+    "httpStatus": 200,
+    "contentType": "application/json",
+    "scenarios": ["ER-02", "K-06"]
+  },
+  "_type": "SearchResponse",
+  "webPages": {
+    "value": []
+  }
+}

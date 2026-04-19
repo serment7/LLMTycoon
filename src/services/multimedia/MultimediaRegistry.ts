@@ -32,7 +32,12 @@ import { createVideoAdapter } from './VideoAdapter';
 import { createWebSearchAdapter } from './WebSearchAdapter';
 import { createWebSearchRealAdapter, WEB_SEARCH_ALIAS } from './adapters/WebSearchAdapter';
 import { createResearchAdapter } from './ResearchAdapter';
+import { createResearchRealAdapter, RESEARCH_ALIAS } from './adapters/ResearchAdapter';
 import { createInputAutomationAdapter } from './InputAutomationAdapter';
+import {
+  createRealInputAutomationAdapter,
+  INPUT_AUTOMATION_ALIAS,
+} from './adapters/InputAutomationAdapter';
 
 export interface MultimediaRegistryOptions {
   readonly config?: Partial<MultimediaAdapterConfig>;
@@ -154,11 +159,30 @@ export function createDefaultRegistry(
   reg.register(createRealPdfAdapter, createRealPdfAdapter(reg.getConfig()).descriptor);
   reg.register(createRealPptAdapter, createRealPptAdapter(reg.getConfig()).descriptor);
   reg.register(createVideoAdapter, createVideoAdapter(reg.getConfig()).descriptor);
-  reg.register(createWebSearchAdapter, createWebSearchAdapter(reg.getConfig()).descriptor);
-  reg.register(createResearchAdapter, createResearchAdapter(reg.getConfig()).descriptor);
-  reg.register(
-    createInputAutomationAdapter,
-    createInputAutomationAdapter(reg.getConfig()).descriptor,
-  );
+  // 지시 #f64dc11e — 웹 검색 실구현 등록(별칭 'search/web'). 스켈레톤(priority=0) 보다
+  // 우선(priority=-10) 이라 resolveByKind('web-search') 는 실구현을 채택한다.
+  void createWebSearchAdapter; // 구 스켈레톤 재수출 경로 유지(테스트가 직접 참조)
+  const webSearchInstance = createWebSearchRealAdapter(reg.getConfig());
+  reg.register(createWebSearchRealAdapter, {
+    ...webSearchInstance.descriptor,
+    displayName: `${webSearchInstance.descriptor.displayName} (${WEB_SEARCH_ALIAS})`,
+  });
+  // 지시 #9afd4247 — 심층 조사 실구현 등록(별칭 'research/deep'). 스켈레톤(priority=0)
+  // 보다 우선(priority=-10) 이라 resolveByKind('research') 는 실구현을 채택한다.
+  void createResearchAdapter; // 구 스켈레톤 재수출 경로 유지(테스트가 직접 참조)
+  const researchInstance = createResearchRealAdapter(reg.getConfig());
+  reg.register(createResearchRealAdapter, {
+    ...researchInstance.descriptor,
+    displayName: `${researchInstance.descriptor.displayName} (${RESEARCH_ALIAS})`,
+  });
+  // 지시 #75b61e74 — 입력 자동화 실구현 등록(별칭 'automation/input').
+  // 실구현은 기본 enabled=false 로 UI 레이어가 ConsentPort·OsDriver 를 주입한 인스턴스
+  // 로 후속에 교체 등록하는 경로를 권장한다(makeInputAutomationFactory 참조).
+  void createInputAutomationAdapter; // 구 스켈레톤 재수출 경로 유지(기존 테스트 호환)
+  const inputAutomationInstance = createRealInputAutomationAdapter(reg.getConfig());
+  reg.register(createRealInputAutomationAdapter, {
+    ...inputAutomationInstance.descriptor,
+    displayName: `${inputAutomationInstance.descriptor.displayName} (${INPUT_AUTOMATION_ALIAS})`,
+  });
   return reg;
 }

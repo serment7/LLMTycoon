@@ -1,0 +1,14 @@
+{
+  "_meta": {
+    "provider": "bing",
+    "httpStatus": 429,
+    "contentType": "application/json",
+    "scenarios": ["R-04", "ER-01"]
+  },
+  "error": {
+    "code": "429",
+    "subCode": "TooManyRequests",
+    "message": "Rate limit is exceeded. Try again in 2 seconds.",
+    "moreDetails": "retry-after: 2"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "_meta": {
+    "provider": "duckduckgo",
+    "httpStatus": 200,
+    "contentType": "application/json",
+    "scenarios": ["P-04"]
+  },
+  "AbstractText": "Claude 는 Anthropic 이 개발한 AI 어시스턴트.",
+  "AbstractURL": "https://example.com/claude",
+  "RelatedTopics": [
+    {
+      "FirstURL": "https://example.com/claude-api",
+      "Text": "Claude API - Anthropic 공식 API"
+    },
+    {
+      "FirstURL": "https://example.com/claude-code",
+      "Text": "Claude Code - CLI 기반 개발 도구"
+    },
+    {
+      "FirstURL": "https://example.com/claude-opus",
+      "Text": "Claude Opus - 가장 지능적인 모델"
+    }
+  ]
+}

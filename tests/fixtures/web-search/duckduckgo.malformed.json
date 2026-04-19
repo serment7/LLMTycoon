@@ -1,0 +1,22 @@
+{
+  "_meta": {
+    "provider": "duckduckgo",
+    "httpStatus": 200,
+    "contentType": "application/json",
+    "scenarios": ["N-03"],
+    "notes": "Text 누락, FirstURL 만 있는 엔트리 + 완전히 비어 있는 엔트리가 섞임"
+  },
+  "RelatedTopics": [
+    {
+      "FirstURL": "https://example.com/only-url"
+    },
+    {
+      "Text": "URL 없이 Text 만"
+    },
+    {},
+    {
+      "FirstURL": "https://example.com/both",
+      "Text": "정상 엔트리 - 설명 본문"
+    }
+  ]
+}

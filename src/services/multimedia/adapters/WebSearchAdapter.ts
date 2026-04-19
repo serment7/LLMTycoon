@@ -540,6 +540,16 @@ export async function search(
         callSignal.cancelTimeout();
         throw err;
       }
+      // 외부 호출자가 abort 한 경우 — 타임아웃과 구분해 ABORTED 로 승격한다.
+      // timeout 은 내부 AbortController 가 abort 를 걸어도 options.signal 은 원본
+      // 그대로라, 여기서 둘을 분리해 본다.
+      if (isAbortError(err) && options.signal?.aborted) {
+        callSignal.cancelTimeout();
+        throw new MediaAdapterError('ABORTED', '웹 검색이 취소되었습니다.', {
+          adapterId: WEB_SEARCH_REAL_ADAPTER_ID,
+          cause: err,
+        });
+      }
       lastErr = err;
       if (err instanceof HttpError && err.status === 429) {
         callSignal.cancelTimeout();

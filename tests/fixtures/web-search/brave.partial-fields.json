@@ -1,0 +1,22 @@
+{
+  "_meta": {
+    "provider": "brave",
+    "httpStatus": 200,
+    "contentType": "application/json",
+    "scenarios": ["N-02"],
+    "notes": "age 필드 누락·description 있음 — publishedAt === undefined 기대"
+  },
+  "web": {
+    "results": [
+      {
+        "title": "부분 필드 응답 A",
+        "url": "https://example.com/a",
+        "description": "age 가 없는 결과. publishedAt 은 undefined 로 내려가야 함."
+      },
+      {
+        "title": "부분 필드 응답 B",
+        "url": "https://example.com/b"
+      }
+    ]
+  }
+}
