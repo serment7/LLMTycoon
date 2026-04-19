@@ -49,6 +49,8 @@ export interface EnqueueInput {
   text: string;
   projectId?: string;
   attachments?: InstructionAttachmentRef[];
+  /** 적재 직후 이미 알려진 실패 사유가 있으면 함께 기록(예: 네트워크 throw 직후 재시도 대기). */
+  lastError?: string;
 }
 
 export interface PendingUserInstructionsStore {
@@ -112,15 +114,16 @@ function reduce(state: readonly PendingInstruction[], action: Action): ReducerRe
       return { items: [...state, action.item], affected: action.item, changed: true };
     case 'cancel': {
       let affected: PendingInstruction | null = null;
+      let didTransition = false;
       const items = state.map((r) => {
         if (r.id !== action.id) return r;
         if (r.status !== 'pending') { affected = r; return r; }
         const next: PendingInstruction = { ...r, status: 'cancelled' };
         affected = next;
+        didTransition = true;
         return next;
       });
-      const changed = affected?.status === 'cancelled';
-      return { items, affected, changed };
+      return { items, affected, changed: didTransition };
     }
     case 'remove': {
       const target = state.find((r) => r.id === action.id) ?? null;
@@ -218,6 +221,7 @@ export function createPendingUserInstructionsStore(
         attachments: input.attachments && input.attachments.length > 0
           ? input.attachments.map((a) => ({ fileId: a.fileId, name: a.name, type: a.type }))
           : undefined,
+        lastError: input.lastError,
       };
       apply({ type: 'enqueue', item });
       return item;

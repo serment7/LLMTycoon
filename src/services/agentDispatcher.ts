@@ -259,12 +259,14 @@ export async function submitUserInstruction(
     return { kind: 'dispatched' };
   } catch (err) {
     // 네트워크 실패는 큐에 적재해 다음 flush 기회에 재시도할 수 있게 한다.
+    // markFailed 는 processing 상태 전용이므로, 여기서는 enqueue 시점에 바로
+    // lastError 를 박아 두고 상태는 pending 으로 남겨 재시도 대상에 포함되게 한다.
     const item = store.enqueue({
       text: input.text,
       projectId: input.projectId,
       attachments: input.attachments,
+      lastError: (err as Error).message,
     });
-    store.markFailed(item.id, (err as Error).message);
     return { kind: 'queued', item };
   }
 }
