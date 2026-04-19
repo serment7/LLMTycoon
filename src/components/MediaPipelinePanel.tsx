@@ -7,13 +7,15 @@
 // 본 컴포넌트는 parent 가 projectId 만 넘기면 된다. 네트워크 경로(/api/media/*) 는
 // mediaLoaders 가 소유하고, 패널 자체는 상태·렌더만 책임진다(presentational 분리).
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import type { MediaAsset, MediaKind } from '../types';
 import { MediaAttachmentPanel, useMediaAttachmentPanel } from './MediaAttachmentPanel';
 import {
   detectMediaKind,
   loadMediaFile,
   MediaLoaderError,
+  toChatAttachment,
+  type MediaChatAttachment,
   type MediaPreview,
 } from '../utils/mediaLoaders';
 import {
@@ -28,6 +30,13 @@ export interface MediaPipelinePanelProps {
   projectId: string | null;
   /** 선택 — 주입하면 업로드/생성 성공 시 동일 자산을 부모 상태에도 반영할 수 있다. */
   onAssetReady?: (asset: MediaAsset) => void;
+  /**
+   * 미리보기 목록이 바뀔 때마다 정규화된 대화 첨부 배열을 부모에 통보한다.
+   * 호출자는 이 배열을 리더 요청 페이로드(`/api/tasks.attachments` 또는 별도 축) 에
+   * 함께 실어 모델 컨텍스트로 전달할 수 있다. 호출자가 본 prop 을 주입하지 않으면
+   * 패널은 미리보기만 그리고 외부 상태를 변경하지 않는다.
+   */
+  onAttachmentsChange?: (attachments: MediaChatAttachment[]) => void;
   /** SSR/테스트 환경에서 fetch 를 직접 주입하고 싶을 때만 사용. */
   fetcher?: (input: string, init?: RequestInit) => Promise<Response>;
 }
@@ -44,6 +53,14 @@ export function MediaPipelinePanel(props: MediaPipelinePanelProps) {
   const [previews, setPreviews] = useState<MediaPreview[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // previews 가 바뀔 때마다 정규화된 첨부 배열을 부모에 통보한다. 렌더 중이 아닌
+  // 이펙트 단계에서 실행되어야 setState 경고를 피할 수 있다.
+  const onAttachmentsChange = props.onAttachmentsChange;
+  useEffect(() => {
+    if (!onAttachmentsChange) return;
+    onAttachmentsChange(previews.map(p => toChatAttachment(p)));
+  }, [previews, onAttachmentsChange]);
 
   const handleFilesAdded = useCallback(async (files: File[]) => {
     if (!props.projectId) {

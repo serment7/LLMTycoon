@@ -1262,8 +1262,12 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
             )}
             <button
               onClick={() => setShowPrTargetSelector(true)}
-              className={`px-3 py-2 bg-[var(--pixel-accent)] text-black text-[11px] font-bold uppercase border-b-2 border-[#0099cc] flex items-center gap-2 hover:brightness-110 active:translate-y-px transition ${focusRing}`}
-              title="가져온 모든 프로젝트에서 PR 작업 대상을 검색·선택합니다"
+              disabled={managed.length === 0}
+              className={`px-3 py-2 bg-[var(--pixel-accent)] text-black text-[11px] font-bold uppercase border-b-2 border-[#0099cc] flex items-center gap-2 hover:brightness-110 active:translate-y-px transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:brightness-100 ${focusRing}`}
+              title={managed.length === 0
+                ? '연동된 프로젝트가 없어 선택할 대상이 없습니다 — 연동을 먼저 추가하세요'
+                : '가져온 모든 프로젝트에서 PR 작업 대상을 검색·선택합니다'}
+              aria-disabled={managed.length === 0}
             >
               <Search size={14} /> PR 대상 선택
             </button>

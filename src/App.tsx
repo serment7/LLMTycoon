@@ -27,6 +27,7 @@ import { CollabTimeline } from './components/CollabTimeline';
 import { EmptyProjectPlaceholder, EmptyProjectPlaceholderSkeleton } from './components/EmptyProjectPlaceholder';
 import { DirectivePrompt, AttachmentPreviewModal, classifyAttachment, type DirectiveAttachment as UiDirectiveAttachment } from './components/DirectivePrompt';
 import { MediaPipelinePanel } from './components/MediaPipelinePanel';
+import type { MediaChatAttachment } from './utils/mediaLoaders';
 import { CurrentProjectBadge } from './components/CurrentProjectBadge';
 import { ClaudeTokenUsage } from './components/ClaudeTokenUsage';
 import { TokenUsageIndicator } from './components/TokenUsageIndicator';
@@ -173,6 +174,12 @@ export default function App() {
   // 추출 텍스트 / 이미지 base64 를 그대로 보관하며, 지시 전송 시 payload.attachments
   // 로 서버에 전달한다. 전송 완료 시 비운다. 업로드 UI는 별도 위젯이 주입.
   const [pendingAttachments, setPendingAttachments] = useState<PendingDirectiveAttachment[]>([]);
+  // MediaPipelinePanel 이 정규화해 올려 주는 멀티미디어 첨부. 리더 지시 전송 시
+  // pendingAttachments 와 나란히 서버에 실려, 모델 컨텍스트에서 PDF/PPT/영상 메타가
+  // 페이지 인덱스·요약 한 줄과 함께 조회된다. 전송 성공 후 panel 이 미리보기를 그대로
+  // 유지하므로 (MediaPipelinePanel 미관리) 본 배열을 비우지는 않는다 — 사용자가
+  // panel 에서 명시적으로 제거해야만 사라진다.
+  const [mediaChatAttachments, setMediaChatAttachments] = useState<MediaChatAttachment[]>([]);
   // DirectivePrompt 토스트. 업로드 사전검증(프로젝트 미선택 등) 에러를 여기로 흘려보낸다.
   const [directiveErrorToast, setDirectiveErrorToast] = useState<string | null>(null);
   // 첨부 미리보기 상태. previewUrl 은 image/pdf 모달에 주입할 blob/서버 URL,
@@ -602,6 +609,10 @@ export default function App() {
     });
     newSocket.on('claude-usage:reset', (totals: ClaudeTokenUsageTotals) => {
       claudeTokenUsageStore.hydrate(totals);
+      // QA §2.1 — hydrate 는 누적만 0 으로 되돌리고 sessionStatus 는 유지한다. 서버
+      // 재기동·수동 리셋 이벤트는 "세션이 새 창으로 열렸다" 는 의미이므로 읽기 전용
+      // 배너/버튼 잠금도 함께 풀어야 한다. 누락 시 배지만 초기화되고 배너가 영구로 남는다.
+      claudeTokenUsageStore.setSessionStatus('active');
     });
 
     // 구독 세션 상태 복원 → 서버 응답으로 치환 (#8e18c173).
@@ -1098,6 +1109,10 @@ export default function App() {
           description: instruction,
           source: 'user',
           attachments: serverAttachments.length > 0 ? serverAttachments : undefined,
+          // 멀티미디어 정규화 결과. 서버 /api/tasks 는 현재 이 필드를 구조분해 대상에서
+          // 제외해 무시하지만, 리더 프롬프트 조립 경로가 이 축을 소비하기 시작하면
+          // 필드명만 보고 이어서 쓸 수 있다(#e36d53f8 연결 지점).
+          mediaAttachments: mediaChatAttachments.length > 0 ? mediaChatAttachments : undefined,
         }),
       });
       setPendingAttachments([]);
@@ -2132,7 +2147,10 @@ export default function App() {
               disabled={commandBusy}
             />
             <div className="mt-3">
-              <MediaPipelinePanel projectId={selectedProjectId} />
+              <MediaPipelinePanel
+                projectId={selectedProjectId}
+                onAttachmentsChange={setMediaChatAttachments}
+              />
             </div>
           </div>
         ) : (

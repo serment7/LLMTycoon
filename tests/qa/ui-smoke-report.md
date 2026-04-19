@@ -232,6 +232,11 @@
 > `docs/qa-ui-smoke-regression-2026-04-19-followup.md` 2회차 감사 시점에도
 > **전부 미수정** 상태. 재검증 스위트 45 pass / 6 skip / 0 fail 로 계약 레지스트리
 > 자체는 녹색이나 런타임 결함은 1회차와 동일하게 잔존한다.
+>
+> **2026-04-19 3회차(#add33552)**: 다중 탭 세션 동기화 머지 이후 재감사 결과
+> §1.2·§2.1·§2.4 3건이 수정되어 `CONTRACT` 가 skip → 활성 통과로 승격되었다.
+> 잔존 3건(§1.1 MediaAttachmentPanel 미렌더 · §1.3 mediaEvents prop 미전달 ·
+> §2.2 readOnlyMode prop 미전달). 상세: `docs/qa-session-sync-multitab-smoke-2026-04-19.md`.
 
 
 본 보고서의 블로커·중대 결함은 `tests/uiSmokeReportBlockerContracts.regression.test.ts`

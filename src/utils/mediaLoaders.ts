@@ -26,11 +26,19 @@ import type { MediaAsset, MediaKind } from '../types';
 
 export type MediaLoaderErrorCode =
   | 'UNSUPPORTED_KIND'
+  | 'FILE_TOO_LARGE'
   | 'UPLOAD_FAILED'
   | 'GENERATE_FAILED'
   | 'ADAPTER_NOT_REGISTERED'
   | 'SESSION_EXHAUSTED'
   | 'ABORTED';
+
+/**
+ * 대용량 가드 기본 한도. 서버 multer 상한(200MB, server.ts:440) 보다 낮게 잡아
+ * 큰 파일이 네트워크까지 가기 전에 클라에서 거절되도록 한다. UI·테스트가 옵션으로
+ * 덮을 수 있다.
+ */
+export const DEFAULT_MAX_BYTES = 50 * 1024 * 1024;
 
 export class MediaLoaderError extends Error {
   readonly code: MediaLoaderErrorCode;
@@ -65,6 +73,18 @@ export interface MediaPreview {
  */
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
+/**
+ * 업로드 진행률 보고. 'precheck' = 로컬 크기·헤더 검사, 'upload' = 네트워크 전송 중,
+ * 'finalize' = 서버 응답 수신·파싱 완료. `loaded/total` 단위는 바이트이며 총량이 미상
+ * 인 단계는 둘 다 0 이어도 괜찮다. UI 가 진행률 바 또는 단계 배지를 그릴 때 쓴다.
+ */
+export type MediaLoaderProgressPhase = 'precheck' | 'upload' | 'finalize';
+export interface MediaLoaderProgress {
+  phase: MediaLoaderProgressPhase;
+  loaded: number;
+  total: number;
+}
+
 export interface MediaLoaderOptions {
   projectId: string;
   /** 기본 globalThis.fetch. 테스트/SSR 환경에서 주입으로 교체한다. */
@@ -72,7 +92,39 @@ export interface MediaLoaderOptions {
   signal?: AbortSignal;
   /** 기본 '/api'. 서버 prefix 가 바뀌면 이 옵션으로 조정한다. */
   apiBase?: string;
+  /**
+   * 단일 파일의 최대 업로드 크기. 기본 {@link DEFAULT_MAX_BYTES}. 0 으로 주면 가드를
+   * 끄고 서버 상한에만 의존한다(테스트·대용량 일괄 마이그레이션 용도).
+   */
+  maxBytes?: number;
+  /** 업로드 진행률 콜백. 단계별 최소 1회 호출된다. */
+  onProgress?: (progress: MediaLoaderProgress) => void;
 }
+
+/**
+ * 리더 요청 페이로드에 붙여 모델 컨텍스트로 전달되는 멀티미디어 첨부의 축약형.
+ * DirectivePrompt 가 보내는 `DirectiveAttachment` 와 같은 축에서 합류하되, 페이지/
+ * 슬라이드 인덱스와 한국어 요약이 추가돼 리더가 "이 PDF 의 몇 페이지를 언급한다"
+ * 같은 근거를 잡을 수 있게 한다. 서버가 당장 이 필드를 해석하지 않아도 무시만 되고
+ * 기존 플로와 충돌하지 않는다.
+ */
+export interface MediaChatAttachment {
+  id: string;
+  kind: MediaKind;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  /** 한국어 한 줄 요약 — UI 배지·프롬프트 첨부 헤더에 그대로 쓴다. */
+  summary: string;
+  /** 추출 본문 앞부분 발췌. 기본 256자 상한. 전체는 서버가 별도 저장소에서 조회. */
+  textExcerpt?: string;
+  /** PDF 일 때 1-base 페이지 인덱스 배열. 추출 본문이 \f 로 분리된 경우 계산된다. */
+  pageIndices?: number[];
+  /** PPTX 일 때 1-base 슬라이드 인덱스 배열. 현재 서버가 슬라이드별로 쪼개 주기 전에는 undefined. */
+  slideIndices?: number[];
+}
+
+export const DEFAULT_CHAT_ATTACHMENT_EXCERPT = 256;
 
 export interface VideoGenerationInput {
   prompt: string;
@@ -168,10 +220,27 @@ async function uploadParseableFile(
   if (opts.signal?.aborted) {
     throw new MediaLoaderError('ABORTED', '호출자가 업로드를 중단했습니다.');
   }
+
+  // ── 대용량 가드 ──────────────────────────────────────────────────────────
+  // 네트워크 전에 로컬에서 먼저 차단한다. 기본 50MB, 0 이면 가드 해제. 진행률은
+  // 'precheck' 단계로 먼저 보고해 UI 가 "검사 중" 배지를 띄울 수 있게 한다.
+  const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
+  opts.onProgress?.({ phase: 'precheck', loaded: 0, total: file.size });
+  if (maxBytes > 0 && file.size > maxBytes) {
+    throw new MediaLoaderError(
+      'FILE_TOO_LARGE',
+      `파일 크기 ${file.size}B 가 최대 ${maxBytes}B 를 초과합니다: ${file.name}`,
+    );
+  }
+
   const form = new FormData();
   form.append('projectId', opts.projectId);
   form.append('file', file, file.name);
 
+  // 실제 스트리밍 진행률(업로드 중 chunk 단위)은 fetch 표준 업로드 옵저버가 아직 정식
+  // 지원되지 않아 브라우저 호환성을 위해 "전송 시작/완료" 경계만 보고한다. 하위 호환:
+  // 추후 `Request` 에 `ReadableStream` body 를 직접 주는 경로로 교체 가능.
+  opts.onProgress?.({ phase: 'upload', loaded: 0, total: file.size });
   let res: Response;
   try {
     res = await pickFetcher(opts)(`${apiBaseOf(opts)}/media/upload`, {
@@ -185,6 +254,7 @@ async function uploadParseableFile(
     }
     throw new MediaLoaderError('UPLOAD_FAILED', '업로드 요청 자체가 실패했습니다.', { cause: err });
   }
+  opts.onProgress?.({ phase: 'upload', loaded: file.size, total: file.size });
 
   if (!res.ok) {
     const message = await readErrorMessage(res);
@@ -203,6 +273,7 @@ async function uploadParseableFile(
   const preview = assetToPreview(asset);
   // 페이지 수는 /api/media/upload 응답에 포함되지 않는다(파서 출력이 유실된다).
   // 이후 서버가 pageCount 를 반환하면 preview.pageCount 에 그대로 주입 가능.
+  opts.onProgress?.({ phase: 'finalize', loaded: file.size, total: file.size });
   return preview;
 }
 
@@ -301,4 +372,81 @@ export async function loadMediaFile(file: File, opts: MediaLoaderOptions): Promi
     'UNSUPPORTED_KIND',
     '영상 파일은 업로드 대신 requestVideoGeneration 으로 요청해 주세요.',
   );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 대화 문맥 정규화 — MediaPreview → MediaChatAttachment
+// ────────────────────────────────────────────────────────────────────────────
+
+const KIND_LABEL_KO: Record<MediaKind, string> = {
+  pdf: 'PDF',
+  pptx: 'PPT',
+  video: '영상',
+  image: '이미지',
+};
+
+/**
+ * 페이지 경계가 `\f` (form feed) 로 박혀 있으면 1-base 인덱스 배열을 돌려준다.
+ * pdf-parse v2 가 출력하는 포맷이며, 분리자가 없으면 undefined 를 반환해 호출자가
+ * 페이지 인덱스를 모른 채로 둘 수 있게 한다.
+ */
+function derivePageIndices(text?: string, pageCount?: number): number[] | undefined {
+  if (!text) return pageCount && pageCount > 0 ? Array.from({ length: pageCount }, (_, i) => i + 1) : undefined;
+  if (!text.includes('\f')) {
+    return pageCount && pageCount > 0 ? Array.from({ length: pageCount }, (_, i) => i + 1) : undefined;
+  }
+  const n = text.split('\f').length;
+  return Array.from({ length: n }, (_, i) => i + 1);
+}
+
+function buildSummary(preview: MediaPreview, pageIndices?: number[]): string {
+  const kindLabel = KIND_LABEL_KO[preview.kind];
+  const sizeKb = Math.max(1, Math.round(preview.sizeBytes / 1024));
+  const parts: string[] = [kindLabel];
+  if (pageIndices && pageIndices.length > 0) {
+    parts.push(`${pageIndices.length}페이지`);
+  } else if (preview.pageCount && preview.pageCount > 0) {
+    parts.push(`${preview.pageCount}페이지`);
+  }
+  parts.push(`${sizeKb}KB`);
+  parts.push(preview.name);
+  return parts.join(' · ');
+}
+
+/**
+ * MediaPreview 를 대화 메시지에 첨부 가능한 정규화 축으로 변환한다. 리더 요청
+ * 페이로드(/api/tasks.attachments)에 합류하거나, UI 뱃지·스크린리더 낭독에 그대로
+ * 소비된다. `excerptLength` 는 기본 256자 — Claude 컨텍스트가 커지는 걸 막고,
+ * 전체 본문이 필요하면 서버가 fileId 로 별도 조회하도록 분리했다.
+ */
+export function toChatAttachment(
+  preview: MediaPreview,
+  opts?: { excerptLength?: number },
+): MediaChatAttachment {
+  const excerptLength = opts?.excerptLength ?? DEFAULT_CHAT_ATTACHMENT_EXCERPT;
+  const pageIndices = preview.kind === 'pdf'
+    ? derivePageIndices(preview.extractedText, preview.pageCount)
+    : undefined;
+  const slideIndices = preview.kind === 'pptx'
+    ? (preview.pageCount && preview.pageCount > 0
+        ? Array.from({ length: preview.pageCount }, (_, i) => i + 1)
+        : undefined)
+    : undefined;
+  const trimmedText = preview.extractedText?.trim();
+  const textExcerpt = trimmedText && trimmedText.length > 0
+    ? (trimmedText.length > excerptLength
+        ? trimmedText.slice(0, excerptLength) + '…'
+        : trimmedText)
+    : undefined;
+  return {
+    id: preview.id,
+    kind: preview.kind,
+    name: preview.name,
+    mimeType: preview.mimeType,
+    sizeBytes: preview.sizeBytes,
+    summary: buildSummary(preview, pageIndices),
+    textExcerpt,
+    pageIndices,
+    slideIndices,
+  };
 }

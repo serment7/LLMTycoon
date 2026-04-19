@@ -200,6 +200,53 @@ export function exportPptxDeck(
   return callGenerate({ kind: 'pptx', slides }, opts);
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// 영상 생성 Provider 패턴 (#e36d53f8 §3)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// exportVideo 는 기본값으로 서버 `/api/media/generate` 프록시를 호출하지만, 외부
+// 공급자(예: Runway, Sora 호환) 또는 사내 mock 을 붙일 때 교체 지점을 명확히 해 둔다.
+// 서버 측 `src/server/mediaProcessor.ts::registerVideoGenAdapter` 와는 축이 다르다
+// — 이쪽은 "클라이언트가 어느 엔드포인트를 두드릴 것인가" 를 결정한다. 따라서 이 축을
+// 갈아 끼워도 서버 레지스트리는 건드리지 않는다. 테스트가 mock 공급자 하나를 끼워
+// 넣어 exportVideo 의 위임 경로를 독립적으로 잠글 수 있다.
+
+export interface VideoExporterProviderInput {
+  prompt: string;
+}
+
+export interface VideoExporterProvider {
+  readonly id: string;
+  generate(input: VideoExporterProviderInput, opts: MediaExporterOptions): Promise<MediaPreview>;
+}
+
+/** 기본 HTTP 공급자 — 서버 `/api/media/generate { kind: 'video' }` 를 그대로 호출. */
+export const httpVideoExporterProvider: VideoExporterProvider = {
+  id: 'http',
+  generate(input, opts) {
+    return callGenerate({ kind: 'video', prompt: input.prompt.trim() }, opts);
+  },
+};
+
+interface VideoProviderRegistry {
+  provider: VideoExporterProvider;
+}
+const videoProviderRegistry: VideoProviderRegistry = { provider: httpVideoExporterProvider };
+
+/** 공급자 교체. 서버 기동 시 1회 호출하거나 테스트 setup 에서 mock 을 끼운다. */
+export function registerVideoExporterProvider(p: VideoExporterProvider): void {
+  videoProviderRegistry.provider = p;
+}
+
+export function getVideoExporterProvider(): VideoExporterProvider {
+  return videoProviderRegistry.provider;
+}
+
+/** 테스트 teardown 전용: 기본 HTTP 공급자로 되돌린다. */
+export function resetVideoExporterProvider(): void {
+  videoProviderRegistry.provider = httpVideoExporterProvider;
+}
+
 export function exportVideo(
   input: { prompt: string },
   opts: MediaExporterOptions,
@@ -208,7 +255,7 @@ export function exportVideo(
   if (!prompt) {
     return Promise.reject(new MediaExporterError('VALIDATION_FAILED', '영상 생성 프롬프트가 비어 있습니다.'));
   }
-  return callGenerate({ kind: 'video', prompt }, opts);
+  return getVideoExporterProvider().generate({ prompt }, opts);
 }
 
 // ────────────────────────────────────────────────────────────────────────────

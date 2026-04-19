@@ -202,7 +202,11 @@ import {
   loadPdfFile,
   loadPptFile,
   requestVideoGeneration,
+  toChatAttachment,
+  DEFAULT_MAX_BYTES,
   MediaLoaderError,
+  type MediaPreview,
+  type MediaLoaderProgress,
 } from '../../src/utils/mediaLoaders.ts';
 
 function jsonResponse(body: unknown, status = 200): Response {
