@@ -6,11 +6,11 @@
 // 기존 회귀면을 깨지 않기 위해 그대로 둔다(createPdfAdapter 재수출 경로는 유지).
 //
 // 구성
-//   (1) parsePdf(input: Buffer|string, opts): Promise<ParsedPdf>
+//   (1) parsePdf(input: Buffer|Uint8Array|string, opts): Promise<ParsedPdf>
 //       - 페이지별 텍스트 · 이미지 좌표(선택) · 메타(parserId·durationMs) 를 반환.
 //       - 파서 라이브러리는 의존성 주입 훅 `opts.parseDriver` 로 교체 가능.
 //       - 기본 driver 는 pdf-parse 를 동적 import(테스트 환경에서 붙이지 않아도 됨).
-//   (2) generatePdf(doc: DocumentTree, opts): Promise<Buffer>
+//   (2) generatePdf(doc: DocumentTree, opts): Promise<Uint8Array>
 //       - 섹션 · 표 · 이미지 · 페이지 번호 지원. 기본 driver 는 pdf-lib.
 //       - `opts.generateDriver` 로 대체 가능(테스트에서 메모리 버퍼 stub 교체).
 //   (3) 진행률 콜백 onProgress(ratio: 0~1) 와 AbortSignal 취소 토큰 처리.
@@ -28,9 +28,10 @@
 //   · 대용량(>config.maxBytes) 은 파서 호출 전에 즉시 FILE_TOO_LARGE 로 거절한다.
 
 // node:fs는 브라우저 번들에 포함되면 에러가 발생하므로 사용 시점에 동적 import
-async function readFileNode(path: string): Promise<Buffer> {
+async function readFileNode(path: string): Promise<Uint8Array> {
   const { promises: fs } = await import('node:fs');
-  return fs.readFile(path);
+  const buf = await fs.readFile(path);
+  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 }
 
 import {
@@ -48,8 +49,22 @@ import {
 
 export const PDF_ADAPTER_ID = 'builtin-pdf';
 
-const PDF_MAGIC = Buffer.from('%PDF-');
+/** 브라우저에는 전역 `Buffer` 가 없으므로 Uint8Array 로 매직 검사 (%PDF-) */
+const PDF_MAGIC = new TextEncoder().encode('%PDF-');
 const MIME_PDF = 'application/pdf';
+
+function isNodeBuffer(value: unknown): boolean {
+  const B = (globalThis as { Buffer?: { isBuffer?: (v: unknown) => boolean } }).Buffer;
+  return typeof B?.isBuffer === 'function' && B.isBuffer(value);
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // 공개 타입 — DocumentTree · PdfPage · driver 훅
@@ -222,7 +237,7 @@ export interface GeneratePdfOptions {
 export async function generatePdf(
   doc: DocumentTree,
   opts: GeneratePdfOptions = {},
-): Promise<Buffer> {
+): Promise<Uint8Array> {
   ensureNotAborted(opts.signal);
   if (!doc || !Array.isArray(doc.sections)) {
     throw new MediaAdapterError('INPUT_INVALID', 'DocumentTree.sections 가 필요합니다.', {
@@ -237,7 +252,7 @@ export async function generatePdf(
   try {
     const bytes = await driver.generate({ doc, signal: opts.signal, onProgress: opts.onProgress });
     opts.onProgress?.(1);
-    return Buffer.from(bytes);
+    return bytes;
   } catch (err) {
     if (err instanceof MediaAdapterError) throw err;
     if (isAbortError(err)) {
@@ -505,7 +520,7 @@ async function loadDefaultGenerateDriver(): Promise<PdfGenerateDriver> {
 // 내부 헬퍼
 // ────────────────────────────────────────────────────────────────────────────
 
-async function loadBuffer(input: Buffer | Uint8Array | string): Promise<Buffer> {
+async function loadBuffer(input: Buffer | Uint8Array | string): Promise<Uint8Array> {
   if (typeof input === 'string') {
     try {
       return await readFileNode(input);
@@ -513,34 +528,39 @@ async function loadBuffer(input: Buffer | Uint8Array | string): Promise<Buffer> 
       throw pdfError('PDF_PARSE_ERROR', `파일 열기 실패: ${input}`, { cause: err, reason: 'read-failed' });
     }
   }
-  if (input instanceof Buffer) return input;
-  return Buffer.from(input);
+  if (isNodeBuffer(input)) {
+    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  }
+  if (input instanceof Uint8Array) return input;
+  return new Uint8Array(input);
 }
 
-async function mediaInputToBuffer(input: MediaFileInput): Promise<Buffer | string> {
+async function mediaInputToBuffer(input: MediaFileInput): Promise<Uint8Array | string> {
   const src = input.source as unknown;
   if (typeof src === 'string') return src;
-  if (Buffer.isBuffer(src)) return src as Buffer;
-  if (src instanceof Uint8Array) return Buffer.from(src);
-  if (src instanceof ArrayBuffer) return Buffer.from(new Uint8Array(src));
+  if (isNodeBuffer(src)) {
+    return new Uint8Array(src.buffer, src.byteOffset, src.byteLength);
+  }
+  if (src instanceof Uint8Array) return src;
+  if (src instanceof ArrayBuffer) return new Uint8Array(src);
   // Blob 은 Node 환경에서 arrayBuffer() 를 가진다(18+).
   if (src && typeof (src as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer === 'function') {
     const ab = await (src as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer();
-    return Buffer.from(new Uint8Array(ab));
+    return new Uint8Array(ab);
   }
   throw new MediaAdapterError('INPUT_INVALID', 'MediaFileInput.source 의 형태를 인식할 수 없습니다.', {
     adapterId: PDF_ADAPTER_ID,
   });
 }
 
-function assertPdfMagic(buffer: Buffer | Uint8Array): void {
+function assertPdfMagic(buffer: Uint8Array): void {
   if (buffer.byteLength < PDF_MAGIC.length) {
     throw pdfError('PDF_PARSE_ERROR', 'PDF 매직 바이트 누락 — 파일이 손상되었습니다.', {
       reason: 'missing-magic',
     });
   }
-  const head = buffer instanceof Buffer ? buffer.subarray(0, PDF_MAGIC.length) : Buffer.from(buffer.subarray(0, PDF_MAGIC.length));
-  if (!head.equals(PDF_MAGIC)) {
+  const head = buffer.subarray(0, PDF_MAGIC.length);
+  if (!bytesEqual(head, PDF_MAGIC)) {
     throw pdfError('PDF_PARSE_ERROR', 'PDF 매직 바이트가 일치하지 않습니다 — 다른 포맷 가능성.', {
       reason: 'bad-magic',
     });

@@ -14,9 +14,10 @@
 // 할 때는 details.partial 에 성공한 슬라이드 배열을 담아 호출자가 "일부만이라도"
 // 보여 줄 수 있게 한다.
 
-async function readFileNode(path: string): Promise<Buffer> {
+async function readFileNode(path: string): Promise<Uint8Array> {
   const { promises: fs } = await import('node:fs');
-  return fs.readFile(path);
+  const buf = await fs.readFile(path);
+  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 }
 
 import {
@@ -37,10 +38,39 @@ export const PPT_ADAPTER_ID = 'builtin-pptx';
 const PPT_MIME =
   'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 const LEGACY_PPT_MIME = 'application/vnd.ms-powerpoint';
-const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]); // "PK\x03\x04"
+/** 브라우저에는 전역 `Buffer` 가 없으므로 Uint8Array 로 매직 검사 */
+const ZIP_MAGIC = new Uint8Array([0x50, 0x4b, 0x03, 0x04]); // "PK\x03\x04"
 // 레거시 .ppt 는 복합 파일 이진 형식(Compound File Binary) — D0 CF 11 E0 로 시작.
-const CFB_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0]);
+const CFB_MAGIC = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0]);
 const DEFAULT_MAX_SLIDES = 500;
+
+function isNodeBuffer(value: unknown): boolean {
+  const B = (globalThis as { Buffer?: { isBuffer?: (v: unknown) => boolean } }).Buffer;
+  return typeof B?.isBuffer === 'function' && B.isBuffer(value);
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.byteLength !== b.byteLength) return false;
+  for (let i = 0; i < a.byteLength; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/** Node 에서는 Buffer, 브라우저에서는 chunked btoa */
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  const B = (globalThis as { Buffer?: { from: (data: Uint8Array) => { toString: (enc: string) => string } } }).Buffer;
+  if (typeof B?.from === 'function') {
+    return B.from(bytes).toString('base64');
+  }
+  const chunk = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunk) {
+    const slice = bytes.subarray(i, Math.min(i + chunk, bytes.length));
+    binary += String.fromCharCode.apply(null, slice as unknown as number[]);
+  }
+  return btoa(binary);
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // 공개 타입 — PptSlide · DeckTree · driver 훅
@@ -278,7 +308,7 @@ export interface GeneratePptOptions {
 export async function generatePpt(
   deck: DeckTree,
   opts: GeneratePptOptions = {},
-): Promise<Buffer> {
+): Promise<Uint8Array> {
   ensureNotAborted(opts.signal);
   if (!deck || !Array.isArray(deck.slides)) {
     throw new MediaAdapterError('INPUT_INVALID', 'DeckTree.slides 가 필요합니다.', {
@@ -299,7 +329,7 @@ export async function generatePpt(
   try {
     const bytes = await driver.generate({ deck, signal: opts.signal, onProgress: opts.onProgress });
     opts.onProgress?.(1);
-    return Buffer.from(bytes);
+    return bytes;
   } catch (err) {
     if (err instanceof MediaAdapterError) throw err;
     if (isAbortError(err)) {
@@ -564,7 +594,7 @@ async function loadDefaultGenerateDriver(): Promise<PptGenerateDriver> {
             case 'image': {
               const rect = node.rect ?? { x: 0.5, y: 0.5, width: 6, height: 4 };
               slide.addImage({
-                data: `data:${node.mimeType};base64,${Buffer.from(node.data).toString('base64')}`,
+                data: `data:${node.mimeType};base64,${uint8ArrayToBase64(node.data)}`,
                 x: rect.x,
                 y: rect.y,
                 w: rect.width,
@@ -589,7 +619,7 @@ async function loadDefaultGenerateDriver(): Promise<PptGenerateDriver> {
       }
 
       const out = await pres.write({ outputType: 'nodebuffer' });
-      if (out instanceof Buffer) return new Uint8Array(out);
+      if (isNodeBuffer(out)) return new Uint8Array(out.buffer, out.byteOffset, out.byteLength);
       if (out instanceof Uint8Array) return out;
       return new Uint8Array(out);
     },
@@ -600,7 +630,7 @@ async function loadDefaultGenerateDriver(): Promise<PptGenerateDriver> {
 // 내부 헬퍼
 // ────────────────────────────────────────────────────────────────────────────
 
-async function loadBuffer(input: Buffer | Uint8Array | string): Promise<Buffer> {
+async function loadBuffer(input: Buffer | Uint8Array | string): Promise<Uint8Array> {
   if (typeof input === 'string') {
     try {
       return await readFileNode(input);
@@ -608,38 +638,41 @@ async function loadBuffer(input: Buffer | Uint8Array | string): Promise<Buffer> 
       throw pptError('PPT_PARSE_ERROR', `파일 열기 실패: ${input}`, { cause: err, reason: 'read-failed' });
     }
   }
-  if (input instanceof Buffer) return input;
-  return Buffer.from(input);
+  if (isNodeBuffer(input)) {
+    return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  }
+  if (input instanceof Uint8Array) return input;
+  return new Uint8Array(input);
 }
 
-async function mediaInputToBuffer(input: MediaFileInput): Promise<Buffer | string> {
+async function mediaInputToBuffer(input: MediaFileInput): Promise<Uint8Array | string> {
   const src = input.source as unknown;
   if (typeof src === 'string') return src;
-  if (Buffer.isBuffer(src)) return src as Buffer;
-  if (src instanceof Uint8Array) return Buffer.from(src);
-  if (src instanceof ArrayBuffer) return Buffer.from(new Uint8Array(src));
+  if (isNodeBuffer(src)) {
+    return new Uint8Array(src.buffer, src.byteOffset, src.byteLength);
+  }
+  if (src instanceof Uint8Array) return src;
+  if (src instanceof ArrayBuffer) return new Uint8Array(src);
   if (src && typeof (src as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer === 'function') {
     const ab = await (src as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer();
-    return Buffer.from(new Uint8Array(ab));
+    return new Uint8Array(ab);
   }
   throw new MediaAdapterError('INPUT_INVALID', 'MediaFileInput.source 의 형태를 인식할 수 없습니다.', {
     adapterId: PPT_ADAPTER_ID,
   });
 }
 
-function assertPptMagic(buffer: Buffer | Uint8Array): void {
+function assertPptMagic(buffer: Uint8Array): void {
   if (buffer.byteLength < ZIP_MAGIC.length) {
     throw pptError('PPT_PARSE_ERROR', 'PPTX 매직 바이트 누락 — 파일이 손상되었습니다.', {
       reason: 'missing-magic',
     });
   }
-  const head = buffer instanceof Buffer
-    ? buffer.subarray(0, ZIP_MAGIC.length)
-    : Buffer.from(buffer.subarray(0, ZIP_MAGIC.length));
-  if (head.equals(ZIP_MAGIC)) return;
+  const head = buffer.subarray(0, ZIP_MAGIC.length);
+  if (bytesEqual(head, ZIP_MAGIC)) return;
   // 레거시 .ppt 는 CFB 매직으로 시작한다. 별도 reason 으로 UI 가 안내 문구를 분기할
   // 수 있도록 한다.
-  if (head.equals(CFB_MAGIC)) {
+  if (bytesEqual(head, CFB_MAGIC)) {
     throw pptError(
       'PPT_PARSE_ERROR',
       '레거시 .ppt(97-2003) 형식은 지원하지 않습니다. .pptx 로 다시 저장해 주세요.',

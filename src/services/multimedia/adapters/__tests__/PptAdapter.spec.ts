@@ -320,7 +320,7 @@ test('E3. generatePpt — DeckTree 와 embedKoreanFonts 플래그가 driver 로 
     ],
   };
   const out = await generatePpt(deck, { generateDriver: gen });
-  assert.ok(Buffer.isBuffer(out));
+  assert.ok(out instanceof Uint8Array);
   assert.equal(gen.lastCall.deck?.embedKoreanFonts, true);
   assert.equal(gen.lastCall.deck?.slides.length, 2);
   assert.equal(gen.lastCall.deck?.slides[0].nodes[0].kind, 'title');

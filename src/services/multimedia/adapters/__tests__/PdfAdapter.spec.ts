@@ -214,7 +214,7 @@ test('D1. generatePdf — sections 누락이면 INPUT_INVALID', async () => {
   );
 });
 
-test('D2. generatePdf — fake driver 가 DocumentTree 를 받아 Buffer 를 돌려준다', async () => {
+test('D2. generatePdf — fake driver 가 DocumentTree 를 받아 Uint8Array 를 돌려준다', async () => {
   const gen = fakeGenerateDriver(Buffer.from('%PDF-1.7\nFAKE-OUT'));
   const doc: DocumentTree = {
     title: '리포트',
@@ -233,7 +233,7 @@ test('D2. generatePdf — fake driver 가 DocumentTree 를 받아 Buffer 를 돌
   };
   const progress: number[] = [];
   const out = await generatePdf(doc, { generateDriver: gen, onProgress: (r) => progress.push(r) });
-  assert.ok(Buffer.isBuffer(out));
+  assert.ok(out instanceof Uint8Array);
   assert.ok(out.toString('utf8').includes('FAKE-OUT'));
   const inspector = gen as unknown as { lastCall: { doc: DocumentTree } };
   assert.equal(inspector.lastCall.doc.title, '리포트');
