@@ -1255,6 +1255,34 @@
   --export-button-accent-pptx: var(--token-usage-caution-border);
   --export-button-accent-video: var(--token-usage-warning-border);
 
+  /* ── 멀티미디어 허브(#97bdee2b) — MediaHubPage · MediaUploadQueueRow · MediaGenerationCard · MediaDraftRestoreBadge ──
+   * docs/design/multimedia-ui-spec.md §9 가 요구하는 "4영역 허브" 토큰 묶음.
+   * phase 5상태(§4.2) 는 기존 토큰 체인을 재사용해 색 언어 일관성을 유지한다 —
+   * 본 블록의 값만 교체하면 세그먼트 바·생성 카드·복원 배지가 동시에 스킨을 바꾼다.
+   *
+   * 구성 축:
+   *   1) 구조(섹션 간격·큐 바 높이)
+   *   2) phase × 5상태(precheck/upload/finalize/error/canceled)
+   *   3) 생성 카드 hover 강조선
+   *   4) 초안 복원 배지 배경/전경 + confirm-bg-soft 파생 토큰(§8.1)
+   */
+  --media-hub-section-gap: var(--space-lg);
+  --media-hub-queue-bar-h: 8px;
+  --media-hub-queue-bar-track: var(--token-gauge-track);
+  --media-hub-phase-fg-precheck: var(--pixel-accent);
+  --media-hub-phase-fg-upload: var(--shared-goal-modal-field-focus);
+  --media-hub-phase-fg-finalize: var(--shared-goal-modal-confirm-bg);
+  --media-hub-phase-fg-error: var(--token-usage-warning-icon);
+  --media-hub-phase-fg-canceled: var(--empty-state-subtle-fg);
+  --media-hub-generation-card-hover-border: var(--shared-goal-modal-field-focus);
+
+  /* `--shared-goal-modal-confirm-bg` 의 저채도 변형 — 배지 배경에만 사용한다.
+   * confirm-bg(#34d399) 에 12% alpha 를 두어 "성공 톤" 을 유지한 채 저자극으로
+   * 페이드할 수 있게 한다. §8.1 복원 배지는 이 값을 기본 배경으로 삼는다. */
+  --shared-goal-modal-confirm-bg-soft: rgba(52, 211, 153, 0.12);
+  --media-draft-badge-bg: var(--shared-goal-modal-confirm-bg-soft);
+  --media-draft-badge-fg: var(--shared-goal-modal-confirm-bg);
+
   /* ── 온보딩 코치마크(#4c9bc4a6) — OnboardingTour ──
    * 최초 접속 투어의 스크림·카드·주조색 토큰. 디자이너 시안이 합류하면 이 값들만
    * 교체해 스킨이 바뀐다. fallback 은 본 파일 상단의 픽셀 팔레트로 자연스럽게 수렴.
