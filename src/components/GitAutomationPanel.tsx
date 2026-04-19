@@ -12,8 +12,26 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GitCommit, GitBranch, GitPullRequest, RotateCcw, Save, AlertTriangle, Info, Power, CheckCircle2, Clock3, Check, Square, Loader2, XCircle, Upload, Hash, X } from 'lucide-react';
 import { useReducedMotion } from '../utils/useReducedMotion';
-import type { BranchStrategy } from '../types';
-import { BRANCH_STRATEGY_VALUES } from '../types';
+import type { BranchStrategy, CommitStrategy } from '../types';
+import {
+  BRANCH_STRATEGY_VALUES,
+  COMMIT_STRATEGY_VALUES,
+  COMMIT_STRATEGY_LABEL,
+  DEFAULT_TASK_BOUNDARY_COMMIT_CONFIG,
+} from '../types';
+
+// 태스크 경계 커밋 옵션별 "UI 전용 힌트". types.ts 의 COMMIT_STRATEGY_LABEL 은 요약
+// 라벨만 담당하고, 상세 설명은 컴포넌트 수준에서 관리한다(시안 문구 변경 시 types.ts
+// 가 건드려지지 않도록 분리).
+const COMMIT_STRATEGY_HINT: Record<CommitStrategy, string> = {
+  'per-task': '리더 태스크 1건이 완료될 때마다 자동 커밋을 잘라 냅니다.',
+  'per-goal': '공동 목표가 완료 전환될 때 한 번 집계 커밋을 만듭니다.',
+  'manual':   '자동 커밋을 하지 않고, 사용자가 직접 트리거할 때만 커밋합니다.',
+};
+
+// GitAutomationPanel 전용 기본 접두어. types.ts 의 `TaskBoundaryCommitConfig` 는
+// commitMessagePrefix 를 포함하지 않으므로(본 축은 UI 축) 여기서 관리한다.
+const DEFAULT_COMMIT_MESSAGE_PREFIX = 'auto: ';
 
 // 디자이너: Git 자동화 흐름은 "되돌릴 수 있는 일 → 원격에 남는 일 → 동료에게 알림이
 // 가는 일" 순으로 위험이 누적된다. 3단계 라디오를 가로로 배치하고, 각 단계를
@@ -37,6 +55,11 @@ export interface GitAutomationSettings {
   // 렌더링이 담당하므로 빈 값으로 유지된다. UI 는 값이 비어 있어도 전략 전환에 대비해
   // 마지막 입력을 기억한다.
   newBranchName: string;
+  // 태스크 경계 커밋(#f1d5ce51) — 자동 개발 ON 에서 "언제 커밋을 잘라 낼 것인가". 위
+  // branchStrategy 와는 별개의 직교 축이다(브랜치 이름 전략 != 커밋 경계 전략).
+  commitStrategy: CommitStrategy;
+  // 자동 생성 커밋 제목 앞에 항상 붙는 접두어(예: 'auto: '). 빈 문자열이면 원문.
+  commitMessagePrefix: string;
 }
 
 export const DEFAULT_AUTOMATION: GitAutomationSettings = {
@@ -47,6 +70,8 @@ export const DEFAULT_AUTOMATION: GitAutomationSettings = {
   enabled: true,
   branchStrategy: 'per-session',
   newBranchName: '',
+  commitStrategy: DEFAULT_TASK_BOUNDARY_COMMIT_CONFIG.commitStrategy,
+  commitMessagePrefix: DEFAULT_COMMIT_MESSAGE_PREFIX,
 };
 
 // QA: 'fixed-branch' 전략에서 사용자가 입력한 브랜치명을 git ref 규칙과 팀 관례에
@@ -392,6 +417,12 @@ export function GitAutomationPanel({
   const [enabled, setEnabled] = useState<boolean>(baseline.enabled);
   const [branchStrategyChoice, setBranchStrategyChoice] = useState<BranchStrategy>(baseline.branchStrategy);
   const [newBranchName, setNewBranchName] = useState<string>(baseline.newBranchName);
+  // 태스크 경계 커밋 상태(#f1d5ce51). baseline 이 initial 변경으로 재계산되면 useEffect
+  // 의 복원 훅이 baseline 값으로 다시 세팅해 기존 하이드레이션 레이스 회피 패턴(1587ea9)
+  // 과 동일 리듬을 유지한다. 초기 렌더에서 이미 baseline 값으로 세팅되므로 "저장
+  // 전에 로드가 한 번 덮는" 케이스도 깨지지 않는다.
+  const [commitStrategy, setCommitStrategy] = useState<CommitStrategy>(baseline.commitStrategy);
+  const [commitMessagePrefix, setCommitMessagePrefix] = useState<string>(baseline.commitMessagePrefix);
   // 디자이너: 2모드 라디오 시안(A안) 전용 local 상태. onSave 페이로드와 분리해 사용 —
   // 본 블록은 아직 "시안" 단계이므로 서버 스키마를 건드리지 않고 UI 만 먼저 검증한다.
   // 후속 단계에서 Joker 가 4전략 라디오와 통합 결정을 내리면 해당 블록 중 하나를 철거.
@@ -411,6 +442,17 @@ export function GitAutomationPanel({
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
   }, []);
 
+  // 하이드레이션 레이스 방지(1587ea9 패턴 확장). `initial` 프롭이 비동기 로드로 늦게
+  // 도착해 baseline 이 재계산되면, useState 초기값으로만 잡혀 있던
+  // branchStrategyChoice/newBranchName 이 DEFAULT_AUTOMATION 으로 남아 셀렉트 UI 가
+  // 저장값을 반영하지 못하는 회귀를 막는다. 저장 경로는 onSave 가 같은 값을 부모에
+  // 전파하므로 본 훅은 no-op 이다. 프로젝트 전환은 부모 쪽 Fragment key 로 재마운트돼
+  // 여기로 들어오지 않는다.
+  useEffect(() => {
+    setBranchStrategyChoice(baseline.branchStrategy);
+    setNewBranchName(baseline.newBranchName);
+  }, [baseline.branchStrategy, baseline.newBranchName]);
+
   const sampleVars = { ...SAMPLE_DEFAULT, ...(sample ?? {}) };
   const selected = FLOW_OPTIONS.find(o => o.key === flow) ?? FLOW_OPTIONS[0];
   const risk = RISK_STYLE[selected.risk];
@@ -427,7 +469,9 @@ export function GitAutomationPanel({
     || prTitleTemplate !== baseline.prTitleTemplate
     || enabled !== baseline.enabled
     || branchStrategyChoice !== baseline.branchStrategy
-    || newBranchName !== baseline.newBranchName;
+    || newBranchName !== baseline.newBranchName
+    || commitStrategy !== baseline.commitStrategy
+    || commitMessagePrefix !== baseline.commitMessagePrefix;
 
   // 'fixed-branch' 전략일 때만 사용자가 입력한 브랜치명이 저장·실행 페이로드에 실린다.
   // 다른 전략에서는 검증을 돌리지 않고 입력값도 저장 시 빈 문자열로 비운다.
@@ -445,6 +489,8 @@ export function GitAutomationPanel({
     setEnabled(baseline.enabled);
     setBranchStrategyChoice(baseline.branchStrategy);
     setNewBranchName(baseline.newBranchName);
+    setCommitStrategy(baseline.commitStrategy);
+    setCommitMessagePrefix(baseline.commitMessagePrefix);
     onLog?.('Git 자동화 설정 초기화');
   };
 
@@ -462,6 +508,11 @@ export function GitAutomationPanel({
       enabled,
       branchStrategy: branchStrategyChoice,
       newBranchName: needsNewBranchInput ? newBranchName.trim() : '',
+      commitStrategy,
+      // 접두어 앞뒤 공백이 "실수로 입력된 한 칸" 이면 커밋 메시지에 불필요한 공백이
+      // 반복 누적되므로 양끝만 trim. 사이 공백(예: 'auto: ') 은 사용자가 의도한
+      // 표식이므로 보존한다.
+      commitMessagePrefix: commitMessagePrefix.replace(/^\s+|\s+$/g, ''),
     };
     onSave?.(next);
     const strategyLabel = BRANCH_STRATEGY_LABEL[branchStrategyChoice]?.label ?? branchStrategyChoice;
@@ -1012,6 +1063,88 @@ export function GitAutomationPanel({
             </label>
           </div>
         )}
+      </fieldset>
+
+      {/*
+        태스크 경계 커밋(#f1d5ce51) — 브랜치 전략과 직교하는 "커밋 경계" 축.
+        라디오 3종이 1:1 로 CommitStrategy 상수에 매핑되며, types.ts 의 라벨 한 곳에서
+        문구를 관리한다. 선택값이 'manual' 이면 prefix 는 여전히 저장되지만 자동 커밋이
+        돌지 않으므로 사실상 "수동 개시 시에만 사용되는 기본 접두어" 역할만 한다.
+      */}
+      <fieldset
+        className="space-y-2 border border-[var(--pixel-border)] p-3"
+        data-testid="commit-strategy-fieldset"
+        aria-labelledby="commit-strategy-legend"
+      >
+        <legend
+          id="commit-strategy-legend"
+          className="px-1 text-[10px] font-bold uppercase tracking-wider text-[var(--pixel-accent)]"
+        >
+          태스크 경계 커밋
+        </legend>
+        <div
+          role="radiogroup"
+          aria-label="커밋 경계 전략"
+          className="grid grid-cols-1 sm:grid-cols-3 gap-2"
+        >
+          {COMMIT_STRATEGY_VALUES.map((value) => {
+            const shortLabel = COMMIT_STRATEGY_LABEL[value];
+            const hint = COMMIT_STRATEGY_HINT[value];
+            const active = commitStrategy === value;
+            return (
+              <label
+                key={value}
+                data-testid={`commit-strategy-option-${value}`}
+                data-active={active ? 'true' : 'false'}
+                className={`flex items-start gap-2 p-2 border-2 cursor-pointer transition-colors ${
+                  active
+                    ? 'border-[var(--pixel-accent)] bg-black/50'
+                    : 'border-[var(--pixel-border)] bg-black/30 hover:bg-black/40'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="git-commit-strategy"
+                  value={value}
+                  checked={active}
+                  onChange={() => setCommitStrategy(value)}
+                  data-testid={`commit-strategy-radio-${value}`}
+                  aria-describedby={`commit-strategy-${value}-hint`}
+                  className="mt-0.5"
+                />
+                <div className="min-w-0">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-white">
+                    {shortLabel}
+                  </div>
+                  <div
+                    id={`commit-strategy-${value}-hint`}
+                    className="text-[10px] text-white/60 leading-relaxed"
+                  >
+                    {hint}
+                  </div>
+                </div>
+              </label>
+            );
+          })}
+        </div>
+        <label className="block pt-1">
+          <span className="flex items-center gap-2 text-[10px] font-bold text-[var(--pixel-accent)] uppercase tracking-wider mb-1">
+            커밋 메시지 접두어
+            <span className="text-[9px] text-white/40 normal-case">— 모든 자동 커밋 제목 앞에 붙습니다</span>
+          </span>
+          <input
+            type="text"
+            value={commitMessagePrefix}
+            onChange={(e) => setCommitMessagePrefix(e.target.value)}
+            placeholder="예: auto: "
+            data-testid="commit-message-prefix-input"
+            className={`w-full bg-black/40 border-2 border-[var(--pixel-border)] px-3 py-2 text-sm text-white font-mono placeholder:text-white/30 focus:border-[var(--pixel-accent)] focus:outline-none ${focusRing}`}
+          />
+          <p className="mt-1 text-[10px] flex items-center gap-1 text-white/50">
+            <Info size={10} />
+            빈 값이면 접두어 없이 원문 커밋 메시지가 그대로 사용됩니다.
+          </p>
+        </label>
       </fieldset>
 
       <div className="space-y-3">

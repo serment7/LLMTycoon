@@ -10,12 +10,28 @@ import { tmpdir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { MongoClient, Db } from 'mongodb';
 import multer from 'multer';
-import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings, GitAutomationBranchStrategy, GIT_AUTOMATION_BRANCH_STRATEGY_VALUES, GitCredential, GitCredentialRedacted, SharedGoal, SharedGoalPriority, SharedGoalStatus, ProjectOptionsUpdate, PROJECT_OPTION_DEFAULTS, ClaudeTokenUsage, ClaudeTokenUsageTotals } from './src/types';
-import { EMPTY_TOTALS as EMPTY_CLAUDE_USAGE_TOTALS, mergeUsage as mergeClaudeUsageTotals } from './src/utils/claudeTokenUsageStore';
+import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings, GitAutomationBranchStrategy, GIT_AUTOMATION_BRANCH_STRATEGY_VALUES, GitCredential, GitCredentialRedacted, SharedGoal, SharedGoalPriority, SharedGoalStatus, ProjectOptionsUpdate, PROJECT_OPTION_DEFAULTS, ClaudeTokenUsage, ClaudeTokenUsageTotals, MediaAsset, MediaKind } from './src/types';
+import { EMPTY_TOTALS as EMPTY_CLAUDE_USAGE_TOTALS, mergeUsage as mergeClaudeUsageTotals, recordErrorToTotals, emptyErrorCounters } from './src/utils/claudeTokenUsageStore';
 import { parseClaudeUsageFromStdout } from './src/utils/claudeTokenUsageParse';
+import { onClaudeUsage, onTokenExhausted, emitTokenExhausted } from './src/server/claudeClient';
+import { classifyClaudeError, type ClaudeErrorCategory } from './src/server/claudeErrors';
+import { setAgentWorkerSessionStatus, notifyAgentMediaGenerated } from './src/server/agentWorker';
+import type { ClaudeSessionStatus } from './src/types';
 import { AgentWorkerRegistry } from './src/server/agentWorker';
 import { TaskRunner } from './src/server/taskRunner';
 import { processDirectiveFile } from './src/server/fileProcessor';
+import {
+  createMediaProcessor,
+  inferMediaKind,
+  NotImplementedMediaError,
+} from './src/server/mediaProcessor';
+import {
+  createMediaGenerator,
+  ExhaustedBlockedError,
+  type PdfReportTemplate,
+  type PptxSlide,
+} from './src/server/mediaGenerator';
+import { getMediaAssetStore } from './src/server/mediaAssetStore';
 import { ProjectCompletionTracker } from './src/server/completionWatcher';
 import { parseEntry, type LedgerEntry } from './src/utils/handoffLedger';
 import { inferFileType, isExcludedFromCodeGraph, normalizeCodeGraphPath } from './src/utils/codeGraphFilter';
@@ -119,15 +135,51 @@ const CLAUDE_CONCURRENCY = 10;
 // 프로세스 수명 동안의 Claude 토큰 사용량 누적. 서버 재기동 시 0 으로 초기화되고,
 // 클라이언트는 최초 `GET /api/claude/token-usage` + socket `claude-usage:updated`
 // push 로 동기화한다. 직접 쓰지 말고 `recordClaudeUsage` 를 통해 갱신할 것.
-let claudeUsageTotals: ClaudeTokenUsageTotals = { ...EMPTY_CLAUDE_USAGE_TOTALS, byModel: {} };
+let claudeUsageTotals: ClaudeTokenUsageTotals = { ...EMPTY_CLAUDE_USAGE_TOTALS, byModel: {}, errors: emptyErrorCounters() };
 // socket.io 인스턴스는 startServer 내부에서 생성되므로, 그 시점에 주입한다.
 // startServer 진입 전에 recordClaudeUsage 가 호출될 일은 없다(CLI 호출은 서버 준비 후).
 let claudeUsageBroadcaster: ((totals: ClaudeTokenUsageTotals, delta: ClaudeTokenUsage) => void) | null = null;
+
+// 세션 토큰 가용 상태(#cdaaabf3) — 기본 'active'. classifyClaudeError 가 token_exhausted
+// 또는 subscription_expired 를 돌려주면 exhausted 로 전이하고, socket `claude-session:status`
+// 이벤트로 전 클라이언트에 푸시한다. REST `/api/claude/session-status` 조회 결과도 이 값.
+let claudeSessionStatus: ClaudeSessionStatus = 'active';
+let claudeSessionStatusReason: string | undefined;
+let claudeSessionStatusUpdatedAt: string = new Date().toISOString();
+let claudeSessionStatusBroadcaster: ((payload: { status: ClaudeSessionStatus; reason?: string; at: string }) => void) | null = null;
+
+function setClaudeSessionStatus(status: ClaudeSessionStatus, reason?: string): void {
+  if (claudeSessionStatus === status && claudeSessionStatusReason === reason) return;
+  claudeSessionStatus = status;
+  claudeSessionStatusReason = reason;
+  claudeSessionStatusUpdatedAt = new Date().toISOString();
+  // agentWorker 모듈도 동일 상태를 공유해 신규 enqueue 를 거부할 수 있도록 한다.
+  try { setAgentWorkerSessionStatus(status); } catch { /* 동기화 실패는 회로의 다른 축에 영향 없음 */ }
+  if (claudeSessionStatusBroadcaster) {
+    claudeSessionStatusBroadcaster({ status, reason, at: claudeSessionStatusUpdatedAt });
+  }
+}
 
 function recordClaudeUsage(usage: ClaudeTokenUsage) {
   const stamped: ClaudeTokenUsage = { ...usage, at: usage.at ?? new Date().toISOString() };
   claudeUsageTotals = mergeClaudeUsageTotals(claudeUsageTotals, stamped);
   if (claudeUsageBroadcaster) claudeUsageBroadcaster(claudeUsageTotals, stamped);
+}
+
+// 카테고리별 에러 누적(server in-memory totals.errors). 브로드캐스터가 있으면
+// 바로 클라이언트 전원에 push 해 위젯의 errors 배지가 실데이터로 갱신되게 한다.
+// `classifyClaudeError` 가 이미 수행된 카테고리만 받아 의도되지 않은 분류 중복을 차단.
+function recordClaudeError(category: ClaudeErrorCategory) {
+  claudeUsageTotals = recordErrorToTotals(claudeUsageTotals, category);
+  if (claudeUsageBroadcaster) claudeUsageBroadcaster(claudeUsageTotals, {
+    input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+    at: new Date().toISOString(),
+  });
+  // 구독 세션 폴백(#cdaaabf3) — 토큰 소진/만료 카테고리는 에러 카운터 누적과 별개로
+  // 전역 이벤트 버스에 한 번 방송해 UI 배너/워커 가드/세션 상태 엔드포인트를 동기화한다.
+  if (category === 'token_exhausted' || category === 'subscription_expired') {
+    emitTokenExhausted({ category, message: '' });
+  }
 }
 
 function drainClaudeQueue() {
@@ -179,7 +231,14 @@ function callClaude(prompt: string, ctx?: AgentContext): Promise<string> {
       const stderrChunks: Buffer[] = [];
       child.stdout?.on('data', d => { stdout += d.toString('utf8'); });
       child.stderr?.on('data', d => { stderrChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d)); });
-      child.on('error', err => { cleanup(); reject(err); });
+      child.on('error', err => {
+        cleanup();
+        // spawn 단계의 에러는 대부분 ENOENT(CLAUDE_BIN 미설치)·EPIPE·ECONNRESET 계열이다.
+        // classifyClaudeError 가 이를 network/api_error 로 수렴시키고, 서버 totals.errors
+        // 에 카테고리별 1건을 누적해 내보내기·상단바 배지가 실데이터를 보도록 한다.
+        try { recordClaudeError(classifyClaudeError(err).category); } catch { /* 누적 실패는 메인 흐름에 영향 없음 */ }
+        reject(err);
+      });
       child.on('close', code => {
         cleanup();
         if (code === 0) {
@@ -215,6 +274,9 @@ function callClaude(prompt: string, ctx?: AgentContext): Promise<string> {
         if (stdout.trim()) parts.push(`stdout: ${stdout.trim().slice(0, 600)}`);
         const msg = parts.join(' | ');
         console.error('[claude]', msg);
+        // stderr 본문에서 rate_limit/overloaded/auth 단서가 잡히면 그에 맞는 카테고리로
+        // 분류한다. 단서가 없으면 폴백 경로가 api_error 로 수렴.
+        try { recordClaudeError(classifyClaudeError({ message: msg }).category); } catch { /* 누적 실패는 메인 흐름에 영향 없음 */ }
         reject(new Error(msg));
       });
     };
@@ -362,6 +424,149 @@ async function startServer() {
         ? 'PDF 해석에 실패했습니다. 다른 파일을 시도해 주세요.'
         : '파일 업로드에 실패했습니다. 다른 파일을 시도해 주세요.';
       res.status(500).json({ error: friendly });
+    }
+  });
+
+  // ─── 멀티미디어 엔드포인트 (지시 #f6052a91, 1차 스켈레톤) ─────────────────
+  // `/api/media/upload` — PDF/PPT/이미지/영상을 받아 MediaAsset 을 돌려준다.
+  // `/api/media/generate` — 프롬프트 기반 영상 생성 요청. VideoGenAdapter 가
+  //   등록되지 않은 기본 상태에서는 503 으로 수렴해, 운영자가 어댑터를 붙이기
+  //   전까지 UI 가 "등록되지 않음" 피드백만 받도록 설계한다. 영상 외 kind 는 501.
+  //
+  // 본 두 엔드포인트는 아직 DB 영속·객체 스토리지 업로드를 하지 않는다 — 다음
+  // 사이클에서 `mediaAssetsCol` 과 workspace 파일 저장을 덧붙일 예정.
+  const mediaUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 200 * 1024 * 1024 }, // 영상 포함 최대 200MB. 대용량은 추후 스트리밍 전환.
+  });
+  const mediaProcessor = createMediaProcessor();
+
+  app.post('/api/media/upload', mediaUpload.single('file'), async (req, res) => {
+    const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim() : '';
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    if (!req.file)  { res.status(400).json({ error: 'file required' }); return; }
+    const project = await projectsCol.findOne({ id: projectId });
+    if (!project)   { res.status(404).json({ error: 'project not found' }); return; }
+
+    const kind: MediaKind | null = inferMediaKind(req.file.originalname, req.file.mimetype);
+    if (!kind) {
+      res.status(415).json({ error: '지원하지 않는 미디어 형식입니다.' });
+      return;
+    }
+
+    try {
+      const parseResult = await mediaProcessor.parse({
+        buffer: req.file.buffer,
+        name: req.file.originalname,
+        mimeType: req.file.mimetype,
+      });
+      const asset: MediaAsset = {
+        id: uuidv4(),
+        projectId,
+        kind,
+        name: req.file.originalname,
+        mimeType: req.file.mimetype,
+        sizeBytes: req.file.size,
+        createdAt: new Date().toISOString(),
+        extractedText: parseResult.extractedText,
+        thumbnails: parseResult.thumbnails,
+      };
+      res.json(asset);
+    } catch (e) {
+      if (e instanceof NotImplementedMediaError) {
+        // 미구현 어댑터(PPT 등)는 501 로 돌려 UI 가 "지원 예정" 을 명시할 수 있게 한다.
+        res.status(501).json({ error: e.message });
+        return;
+      }
+      console.error('[media/upload] failed:', (e as Error)?.stack || (e as Error)?.message || e);
+      res.status(500).json({ error: '미디어 업로드에 실패했습니다.' });
+    }
+  });
+
+  // 지시 #b425328e §1~§2 — 생성 축 실제 라우팅.
+  // 서버 기동 시 한 번 만든 mediaGenerator 인스턴스를 `/api/media/generate` 요청마다
+  // 재사용한다. `sessionStatusProvider` 로 claudeSessionStatus 를 주입해 exhausted
+  // 상태에서 외부 영상 API 호출이 자동 차단되게 한다(§4 폴백 가드 연동).
+  const mediaGenerator = createMediaGenerator({
+    sessionStatusProvider: () => claudeSessionStatus,
+  });
+  const mediaAssetStore = getMediaAssetStore();
+
+  app.post('/api/media/generate', async (req, res) => {
+    const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId.trim() : '';
+    const prompt    = typeof req.body?.prompt    === 'string' ? req.body.prompt.trim()    : '';
+    const rawKind   = typeof req.body?.kind      === 'string' ? req.body.kind.trim()      : '';
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    const project = await projectsCol.findOne({ id: projectId });
+    if (!project)   { res.status(404).json({ error: 'project not found' }); return; }
+
+    try {
+      if (rawKind === 'video') {
+        if (!prompt) { res.status(400).json({ error: 'prompt required' }); return; }
+        const asset = await mediaGenerator.generateVideo({ prompt, projectId });
+        mediaAssetStore.save(asset);
+        // §3: 생성 성공 시 CollabTimeline 훅에 알림(emitter 미등록 시 no-op).
+        notifyAgentMediaGenerated(asset, { from: 'system', to: 'leader' });
+        res.json(asset);
+        return;
+      }
+
+      if (rawKind === 'pdf') {
+        // 요청 본문에서 리포트 템플릿을 받되 최소 필드(title) 만 강제.
+        const template: PdfReportTemplate = {
+          title: typeof req.body?.template?.title === 'string' && req.body.template.title.trim()
+            ? req.body.template.title.trim()
+            : (prompt || '보고서'),
+          sections: Array.isArray(req.body?.template?.sections)
+            ? req.body.template.sections
+                .filter((s: unknown): s is { heading: unknown; body: unknown } => !!s && typeof s === 'object')
+                .map((s: { heading: unknown; body: unknown }) => ({
+                  heading: typeof s.heading === 'string' ? s.heading : '',
+                  body: typeof s.body === 'string' ? s.body : '',
+                }))
+            : [],
+        };
+        const attachedIds: string[] = Array.isArray(req.body?.assetIds) ? req.body.assetIds.filter((x: unknown) => typeof x === 'string') : [];
+        const assets = attachedIds
+          .map(id => mediaAssetStore.get(id))
+          .filter((a): a is NonNullable<typeof a> => !!a);
+        const asset = await mediaGenerator.generatePdfReport({ assets, template, projectId });
+        mediaAssetStore.save(asset);
+        // §3: 생성 성공 시 CollabTimeline 훅에 알림(emitter 미등록 시 no-op).
+        notifyAgentMediaGenerated(asset, { from: 'system', to: 'leader' });
+        res.json(asset);
+        return;
+      }
+
+      if (rawKind === 'pptx') {
+        const rawSlides = Array.isArray(req.body?.slides) ? req.body.slides : [];
+        const slides: PptxSlide[] = rawSlides
+          .filter((s: unknown): s is { title: unknown; body?: unknown } => !!s && typeof s === 'object')
+          .map((s: { title: unknown; body?: unknown }) => ({
+            title: typeof s.title === 'string' ? s.title : '',
+            body: typeof s.body === 'string' ? s.body : undefined,
+          }));
+        if (slides.length === 0) {
+          res.status(400).json({ error: 'slides required (배열에 title 포함 항목이 있어야 합니다)' });
+          return;
+        }
+        const asset = await mediaGenerator.generatePptxDeck({ slides, projectId });
+        mediaAssetStore.save(asset);
+        // §3: 생성 성공 시 CollabTimeline 훅에 알림(emitter 미등록 시 no-op).
+        notifyAgentMediaGenerated(asset, { from: 'system', to: 'leader' });
+        res.json(asset);
+        return;
+      }
+
+      res.status(501).json({ error: `생성 미구현: kind=${rawKind || '(미지정)'}` });
+    } catch (e) {
+      if (e instanceof ExhaustedBlockedError) {
+        // §4 가드 — 사용자 UX 에서 "세션 소진" 배너 경로로 수렴.
+        res.status(503).json({ error: e.message, category: e.category });
+        return;
+      }
+      console.error('[media/generate] failed:', (e as Error)?.stack || (e as Error)?.message || e);
+      res.status(500).json({ error: '미디어 생성에 실패했습니다.' });
     }
   });
 
@@ -1281,7 +1486,10 @@ async function startServer() {
     const project = await projectsCol.findOne({ id });
     if (!project) { res.status(404).json({ error: 'project not found' }); return; }
     const row = await gitAutomationSettingsCol.findOne({ projectId: id }, { projection: { _id: 0 } });
-    res.json(withDefaultSettings(id, row as Partial<GitAutomationSettings> | null));
+    // DB raw 문서를 그대로 반환하되, 기본값으로 빈 필드를 보완한다.
+    // uiBranchStrategy 등 UI 전용 필드도 함께 내려보낸다.
+    const defaults = withDefaultSettings(id, row as Partial<GitAutomationSettings> | null);
+    res.json({ ...defaults, ...(row || {}) });
   });
 
   app.post('/api/projects/:id/git-automation', async (req, res) => {
@@ -1313,15 +1521,28 @@ async function startServer() {
       reviewers: validation.config.reviewers,
       branchStrategy: persistedBranchStrategy,
       branchName: persistedBranchName,
+      // 태스크 경계 커밋(#f1d5ce51) — UI 가 항상 값을 채워 보내도록 하되, 과거 row 호환을
+      // 위해 optional 로 유지. 값이 없으면 프런트 GitAutomationPanel 이 기본값을 보완.
+      commitStrategy: validation.config.commitStrategy,
+      commitMessagePrefix: validation.config.commitMessagePrefix,
       updatedAt: new Date().toISOString(),
     };
+    // UI 브랜치 전략 원본(per-session 등)을 별도 필드로 보존
+    const extra: Record<string, unknown> = {};
+    if (typeof body.uiBranchStrategy === 'string') {
+      extra.uiBranchStrategy = body.uiBranchStrategy;
+    }
+    if (typeof body.fixedBranchName === 'string') {
+      extra.fixedBranchName = body.fixedBranchName;
+    }
     await gitAutomationSettingsCol.updateOne(
       { projectId: id },
-      { $set: settings },
+      { $set: { ...settings, ...extra } },
       { upsert: true },
     );
-    io.emit('git-automation:updated', { projectId: id, settings });
-    res.json(settings);
+    const saved = { ...settings, ...extra };
+    io.emit('git-automation:updated', { projectId: id, settings: saved });
+    res.json(saved);
   });
 
   // Git 자동화 패널 설정을 읽어 실제 git/gh 명령을 돌리는 실행기.
@@ -1740,9 +1961,68 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Claude 토큰 사용량 브로드캐스터 주입: io 가 준비된 뒤에야 푸시 이벤트를
+  // 보낼 수 있다. recordClaudeUsage 는 CLI 호출 완료 시 이 함수를 통해 총계를
+  // 전 클라이언트에 푸시한다. delta 는 마지막 한 건, totals 는 서버 누적본.
+  claudeUsageBroadcaster = (totals, delta) => {
+    io.emit('claude-usage:updated', { totals, delta });
+  };
+
+  // agentWorker 의 stream-json result 이벤트에서 발사되는 usage 를 전역 옵저버로
+  // 받아 기존 `recordClaudeUsage` 에 합친다. 이 한 줄이 에이전트 멀티턴 경로의
+  // 실제 토큰 수집을 상단바 위젯까지 배선한다(#176df2b8 의 (2) 배선 보완).
+  onClaudeUsage(recordClaudeUsage);
+
+  // 세션 폴백 방송 배선(#cdaaabf3) — emitTokenExhausted 가 발사되면 서버 측 상태를
+  // exhausted 로 전이시키고 agentWorker 가드를 닫는다. socket 경로는 아래 broadcaster
+  // 주입 후 바로 이어받아 기존 접속자에게도 즉시 푸시된다.
+  claudeSessionStatusBroadcaster = (payload) => {
+    io.emit('claude-session:status', payload);
+  };
+  onTokenExhausted((event) => {
+    setClaudeSessionStatus('exhausted', event.message);
+  });
+
+  // 현재 세션 가용 상태 조회. 클라이언트는 초기 마운트 시점에 이 값으로 위젯 배너와
+  // DirectivePrompt/SharedGoalForm 의 readOnly 가드를 세팅하고, 이후에는 socket 푸시를 따른다.
+  app.get('/api/claude/session-status', (_req, res) => {
+    res.json({
+      status: claudeSessionStatus,
+      reason: claudeSessionStatusReason,
+      at: claudeSessionStatusUpdatedAt,
+    });
+  });
+
+  // 현재 누적 총계를 한 번에 돌려주는 조회 엔드포인트. 클라이언트는 최초 마운트
+  // 시점에 이 값으로 상단바 위젯을 하이드레이트하고, 이후에는 소켓 푸시를 따른다.
+  app.get('/api/claude/token-usage', (_req, res) => {
+    res.json(claudeUsageTotals);
+  });
+
+  // 누적을 수동으로 0 으로 되돌린다. 관측 편의용 — UI 에서 "이번 세션부터 다시
+  // 측정" 시나리오를 만들기 위해 별도 엔드포인트로 분리했다. 전 클라이언트에
+  // 리셋 이벤트를 푸시해 동시 접속 탭들도 함께 0 으로 맞춘다.
+  app.post('/api/claude/token-usage/reset', (_req, res) => {
+    // errors 축도 함께 0 으로 되돌려야 "사용자가 재측정 시 과거 에러 잔상" 이 남지 않는다.
+    claudeUsageTotals = { ...EMPTY_CLAUDE_USAGE_TOTALS, byModel: {}, errors: emptyErrorCounters() };
+    io.emit('claude-usage:reset', claudeUsageTotals);
+    res.json(claudeUsageTotals);
+  });
+
   // Socket logic
   io.on('connection', async (socket) => {
     socket.emit('state:initial', await getGameState());
+    // 새 접속자에게 최신 토큰 사용량을 즉시 전달 — 초기 fetch 가 늦어도 위젯이
+    // 빈 0 이 아닌 누적값부터 보여주도록 한다. fetch 가 이후 도착하면 동일 값이
+    // 덮여 일관성에 문제 없다.
+    socket.emit('claude-usage:updated', { totals: claudeUsageTotals, delta: null });
+    // 세션 폴백 상태도 동일 원칙으로 즉시 전달 — 재접속한 탭도 read-only 배너/워커
+    // 가드를 동기화 지연 없이 복원한다.
+    socket.emit('claude-session:status', {
+      status: claudeSessionStatus,
+      reason: claudeSessionStatusReason,
+      at: claudeSessionStatusUpdatedAt,
+    });
 
     socket.on('agent:move', async ({ agentId, x, y }) => {
       await agentsCol.updateOne({ id: agentId }, { $set: { x, y } });

@@ -27,6 +27,9 @@ import { CollabTimeline } from './components/CollabTimeline';
 import { EmptyProjectPlaceholder, EmptyProjectPlaceholderSkeleton } from './components/EmptyProjectPlaceholder';
 import { DirectivePrompt, AttachmentPreviewModal, classifyAttachment, type DirectiveAttachment as UiDirectiveAttachment } from './components/DirectivePrompt';
 import { CurrentProjectBadge } from './components/CurrentProjectBadge';
+import { ClaudeTokenUsage } from './components/ClaudeTokenUsage';
+import { claudeTokenUsageStore } from './utils/claudeTokenUsageStore';
+import type { ClaudeTokenUsage as ClaudeTokenUsageDelta, ClaudeTokenUsageTotals } from './types';
 import { computeWorkspaceInsights } from './utils/workspaceInsights';
 import type { LedgerEntry } from './utils/handoffLedger';
 import { EXCLUDED_PATHS } from './utils/codeGraphFilter';
@@ -575,6 +578,23 @@ export default function App() {
         ...prev,
         agents: prev.agents.map(a => a.id === agentId ? { ...a, workingOnFileId: fileId } : a)
       }));
+    });
+
+    // Claude 토큰 사용량 동기화: 서버가 누적 총계를 소유한다(server.ts 의 claudeUsageTotals).
+    //  - 최초 마운트 시 1회 GET 으로 기존 값을 끌어와 store.hydrate.
+    //  - 이후에는 소켓 'claude-usage:updated' / 'claude-usage:reset' 푸시를 따른다.
+    // 소켓 'claude-usage:updated' 는 delta 가 있으면 applyDelta 대신 totals 를 통째
+    // 하이드레이트한다 — 서버가 단일 출처이므로 클라가 자체 누적을 시도하면 두 탭이
+    // 열렸을 때 어긋난다.
+    fetch('/api/claude/token-usage')
+      .then(r => r.ok ? r.json() as Promise<ClaudeTokenUsageTotals> : null)
+      .then(totals => { if (totals) claudeTokenUsageStore.hydrate(totals); })
+      .catch(() => { /* 서버 미기동 등은 조용히 무시, 이후 소켓 푸시로 동기화됨 */ });
+    newSocket.on('claude-usage:updated', (payload: { totals: ClaudeTokenUsageTotals; delta: ClaudeTokenUsageDelta | null }) => {
+      if (payload?.totals) claudeTokenUsageStore.hydrate(payload.totals);
+    });
+    newSocket.on('claude-usage:reset', (totals: ClaudeTokenUsageTotals) => {
+      claudeTokenUsageStore.hydrate(totals);
     });
 
     return () => {
@@ -1282,40 +1302,89 @@ export default function App() {
         <div className="text-2xl font-bold text-[var(--pixel-accent)] uppercase tracking-[2px]">
           LLMTycoon
         </div>
-        <div className="flex gap-5 text-sm">
-          <div className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] text-[var(--pixel-accent)]">
+        {/*
+          상단바 메트릭 칩 묶음. 시각적으로는 배지 1개지만 스크린리더에는 각
+          데이터 포인트가 독립된 status 로 들려야 한다. role="group" + aria-label
+          은 묶음의 의미, 개별 칩의 aria-label 은 라벨·수치·단위를 한 문장으로
+          묶어 읽는 데 쓴다(ux-cleanup-visual §3 A11y-01). aria-live 는 일부러
+          붙이지 않는다 — zoom 값이나 에이전트 수는 1초 단위로 튈 수 있어
+          polite 라도 스팸 고지가 된다. 변경 시점 공지가 필요한 위젯은 이미
+          ClaudeTokenUsage 가 자체 role="button"+aria-expanded 로 가지고 있다.
+        */}
+        <div
+          className="flex gap-5 text-sm"
+          role="group"
+          aria-label="상단 요약 지표"
+          data-testid="app-header-metrics"
+        >
+          <div
+            className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] text-[var(--pixel-accent)]"
+            role="status"
+            aria-label={`확대 ${Math.round(zoom * 100)} 퍼센트`}
+            data-testid="header-metric-zoom"
+          >
             확대: {Math.round(zoom * 100)}%
           </div>
-          <div className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)]">
+          <div
+            className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)]"
+            role="status"
+            aria-label={`전체 에이전트 ${gameState.agents.length} 명`}
+            data-testid="header-metric-agents"
+          >
             에이전트: {gameState.agents.length}
           </div>
-          <div className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)]">
-            프로젝트: {gameState.projects.length}
+          {/*
+            `CurrentProjectBadge` 가 "현재 프로젝트: 이름" 을 보여 주기 때문에 본 칩은
+            "관리 중인 전체 프로젝트 개수" 라는 의미를 잃지 않도록 라벨을 분화한다.
+            시각 라벨은 공간 절약을 위해 짧게 "전체 프로젝트" 로, 접근성 라벨은
+            풀 문장으로 내려 스크린리더가 두 배지를 혼동하지 않는다.
+          */}
+          <div
+            className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)]"
+            role="status"
+            aria-label={`관리 중인 전체 프로젝트 ${gameState.projects.length} 개`}
+            data-testid="header-metric-projects"
+          >
+            전체 프로젝트: {gameState.projects.length}
           </div>
           <CurrentProjectBadge projectName={project?.name ?? null} />
           <div
             className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] border-l-[6px]"
             style={{ borderLeftColor: getMetricTierColor(workspaceInsights.coveragePercent) }}
+            role="status"
+            aria-label={`의존성 커버리지 ${workspaceInsights.coveragePercent} 퍼센트${
+              workspaceInsights.isolatedFiles.length > 0
+                ? `, 고립 파일 ${workspaceInsights.isolatedFiles.length} 건`
+                : ''
+            }`}
             title={workspaceInsights.isolatedFiles.length > 0
               ? `고립 파일: ${workspaceInsights.isolatedFiles.join(', ')}`
               : '의존성이 연결되지 않은 파일이 없습니다'}
+            data-testid="header-metric-coverage"
           >
             커버리지: {workspaceInsights.coveragePercent}%
           </div>
           <div
             className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] border-l-[6px]"
             style={{ borderLeftColor: getMetricTierColor(agentActivity.total === 0 ? null : agentActivity.ratio) }}
+            role="status"
+            aria-label={`에이전트 활성률 ${agentActivity.ratio} 퍼센트`}
             title={activityBreakdownLabel}
+            data-testid="header-metric-activity"
           >
             활성률: {agentActivity.ratio}%
           </div>
           <div
             className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] border-l-[6px]"
             style={{ borderLeftColor: getMetricTierColor(collaborationStats.messageCount === 0 ? null : collaborationStats.participationRate) }}
+            role="status"
+            aria-label={`협업 지표 ${collaborationBadge}`}
             title={collaborationLabel}
+            data-testid="header-metric-collaboration"
           >
             협업: {collaborationBadge}
           </div>
+          <ClaudeTokenUsage />
         </div>
       </header>
 

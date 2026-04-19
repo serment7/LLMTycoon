@@ -1,10 +1,16 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2, Download, Github, GitBranch, RefreshCw, FolderGit2, Link2Off, Server, BarChart3, Search, AlertTriangle, GitPullRequest, Check, Clock, FileDown, Sparkles, ClipboardCopy, Pin, Pencil } from 'lucide-react';
-import type { SourceIntegration, ManagedProject, SourceProvider, UserPreferences, GitAutomationPreference, BranchStrategy } from '../types';
-import { USER_PREFERENCES_KEY, BRANCH_STRATEGY_VALUES } from '../types';
+import type { SourceIntegration, ManagedProject, SourceProvider, UserPreferences, GitAutomationPreference, BranchStrategy, CommitStrategy } from '../types';
+import {
+  USER_PREFERENCES_KEY,
+  BRANCH_STRATEGY_VALUES,
+  COMMIT_STRATEGY_VALUES,
+  DEFAULT_TASK_BOUNDARY_COMMIT_CONFIG,
+} from '../types';
 import { GitAutomationPanel, DEFAULT_AUTOMATION, type GitAutomationSettings, type GitFlowLevel } from './GitAutomationPanel';
 import { GitCredentialsSection } from './GitCredentialsSection';
 import { SharedGoalForm } from './SharedGoalForm';
+import { EmptyState } from './EmptyState';
 import { startGitAutomationScheduler } from '../utils/gitAutomation';
 
 // UX: PR 대상 라디오 선택은 "매번 다시 고르기"보다 "한 번 정해두면 그대로"가 실수를
@@ -112,6 +118,12 @@ const SERVER_TO_FLOW: Record<string, GitFlowLevel> = {
 // 은 서버 `git_automation_settings` 레코드 밖(프로젝트 옵션 레벨)에서 쓰이는 값이지만,
 // /api/git-automation/tick 트리거 페이로드가 settings 객체를 그대로 서버에 넘기므로
 // 여기서 함께 직렬화해 자동화 파이프라인이 전략·고정 브랜치명을 동시에 읽을 수 있게 한다.
+// UI BranchStrategy → 서버 GitAutomationBranchStrategy 변환
+// 'fixed-branch'는 기존 브랜치에 커밋 → 'current', 나머지는 새 브랜치 생성 → 'new'
+function uiToServerBranchStrategy(ui: BranchStrategy): 'new' | 'current' {
+  return ui === 'fixed-branch' ? 'current' : 'new';
+}
+
 function toServerSettings(ui: GitAutomationSettings): Record<string, unknown> {
   let branchTemplate = ui.branchPattern;
   if (!branchTemplate.includes('{slug}')) {
@@ -127,11 +139,17 @@ function toServerSettings(ui: GitAutomationSettings): Record<string, unknown> {
     commitScope: '',
     prTitleTemplate: ui.prTitleTemplate,
     reviewers: [],
-    branchStrategy: ui.branchStrategy,
+    // 서버 DB는 'new'|'current'만 허용. UI의 세부 전략은 별도 필드로 보존.
+    branchStrategy: uiToServerBranchStrategy(ui.branchStrategy),
+    // UI의 원본 브랜치 전략을 별도 필드로 저장하여 로드 시 복원 가능
+    uiBranchStrategy: ui.branchStrategy,
+    commitStrategy: ui.commitStrategy,
+    commitMessagePrefix: ui.commitMessagePrefix,
   };
   if (ui.branchStrategy === 'fixed-branch' && ui.newBranchName.trim()) {
     payload.fixedBranchName = ui.newBranchName.trim();
     payload.newBranchName = ui.newBranchName.trim();
+    payload.branchName = ui.newBranchName.trim();
   }
   return payload;
 }
@@ -142,13 +160,31 @@ function fromServerSettings(server: Record<string, unknown>): GitAutomationSetti
   let branchPattern = (server.branchTemplate as string) || DEFAULT_AUTOMATION.branchPattern;
   // 서버의 {slug} → UI의 {branch} 로 역변환
   branchPattern = branchPattern.replace('{slug}', '{branch}');
-  const rawStrategy = server.branchStrategy;
-  const branchStrategy: BranchStrategy = typeof rawStrategy === 'string'
-    && (BRANCH_STRATEGY_VALUES as readonly string[]).includes(rawStrategy)
-      ? rawStrategy as BranchStrategy
-      : DEFAULT_AUTOMATION.branchStrategy;
-  const rawNewBranch = server.newBranchName ?? server.fixedBranchName;
+  // UI 브랜치 전략 복원: uiBranchStrategy(원본) → branchStrategy('new'/'current' 폴백)
+  let branchStrategy: BranchStrategy = DEFAULT_AUTOMATION.branchStrategy;
+  const rawUiStrategy = server.uiBranchStrategy;
+  if (typeof rawUiStrategy === 'string'
+    && (BRANCH_STRATEGY_VALUES as readonly string[]).includes(rawUiStrategy)) {
+    branchStrategy = rawUiStrategy as BranchStrategy;
+  } else if (server.branchStrategy === 'current') {
+    branchStrategy = 'fixed-branch';
+  }
+  const rawNewBranch = server.newBranchName ?? server.fixedBranchName ?? server.branchName;
   const newBranchName = typeof rawNewBranch === 'string' ? rawNewBranch : '';
+  // 태스크 경계 커밋(#f1d5ce51) — 서버 저장 row 가 이 필드를 모르던 과거 프로젝트와도
+  // 호환되도록 누락/오타는 기본값으로 폴백. COMMIT_STRATEGY_VALUES 밖의 임의 문자열은
+  // 무시하고 DEFAULT 값 사용.
+  const rawCommitStrategy = server.commitStrategy;
+  const commitStrategy: CommitStrategy = typeof rawCommitStrategy === 'string'
+    && (COMMIT_STRATEGY_VALUES as readonly string[]).includes(rawCommitStrategy)
+      ? rawCommitStrategy as CommitStrategy
+      : DEFAULT_TASK_BOUNDARY_COMMIT_CONFIG.commitStrategy;
+  // DEFAULT_TASK_BOUNDARY_COMMIT_CONFIG 는 서버 실행 축의 설정만 담당하고 `commitMessagePrefix`
+  // 는 갖고 있지 않다. UI 기본 접두어는 GitAutomationPanel 의 DEFAULT_AUTOMATION.commitMessagePrefix
+  // 로 단일 출처를 두고 복원 경로에서 그대로 가져다 쓴다.
+  const commitMessagePrefix = typeof server.commitMessagePrefix === 'string'
+    ? server.commitMessagePrefix
+    : DEFAULT_AUTOMATION.commitMessagePrefix;
   return {
     flow,
     branchPattern,
@@ -157,6 +193,8 @@ function fromServerSettings(server: Record<string, unknown>): GitAutomationSetti
     enabled: server.enabled !== false,
     branchStrategy,
     newBranchName,
+    commitStrategy,
+    commitMessagePrefix,
   };
 }
 
@@ -529,12 +567,46 @@ export function describeProjectScope(projectLabel: EditingProjectLabel): string 
 // Tailwind 변수로 정의된 accent 색상과 동일한 톤을 사용해 테마 변경에도 자동 대응한다.
 const focusRing = 'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pixel-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-black';
 
-// 상위에서 현재 프로젝트가 지정되지 않았으면 관리 메뉴 자체를 렌더하지 않는다.
-// 과거엔 null 상태에서도 빈 리스트/로딩 UI가 잠시 노출돼 사용자가 "무엇이 선택됐는지"
-// 혼동하는 회귀가 있었다. 훅이 걸리기 전(컴포넌트 경계)에서 분기해 Rules of Hooks 를
-// 지키면서도 불필요한 네트워크/localStorage 접근을 차단한다.
+// 상위에서 현재 프로젝트가 지정되지 않았으면 관리 메뉴의 본 내용을 렌더하지
+// 않는다. 훅이 걸리기 전(컴포넌트 경계)에서 분기해 Rules of Hooks 를 지키면서도
+// 불필요한 네트워크/localStorage 접근을 차단한다.
+//
+// 2026-04-19 UX 감사(docs/ui-audit-2026-04-19.md §4-Ⅱ) 반영:
+// 과거에는 여기서 `null` 을 돌려 프로젝트 관리 탭 직진입 시 "완전한 빈 화면" 이
+// 되는 회귀가 있었다. 사용자는 사이드바에서 탭 5 를 눌렀는데 아무것도 안 뜨는
+// 이유를 알 수 없었다. 본 변경에서는 작은 안내 박스로 교체해 "왜 비어 있는지 +
+// 어디를 눌러야 하는지" 를 한눈에 전달한다. 박스 자체는 React 훅을 쓰지 않아
+// `null` 반환과 마찬가지로 훅 규칙을 위반하지 않는다.
 export function ProjectManagement({ onLog, currentProjectId }: Props) {
-  if (!currentProjectId) return null;
+  if (!currentProjectId) {
+    // 2026-04-19 ux-cleanup-visual 시안 §5 에 따라 공통 EmptyState 로 치환.
+    // outer wrapper 는 기존 회귀 테스트(tests/projectManagementNoProjectPlaceholder.
+    // regression.test.ts) 의 계약(role="status"·aria-live·data-testid) 을 지키기
+    // 위해 그대로 유지한다. 현재 선택된 프로젝트가 없습니다 / 프로젝트를 먼저
+    // 선택하면 두 문구를 같은 DOM 에 함께 담아 회귀 정규식과 정합 유지.
+    // 2026-04-19 §9.4 이관 해소: 아이콘 없이 텍스트만 있던 빈 상태에 로고급
+    // 아이콘(FolderGit2) 을 병기해 시각 계층을 상향. 공통 EmptyState 의 icon 슬롯
+    // 을 그대로 활용하므로 디자인 토큰(--empty-state-icon-fg) 과 일관성을 유지한다.
+    return (
+      <div
+        data-testid="project-management-no-project"
+        role="status"
+        aria-live="polite"
+        className="p-8 max-w-2xl mx-auto"
+      >
+        <EmptyState
+          variant="empty"
+          icon={<FolderGit2 size={24} aria-hidden="true" style={{ color: 'var(--empty-state-icon-fg)' }} />}
+          title="프로젝트를 먼저 선택하세요"
+          description={<>
+            현재 선택된 프로젝트가 없습니다. "프로젝트" 탭(단축키{' '}
+            <kbd className="px-1.5 py-0.5 border border-white/25 rounded text-[10px]">2</kbd>)에서
+            작업할 프로젝트를 먼저 선택하면, 공동 목표·Git 자동화·자격증명 설정이 이 화면에 표시됩니다.
+          </>}
+        />
+      </div>
+    );
+  }
   return <ProjectManagementInner onLog={onLog} currentProjectId={currentProjectId} />;
 }
 
@@ -1292,14 +1364,15 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
                 `gitAutomationByProject[selectedProjectId]` 의 존재로 판정하고, 프로젝트가
                 바뀔 때 key 를 달리 줘 새 프로젝트의 저장값으로 반드시 재초기화되게 한다. */}
             {selectedProjectId && gitAutomationByProject[selectedProjectId] === undefined ? (
-              <div
-                className="p-4 border-2 border-[var(--pixel-border)] bg-[#0f3460] text-[12px] text-white/70"
-                data-testid="git-automation-panel-loading"
-                role="status"
-                aria-live="polite"
-              >
-                Git 자동화 설정을 불러오는 중…
-              </div>
+              // 2026-04-19 ux-cleanup-visual 시안 §5 에 따라 공통 EmptyState(variant=loading)
+              // 로 치환. data-testid 는 기존 테스트/DOM 쿼리와 맞물릴 수 있어 유지.
+              <EmptyState
+                variant="loading"
+                title="Git 자동화 설정을 불러오는 중…"
+                description="프로젝트별 저장된 자동화 옵션을 서버에서 가져오고 있습니다."
+                fillMinHeight={false}
+                testId="git-automation-panel-loading"
+              />
             ) : (
               // 프로젝트 전환 시 `GitAutomationPanel` 을 반드시 재마운트하기 위해
               // Fragment 의 key 로 selectedProjectId 를 넘긴다. 자식이 `initial` 을
@@ -1821,16 +1894,6 @@ function SectionBadge({ count }: { count: number }) {
     >
       {count.toString().padStart(2, '0')}
     </span>
-  );
-}
-
-function EmptyState({ icon, title, hint }: { icon: React.ReactNode; title: string; hint: string }) {
-  return (
-    <div className="col-span-full border-2 border-dashed border-[var(--pixel-border)] bg-black/20 p-8 flex flex-col items-center justify-center text-center gap-2">
-      <div className="text-white/40">{icon}</div>
-      <p className="text-[12px] font-bold text-white/70 uppercase tracking-wider">{title}</p>
-      <p className="text-[10px] text-white/40 max-w-xs">{hint}</p>
-    </div>
   );
 }
 
