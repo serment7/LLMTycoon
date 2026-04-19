@@ -4,7 +4,8 @@
 // 에러 코드를 강제하는 "공용 파이프라인" 진입점이다. 추후 fileProcessor 도 이 로더를
 // 쓰도록 통합할 수 있다(이번 턴에는 기존 회귀 면을 건드리지 않기 위해 분리 유지).
 
-import { promises as fs } from 'node:fs';
+// node:fs는 브라우저 번들에 포함되면 에러 발생 — 사용 시점에 동적 import
+const getFs = () => import('node:fs').then(m => m.promises);
 import path from 'node:path';
 
 import {
@@ -46,6 +47,7 @@ export async function extractPdf(
 
   const startedAt = Date.now();
 
+  const fs = await getFs();
   let stat: Awaited<ReturnType<typeof fs.stat>>;
   try {
     stat = await fs.stat(filePath);
@@ -62,7 +64,7 @@ export async function extractPdf(
 
   onProgress?.({ phase: 'open', current: 0, total: stat.size });
 
-  const buffer = await fs.readFile(filePath);
+  const buffer = await fs.readFile(filePath) as Buffer;
   if (buffer.length < PDF_MAGIC.length || !buffer.subarray(0, PDF_MAGIC.length).equals(PDF_MAGIC)) {
     throw new MediaParseError(
       'MEDIA_UNSUPPORTED_FORMAT',

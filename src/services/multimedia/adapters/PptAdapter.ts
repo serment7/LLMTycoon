@@ -14,7 +14,10 @@
 // 할 때는 details.partial 에 성공한 슬라이드 배열을 담아 호출자가 "일부만이라도"
 // 보여 줄 수 있게 한다.
 
-import { promises as fs } from 'node:fs';
+async function readFileNode(path: string): Promise<Buffer> {
+  const { promises: fs } = await import('node:fs');
+  return fs.readFile(path);
+}
 
 import {
   MediaAdapterError,
@@ -600,7 +603,7 @@ async function loadDefaultGenerateDriver(): Promise<PptGenerateDriver> {
 async function loadBuffer(input: Buffer | Uint8Array | string): Promise<Buffer> {
   if (typeof input === 'string') {
     try {
-      return await fs.readFile(input);
+      return await readFileNode(input);
     } catch (err) {
       throw pptError('PPT_PARSE_ERROR', `파일 열기 실패: ${input}`, { cause: err, reason: 'read-failed' });
     }

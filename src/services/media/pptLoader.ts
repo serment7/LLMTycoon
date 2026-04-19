@@ -5,7 +5,7 @@
 // MEDIA_UNSUPPORTED_FORMAT 으로 빠르게 실패한다. 어댑터를 추가하는 후속 PR 은
 // `parsePptxAdapter` 함수만 채워 넣으면 된다(아래 NOTE 블록 참고).
 
-import { promises as fs } from 'node:fs';
+const getFs = () => import('node:fs').then(m => m.promises);
 import path from 'node:path';
 
 import {
@@ -43,6 +43,7 @@ export async function extractPptx(
     throw new MediaParseError('MEDIA_PARSE_ABORTED', `호출자 취소: ${path.basename(filePath)}`);
   }
 
+  const fs = await getFs();
   let stat: Awaited<ReturnType<typeof fs.stat>>;
   try {
     stat = await fs.stat(filePath);
@@ -62,7 +63,7 @@ export async function extractPptx(
   // 파일 전체를 읽기 전에 헤더 4바이트만 읽어 형식부터 거른다. 큰 비-PPTX 파일이
   // 잘못 들어왔을 때 메모리를 낭비하지 않기 위함.
   const head = Buffer.alloc(PPTX_MAGIC.length);
-  const fh = await fs.open(filePath, 'r');
+  const fh = await fs.open(filePath, 'r' as any);
   try {
     await fh.read(head, 0, head.length, 0);
   } finally {

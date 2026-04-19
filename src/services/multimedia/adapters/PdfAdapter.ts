@@ -27,7 +27,11 @@
 //     PDF_PARSE_ERROR 로 변환하고 `details.reason='encrypted'` 플래그를 붙인다.
 //   · 대용량(>config.maxBytes) 은 파서 호출 전에 즉시 FILE_TOO_LARGE 로 거절한다.
 
-import { promises as fs } from 'node:fs';
+// node:fs는 브라우저 번들에 포함되면 에러가 발생하므로 사용 시점에 동적 import
+async function readFileNode(path: string): Promise<Buffer> {
+  const { promises: fs } = await import('node:fs');
+  return fs.readFile(path);
+}
 
 import {
   MediaAdapterError,
@@ -504,7 +508,7 @@ async function loadDefaultGenerateDriver(): Promise<PdfGenerateDriver> {
 async function loadBuffer(input: Buffer | Uint8Array | string): Promise<Buffer> {
   if (typeof input === 'string') {
     try {
-      return await fs.readFile(input);
+      return await readFileNode(input);
     } catch (err) {
       throw pdfError('PDF_PARSE_ERROR', `파일 열기 실패: ${input}`, { cause: err, reason: 'read-failed' });
     }

@@ -40,6 +40,7 @@ import {
 } from './routes';
 import { useMultimediaJobs } from './useMultimediaJobs';
 import { PlaceholderAdapterView } from './adapterViews/PlaceholderAdapterView';
+import { VideoGeneration } from './VideoGeneration';
 import type { MultimediaRegistry } from '../../services/multimedia';
 
 const ICONS = {
@@ -127,14 +128,18 @@ export function MultimediaHub(props: MultimediaHubProps): React.ReactElement {
           <span aria-hidden={true}> › </span>
           <span>{selectedCard.label}</span>
         </nav>
-        <PlaceholderAdapterView
-          card={selectedCard}
-          locked={locked}
-          unlockHint={selectedCard.unlockHint}
-          onUnlockClick={locked ? () => props.onUnlockRoute?.(selectedCard.route) : undefined}
-          registered={registered}
-          onClose={() => go('hub')}
-        />
+        {selectedCard.route === 'video' ? (
+          <VideoGeneration onClose={() => go('hub')} />
+        ) : (
+          <PlaceholderAdapterView
+            card={selectedCard}
+            locked={locked}
+            unlockHint={selectedCard.unlockHint}
+            onUnlockClick={locked ? () => props.onUnlockRoute?.(selectedCard.route) : undefined}
+            registered={registered}
+            onClose={() => go('hub')}
+          />
+        )}
       </div>
     );
   }
