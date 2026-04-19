@@ -217,13 +217,29 @@ import {
   registerVideoExporterProvider,
   resetVideoExporterProvider,
   stubVideoExporterProvider,
+  rejectingVideoExporterProvider,
   exportVideo,
   MediaExporterError,
+  type VideoExporterProgress,
 } from '../../src/utils/mediaExporters.ts';
 import {
   mapMediaExporterError,
   mapUnknownError,
 } from '../../src/utils/errorMessages.ts';
+import {
+  extractFilesFromClipboard,
+  loadImageFile,
+} from '../../src/utils/mediaLoaders.ts';
+import {
+  __resetMediaMetricsForTests,
+  observeMediaMetric,
+  recordMediaMetric,
+  getMediaMetrics,
+  getMediaMetricsSize,
+  clearMediaMetrics,
+  exposeMediaMetricsOnWindow,
+  type MediaMetricsWindowApi,
+} from '../../src/utils/mediaMetrics.ts';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -565,18 +581,39 @@ test('invalidateThumbnailCache — 자산 id 기준 prefix 만 제거한다', as
 
 // ─── 영상 Provider 스텁 + 오류 매핑 (#e5965192 §3) ─────────────────────────
 
-test('stubVideoExporterProvider — exportVideo 를 ADAPTER_NOT_REGISTERED 로 수렴시킨다', async () => {
-  registerVideoExporterProvider(stubVideoExporterProvider);
+test('rejectingVideoExporterProvider — 공급자 미등록 시연은 ADAPTER_NOT_REGISTERED 로 수렴', async () => {
+  registerVideoExporterProvider(rejectingVideoExporterProvider);
   try {
     await assert.rejects(
       () => exportVideo({ prompt: '샷' }, {
         projectId: 'proj-1',
-        fetcher: async () => { throw new Error('스텁은 fetch 를 타면 안 된다'); },
+        fetcher: async () => { throw new Error('거절 공급자는 fetch 를 타면 안 된다'); },
       }),
       (err: unknown) => err instanceof MediaExporterError
         && err.code === 'ADAPTER_NOT_REGISTERED'
         && err.status === 503,
     );
+  } finally {
+    resetVideoExporterProvider();
+  }
+});
+
+test('stubVideoExporterProvider — 더미 id 반환 + 4단계 진행 이벤트(queued→uploading→finalizing→done)', async () => {
+  registerVideoExporterProvider(stubVideoExporterProvider);
+  const phases: VideoExporterProgress['phase'][] = [];
+  try {
+    const preview = await exportVideo(
+      { prompt: '하이 스톰' },
+      {
+        projectId: 'proj-1',
+        fetcher: async () => { throw new Error('스텁은 fetch 를 타면 안 된다'); },
+        onProgress: (p) => phases.push(p.phase),
+      },
+    );
+    assert.equal(preview.kind, 'video');
+    assert.ok(preview.id.startsWith('stub-video-'), '더미 id 프리픽스');
+    assert.equal(preview.generatedBy?.adapter, 'stub');
+    assert.deepEqual(phases, ['queued', 'uploading', 'finalizing', 'done']);
   } finally {
     resetVideoExporterProvider();
   }
@@ -609,6 +646,135 @@ test('loadMediaFile — fetcher 미주입 + 전역 fetch 없음 → UPLOAD_FAILE
   } finally {
     (globalThis as { fetch?: unknown }).fetch = saved;
   }
+});
+
+// ─── 이미지 경로 / 클립보드 / 메트릭 (#ed6ac142) ──────────────────────────────
+
+test('loadImageFile — 정상 이미지는 네트워크 없이 MediaPreview + 썸네일 캐시 적재', async () => {
+  clearThumbnailCache();
+  const png = new File([new Uint8Array([137, 80, 78, 71])], 'frame.png', { type: 'image/png' });
+  let fetchCalled = false;
+  const preview = await loadImageFile(png, {
+    projectId: 'proj-1',
+    fetcher: async () => { fetchCalled = true; return jsonResponse({}); },
+  });
+  assert.equal(fetchCalled, false, '이미지 경로는 서버를 호출하지 않는다');
+  assert.equal(preview.kind, 'image');
+  assert.equal(preview.name, 'frame.png');
+  const cached = peekThumbnail(preview);
+  assert.ok(cached && cached.startsWith('data:'), '썸네일이 캐시에 적재되어야 한다');
+});
+
+test('loadImageFile — maxBytes 초과 시 FILE_TOO_LARGE', async () => {
+  const big = new File([new Uint8Array(16)], 'big.png', { type: 'image/png' });
+  await assert.rejects(
+    () => loadImageFile(big, { projectId: 'proj-1', maxBytes: 8 }),
+    (err: unknown) => err instanceof MediaLoaderError && err.code === 'FILE_TOO_LARGE',
+  );
+});
+
+test('loadImageFile — 이미지가 아닌 파일은 UNSUPPORTED_KIND', async () => {
+  const pdf = new File(['%PDF-1.4'], 'a.pdf', { type: 'application/pdf' });
+  await assert.rejects(
+    () => loadImageFile(pdf, { projectId: 'proj-1' }),
+    (err: unknown) => err instanceof MediaLoaderError && err.code === 'UNSUPPORTED_KIND',
+  );
+});
+
+test('extractFilesFromClipboard — 이미지 접두 필터로 파일만 뽑는다', () => {
+  const imgFile = new File([new Uint8Array(2)], 'pasted.png', { type: 'image/png' });
+  const txtFile = new File([new Uint8Array(2)], 'note.txt', { type: 'text/plain' });
+  const event = {
+    clipboardData: {
+      items: [
+        { kind: 'string', type: 'text/plain', getAsFile: () => null },
+        { kind: 'file', type: 'image/png', getAsFile: () => imgFile },
+        { kind: 'file', type: 'text/plain', getAsFile: () => txtFile },
+      ],
+      files: undefined,
+    },
+  };
+  const withoutPrefix = extractFilesFromClipboard(event);
+  assert.equal(withoutPrefix.length, 2);
+  const onlyImages = extractFilesFromClipboard(event, { acceptPrefix: 'image/' });
+  assert.equal(onlyImages.length, 1);
+  assert.equal(onlyImages[0].name, 'pasted.png');
+});
+
+test('extractFilesFromClipboard — items 가 비어 있으면 files 로 폴백', () => {
+  const img = new File([new Uint8Array(2)], 'p.png', { type: 'image/png' });
+  const event = {
+    clipboardData: {
+      items: [],
+      files: [img],
+    },
+  };
+  const files = extractFilesFromClipboard(event);
+  assert.equal(files.length, 1);
+  assert.equal(files[0].name, 'p.png');
+});
+
+test('extractFilesFromClipboard — null/undefined 이벤트는 빈 배열', () => {
+  assert.deepEqual(extractFilesFromClipboard(null), []);
+  assert.deepEqual(extractFilesFromClipboard(undefined), []);
+  assert.deepEqual(extractFilesFromClipboard({ clipboardData: null }), []);
+});
+
+test('mediaMetrics — observeMediaMetric 은 성공/실패 모두 링 버퍼에 기록한다', async () => {
+  let t = 1000;
+  __resetMediaMetricsForTests({ capacity: 200, now: () => (t += 5) });
+  const value = await observeMediaMetric('upload', 'ok-case', async () => 'hello', { assetId: 'a1' });
+  assert.equal(value, 'hello');
+  await assert.rejects(
+    () => observeMediaMetric('parse', 'fail-case', async () => {
+      throw Object.assign(new Error('boom'), { code: 'UPLOAD_FAILED' });
+    }),
+    (err: unknown) => (err as Error).message === 'boom',
+  );
+  const entries = getMediaMetrics();
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].label, 'ok-case');
+  assert.equal(entries[0].ok, true);
+  assert.ok(entries[0].durationMs >= 0);
+  assert.equal(entries[1].label, 'fail-case');
+  assert.equal(entries[1].ok, false);
+  assert.equal(entries[1].errorCode, 'UPLOAD_FAILED');
+});
+
+test('mediaMetrics — 링 버퍼 용량을 넘으면 가장 오래된 항목을 덮어쓴다(FIFO)', () => {
+  __resetMediaMetricsForTests({ capacity: 3, now: () => 0 });
+  for (let i = 0; i < 5; i += 1) {
+    recordMediaMetric({
+      kind: 'transform', label: `t${i}`,
+      startedAtMs: i, durationMs: 1, ok: true,
+    });
+  }
+  const entries = getMediaMetrics();
+  assert.equal(entries.length, 3);
+  assert.deepEqual(entries.map(e => e.label), ['t2', 't3', 't4']);
+  assert.equal(getMediaMetricsSize(), 3);
+});
+
+test('mediaMetrics — exposeMediaMetricsOnWindow 는 DevTools 조회 API 를 매단다', () => {
+  __resetMediaMetricsForTests({ capacity: 10 });
+  recordMediaMetric({ kind: 'export', label: 'exp', startedAtMs: 0, durationMs: 2, ok: true });
+  const fakeWindow: { __mediaMetrics?: MediaMetricsWindowApi } = {};
+  const api = exposeMediaMetricsOnWindow(fakeWindow);
+  assert.equal(fakeWindow.__mediaMetrics, api);
+  assert.equal(fakeWindow.__mediaMetrics?.size(), 1);
+  const dumped = fakeWindow.__mediaMetrics?.dump() ?? '';
+  assert.match(dumped, /"label": "exp"/);
+  fakeWindow.__mediaMetrics?.clear();
+  assert.equal(fakeWindow.__mediaMetrics?.size(), 0);
+});
+
+test('useMediaPasteCapture — 훅 표면 검증 (extractFilesFromClipboard 로 위임)', async () => {
+  // 본 훅은 React 의존이라 tsx --test 환경에서 직접 렌더 없이 계약만 확인한다.
+  // 내부 추출은 이미 검증했고, 훅이 안정 import 되는지(순환 없음)·onPaste 서명이
+  // 유지되는지만 잠근다. 더 깊은 동작은 컴포넌트 통합 테스트(Joker UploadDropzone)
+  // 가 소유한다.
+  const mod = await import('../../src/utils/useMediaPasteCapture.ts');
+  assert.equal(typeof mod.useMediaPasteCapture, 'function');
 });
 
 test('요청 중단 — 사전 abort 된 signal 은 업로드·생성 모두 ABORTED', async () => {

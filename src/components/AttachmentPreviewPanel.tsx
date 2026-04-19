@@ -10,8 +10,8 @@
 // 쓰지 않고 var() 체인으로 감싸 디자이너 시안이 합류했을 때 스킨 교체가 즉시 되도록
 // 두었다.
 
-import React from 'react';
-import { FileText, File as FileIcon, Film, Image as ImageIcon, RotateCcw, X, AlertTriangle } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { FileText, File as FileIcon, Film, Image as ImageIcon, RotateCcw, X, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
 
 import type { MediaPreview } from '../utils/mediaLoaders';
 import { formatBytes } from './UploadDropzone';
@@ -63,6 +63,38 @@ function IconFor(kind?: string): React.ReactElement {
   return <FileIcon size={14} aria-hidden="true" />;
 }
 
+/**
+ * 방향키/Home/End 에 따라 다음 포커스 인덱스를 계산한다. 경계에서는 래핑 없이
+ * 끝에 고정 — WAI-ARIA listbox 권장 동작(비순환). total=0 이면 -1 을 돌려 포커스
+ * 대상이 없음을 표시한다.
+ */
+export function pickFocusIndexOnKey(params: {
+  current: number;
+  total: number;
+  key: string;
+}): number {
+  if (params.total <= 0) return -1;
+  const last = params.total - 1;
+  const clamp = (n: number) => Math.max(0, Math.min(last, n));
+  const safeCurrent = Number.isFinite(params.current) && params.current >= 0 && params.current <= last
+    ? params.current
+    : 0;
+  switch (params.key) {
+    case 'ArrowDown':
+    case 'ArrowRight':
+      return clamp(safeCurrent + 1);
+    case 'ArrowUp':
+    case 'ArrowLeft':
+      return clamp(safeCurrent - 1);
+    case 'Home':
+      return 0;
+    case 'End':
+      return last;
+    default:
+      return safeCurrent;
+  }
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // React 컴포넌트
 // ────────────────────────────────────────────────────────────────────────────
@@ -83,6 +115,45 @@ export function AttachmentPreviewPanel({
   emptyLabel,
   className,
 }: AttachmentPreviewPanelProps): React.ReactElement {
+  // 포커스 추적 + Space 로 상세(추출 본문) 토글.
+  const [focusIndex, setFocusIndex] = useState<number>(0);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const listRef = useRef<HTMLUListElement | null>(null);
+
+  // 항목 수가 줄어들면 포커스 인덱스를 현실에 맞게 자연스럽게 당겨 온다.
+  useEffect(() => {
+    if (focusIndex >= items.length) setFocusIndex(Math.max(0, items.length - 1));
+  }, [items.length, focusIndex]);
+
+  const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLLIElement>) => {
+    const NAV_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'];
+    if (NAV_KEYS.includes(e.key)) {
+      e.preventDefault();
+      const next = pickFocusIndexOnKey({ current: focusIndex, total: items.length, key: e.key });
+      if (next >= 0 && next !== focusIndex) {
+        setFocusIndex(next);
+        const ul = listRef.current;
+        const li = ul?.querySelectorAll('[data-testid="attachment-preview-item"]')[next] as HTMLElement | undefined;
+        li?.focus();
+      }
+      return;
+    }
+    if (e.key === ' ' || e.key === 'Spacebar') {
+      // Space = 상세(추출 본문) 토글. 버튼 위에서 발화하면 기본 동작(클릭) 이 우선하도록
+      // target 이 버튼일 때는 그대로 통과.
+      if ((e.target as HTMLElement).tagName === 'BUTTON') return;
+      e.preventDefault();
+      const item = items[focusIndex];
+      if (!item) return;
+      setExpanded(prev => {
+        const next = new Set(prev);
+        if (next.has(item.id)) next.delete(item.id);
+        else next.add(item.id);
+        return next;
+      });
+    }
+  }, [focusIndex, items]);
+
   if (!items || items.length === 0) {
     return (
       <div
@@ -103,6 +174,9 @@ export function AttachmentPreviewPanel({
 
   return (
     <ul
+      ref={listRef}
+      role="listbox"
+      aria-label="업로드한 첨부 목록"
       data-testid="attachment-preview-list"
       className={`attachment-preview attachment-preview--list${className ? ` ${className}` : ''}`}
       style={{
@@ -114,15 +188,24 @@ export function AttachmentPreviewPanel({
         gap: 6,
       }}
     >
-      {items.map(item => {
+      {items.map((item, idx) => {
         const summary = formatAttachmentSummary(item);
         const failed = item.status === 'failed';
         const uploading = item.status === 'uploading';
+        const isFocused = idx === focusIndex;
+        const isExpanded = expanded.has(item.id);
         return (
           <li
             key={item.id}
+            role="option"
+            aria-selected={isFocused}
+            aria-expanded={item.preview?.extractedText ? isExpanded : undefined}
+            tabIndex={isFocused ? 0 : -1}
+            onKeyDown={onKeyDown}
+            onFocus={() => setFocusIndex(idx)}
             data-testid="attachment-preview-item"
             data-status={item.status}
+            data-expanded={isExpanded ? 'true' : 'false'}
             style={{
               display: 'flex',
               gap: 10,
@@ -140,6 +223,16 @@ export function AttachmentPreviewPanel({
             >
               {failed ? <AlertTriangle size={14} aria-hidden="true" /> : IconFor(item.preview?.kind)}
             </span>
+            {/* 스페이스로 토글 가능함을 시각적으로도 알려 준다. 추출 본문이 없으면 토글 의미가 없어 숨김. */}
+            {item.preview?.extractedText ? (
+              <span
+                aria-hidden="true"
+                data-testid="attachment-preview-toggle"
+                style={{ color: 'var(--attachment-preview-muted-fg, var(--token-usage-tooltip-subtle-fg))' }}
+              >
+                {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+              </span>
+            ) : null}
             <div className="flex-1 min-w-0">
               <div
                 className="text-[12px] font-bold"
@@ -155,11 +248,13 @@ export function AttachmentPreviewPanel({
               </div>
               {item.preview?.extractedText ? (
                 <div
-                  className="text-[10px] mt-1 line-clamp-2"
+                  data-testid="attachment-preview-excerpt"
+                  className={`text-[10px] mt-1 whitespace-pre-wrap${isExpanded ? '' : ' line-clamp-2'}`}
                   style={{ color: 'var(--attachment-preview-muted-fg, var(--token-usage-tooltip-subtle-fg))' }}
                 >
-                  {item.preview.extractedText.slice(0, 120)}
-                  {item.preview.extractedText.length > 120 ? '…' : ''}
+                  {isExpanded
+                    ? item.preview.extractedText
+                    : `${item.preview.extractedText.slice(0, 120)}${item.preview.extractedText.length > 120 ? '…' : ''}`}
                 </div>
               ) : null}
             </div>

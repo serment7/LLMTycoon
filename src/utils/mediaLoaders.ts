@@ -20,6 +20,10 @@
 
 import type { MediaAsset, MediaKind } from '../types';
 
+// UploadDropzone 등 상위 컴포넌트가 본 모듈 하나만 import 해도 `MediaKind` 를 함께
+// 받을 수 있도록 재수출한다. types.ts 의 원본과 동일 타입.
+export type { MediaKind };
+
 // ────────────────────────────────────────────────────────────────────────────
 // 공개 타입
 // ────────────────────────────────────────────────────────────────────────────
@@ -356,22 +360,141 @@ export async function loadMediaFile(file: File, opts: MediaLoaderOptions): Promi
   }
   if (kind === 'pdf') return loadPdfFile(file, opts);
   if (kind === 'pptx') return loadPptFile(file, opts);
-  if (kind === 'image') {
-    // 1차 스켈레톤 — 이미지는 로컬 메타만 돌려주고, 서버 영속은 후속 턴에 붙인다.
-    return {
-      id: `local-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
-      kind: 'image',
-      name: file.name,
-      mimeType: file.type || 'application/octet-stream',
-      sizeBytes: file.size,
-      createdAt: new Date().toISOString(),
-    };
-  }
+  if (kind === 'image') return loadImageFile(file, opts);
   // video — 파일 업로드 경로는 지원하지 않음(현재 파이프라인은 "생성" 위주).
   throw new MediaLoaderError(
     'UNSUPPORTED_KIND',
     '영상 파일은 업로드 대신 requestVideoGeneration 으로 요청해 주세요.',
   );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 이미지 입력 경로 (#ed6ac142 §1) — 클립보드/드래그 파일 공용
+// ────────────────────────────────────────────────────────────────────────────
+//
+// 이미지 파일은 PDF/PPT 와 달리 서버 파싱을 요구하지 않는다. 본 로더는 로컬에서
+// 1) 크기 가드 2) 썸네일(dataUrl) 생성 3) 썸네일 캐시 적재 4) MediaPreview 반환
+// 을 처리한다. 모든 경로가 `MediaLoaderError` 표준 코드로 실패를 수렴한다.
+
+/**
+ * 브라우저·Node 양쪽에서 Blob 바이트를 base64 dataUrl 로 인코딩한다. 브라우저에
+ * `FileReader` 가 있으면 우선 사용하고, 없는 환경(Node 20+ 테스트)은 ArrayBuffer
+ * → `Buffer.from` 경로로 폴백한다.
+ */
+async function blobToDataUrl(blob: Blob, fallbackMime?: string): Promise<string> {
+  const mime = blob.type || fallbackMime || 'application/octet-stream';
+  const FR = (globalThis as { FileReader?: typeof FileReader }).FileReader;
+  if (typeof FR === 'function') {
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FR();
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+      reader.onerror = () => reject(reader.error ?? new Error('FileReader failed'));
+      reader.readAsDataURL(blob);
+    });
+  }
+  const buffer = await blob.arrayBuffer();
+  const base64 = Buffer.from(buffer).toString('base64');
+  return `data:${mime};base64,${base64}`;
+}
+
+/**
+ * 호출자가 `getThumbnail` 에 주입할 수 있는 이미지 전용 렌더러. 캐시 미스 시 본
+ * 함수가 실행되어 dataUrl 을 만들고, 이후 호출은 캐시에서 즉시 반환된다.
+ */
+export function createImageThumbnailRenderer(file: Blob): ThumbnailRenderer {
+  return async () => blobToDataUrl(file);
+}
+
+/**
+ * 로컬 이미지 파일을 MediaPreview 로 변환한다. 크기 상한 초과는 FILE_TOO_LARGE,
+ * 형식 미스매치는 UNSUPPORTED_KIND 로 수렴한다. 호출자가 `opts.onProgress` 를
+ * 주면 precheck → finalize 두 단계로 보고한다(이미지 경로는 네트워크가 없다).
+ * 썸네일 캐시에는 자동 적재되어, 이후 `peekThumbnail(preview)` 이 즉시 돌려준다.
+ */
+export async function loadImageFile(file: File, opts: MediaLoaderOptions): Promise<MediaPreview> {
+  const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
+  const kind = detectMediaKind(file.name, file.type);
+  if (kind !== 'image') {
+    throw new MediaLoaderError('UNSUPPORTED_KIND', `이미지가 아닙니다: ${file.name}`);
+  }
+  opts.onProgress?.({ phase: 'precheck', loaded: 0, total: file.size });
+  if (maxBytes > 0 && file.size > maxBytes) {
+    throw new MediaLoaderError(
+      'FILE_TOO_LARGE',
+      `이미지 크기 ${file.size}B 가 최대 ${maxBytes}B 를 초과합니다: ${file.name}`,
+    );
+  }
+
+  const preview: MediaPreview = {
+    id: `local-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+    kind: 'image',
+    name: file.name,
+    mimeType: file.type || 'application/octet-stream',
+    sizeBytes: file.size,
+    createdAt: new Date().toISOString(),
+  };
+
+  // 썸네일 dataUrl 을 지연 생성해 캐시에 적재한다. renderer 실패는 본체 실패로
+  // 전파되지 않도록 격리 — 이미지 메타만이라도 UI 에 보여 줄 수 있어야 한다.
+  try {
+    await getThumbnail(preview, {
+      renderer: createImageThumbnailRenderer(file),
+    });
+  } catch {
+    // 썸네일 실패는 조용히 무시. 업로드 본체는 이미 성공.
+  }
+
+  opts.onProgress?.({ phase: 'finalize', loaded: file.size, total: file.size });
+  return preview;
+}
+
+/**
+ * ClipboardEvent 또는 DragEvent 의 `DataTransfer` 에서 파일만 추려 낸다.
+ *
+ * 순수 함수: DOM/React 의존 없이 items·files 프로퍼티만 읽는다. 표준 `MIME type`
+ * 접두가 `image/` 인 항목만 반환하려면 `opts.acceptPrefix = 'image/'` 를 준다.
+ * 기본은 모든 파일. 브라우저마다 `ClipboardEvent` 의 items 가 없거나 파일이
+ * 섞이지 않는 경우를 안전하게 통과시킨다.
+ */
+export interface ExtractFilesOptions {
+  /** 기본값 undefined — 모든 파일. 'image/' 같은 접두로 필터링. */
+  acceptPrefix?: string;
+}
+
+export function extractFilesFromClipboard(
+  event: { clipboardData?: { items?: unknown; files?: unknown } | null } | null | undefined,
+  opts?: ExtractFilesOptions,
+): File[] {
+  if (!event || !event.clipboardData) return [];
+  const cd = event.clipboardData;
+  const prefix = opts?.acceptPrefix ?? '';
+  const out: File[] = [];
+
+  const items = cd.items as ArrayLike<{ kind?: string; type?: string; getAsFile?: () => File | null }> | undefined;
+  if (items && typeof items.length === 'number') {
+    for (let i = 0; i < items.length; i += 1) {
+      const it = items[i];
+      if (!it || it.kind !== 'file') continue;
+      const file = typeof it.getAsFile === 'function' ? it.getAsFile() : null;
+      if (!file) continue;
+      if (prefix && !(file.type || '').startsWith(prefix)) continue;
+      out.push(file);
+    }
+  }
+
+  // items 경로가 비었으면 files 리스트로 폴백(일부 모바일 브라우저).
+  if (out.length === 0) {
+    const files = cd.files as FileList | File[] | undefined;
+    if (files && typeof files.length === 'number') {
+      for (let i = 0; i < files.length; i += 1) {
+        const f = (files as ArrayLike<File>)[i];
+        if (!f) continue;
+        if (prefix && !(f.type || '').startsWith(prefix)) continue;
+        out.push(f);
+      }
+    }
+  }
+  return out;
 }
 
 // ────────────────────────────────────────────────────────────────────────────

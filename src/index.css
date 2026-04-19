@@ -1215,6 +1215,37 @@
   --media-preview-progress-height: 4px;
   --media-preview-progress-track: rgba(255, 255, 255, 0.08);
   --media-preview-progress-fill: var(--media-attach-gauge-fill-generating);
+
+  /* ── 멀티미디어 골격(#25c6969c) — UploadDropzone · AttachmentPreviewPanel · ExportButtons ──
+   * 디자이너 시안(멀티미디어 UI 2026-04) 이 합류하면 이 블록의 값만 교체해 스킨을 바꾼다.
+   * 컴포넌트 측은 var(--upload-dropzone-*, fallback) 체인으로 참조해 토큰이 정의되지
+   * 않아도 기본 픽셀 팔레트로 수렴하므로 스타일이 깨지지 않는다.
+   */
+  --upload-dropzone-bg: var(--pixel-card);
+  --upload-dropzone-border: var(--pixel-border);
+  --upload-dropzone-border-active: var(--pixel-accent);
+  --upload-dropzone-border-invalid: var(--error-state-border);
+  --upload-dropzone-fg: var(--shared-goal-modal-header-fg);
+  --upload-dropzone-icon: var(--pixel-accent);
+
+  --attachment-preview-bg: var(--pixel-card);
+  --attachment-preview-border: var(--pixel-border);
+  --attachment-preview-item-bg: rgba(255, 255, 255, 0.02);
+  --attachment-preview-item-border: rgba(255, 255, 255, 0.08);
+  --attachment-preview-title-fg: var(--shared-goal-modal-header-fg);
+  --attachment-preview-muted-fg: var(--token-usage-tooltip-subtle-fg);
+  --attachment-preview-icon-fg: var(--pixel-accent);
+  --attachment-preview-failed-bg: var(--error-state-bg);
+  --attachment-preview-retry-bg: var(--pixel-accent);
+  --attachment-preview-retry-fg: #000;
+  --attachment-preview-retry-border: var(--pixel-accent);
+
+  --export-button-bg: var(--pixel-card);
+  --export-button-fg: var(--shared-goal-modal-header-fg);
+  --export-button-border: var(--pixel-border);
+  --export-button-accent-pdf: var(--pixel-accent);
+  --export-button-accent-pptx: var(--token-usage-caution-border);
+  --export-button-accent-video: var(--token-usage-warning-border);
 }
 
 /* ── F4 쓰기 잠금 전역 규칙 (2026-04-19 디자이너) ─────────────────────────────

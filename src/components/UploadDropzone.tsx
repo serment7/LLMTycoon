@@ -10,7 +10,7 @@
 // 스타일은 `--upload-dropzone-*` 토큰으로 분리해 두어 디자이너 시안이 확정되면
 // CSS 변수 교체만으로 스킨이 바뀐다. 본 파일은 JSX·순수 함수만 정의.
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useId, useMemo, useRef, useState } from 'react';
 import { UploadCloud, FilePlus2, AlertCircle } from 'lucide-react';
 
 import { useToast } from './ToastProvider';
@@ -128,8 +128,12 @@ export function UploadDropzone({
   onRejected,
 }: UploadDropzoneProps): React.ReactElement {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<DropzoneVisualState>(disabled ? 'disabled' : 'idle');
   const toast = useToast();
+  // aria-describedby 로 스크린리더에 사용법을 노출. 여러 드롭존이 동시에 존재해도
+  // useId 가 세션 단위 고유 id 를 보장해 중복 연결을 방지한다.
+  const describeId = useId();
 
   const processFiles = useCallback((files: FileList | File[] | null | undefined) => {
     if (!files) return;
@@ -137,13 +141,13 @@ export function UploadDropzone({
     const accepted: File[] = [];
     for (const file of list) {
       const gate = gateFile(file, { maxBytes });
-      if (gate.ok) {
-        accepted.push(file);
-      } else if (onRejected) {
-        onRejected(file, gate.message);
-      } else {
-        toast.push(messageToToastInput(gate.message));
+      if (!gate.ok) {
+        // 실패 분기 — `{ ok: false; message; reason }` 로 narrow.
+        if (onRejected) onRejected(file, gate.message);
+        else toast.push(messageToToastInput(gate.message));
+        continue;
       }
+      accepted.push(file);
     }
     if (accepted.length > 0) onFilesAccepted(accepted);
   }, [maxBytes, onFilesAccepted, onRejected, toast]);
@@ -186,6 +190,23 @@ export function UploadDropzone({
     e.target.value = '';
   }, [processFiles]);
 
+  // 드래그 중 Esc 를 누르면 UI 를 즉시 idle 로 되돌려 "잘못 끌어왔어요" 를 취소할 수
+  // 있게 한다. 드롭존이 포커스를 잡고 있을 때의 Esc 는 여기서 stopPropagation 해
+  // 상위(모달 · 상단 검색창) 가 동시에 닫히지 않도록 한다.
+  const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (disabled) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openPicker();
+      return;
+    }
+    if (e.key === 'Escape' && state !== 'idle') {
+      e.preventDefault();
+      e.stopPropagation();
+      setState('idle');
+    }
+  }, [disabled, openPicker, state]);
+
   const resolvedState: DropzoneVisualState = disabled ? 'disabled' : state;
   const description = useMemo(() => {
     if (disabled) return hint ?? '업로드가 비활성 상태입니다.';
@@ -196,11 +217,14 @@ export function UploadDropzone({
 
   return (
     <div
+      ref={rootRef}
       role="button"
       tabIndex={disabled ? -1 : 0}
       aria-disabled={disabled}
       aria-label="멀티미디어 파일 업로드 드롭존"
+      aria-describedby={describeId}
       data-testid="upload-dropzone"
+      data-tour-anchor="upload-dropzone"
       data-state={resolvedState}
       className={`upload-dropzone${className ? ` ${className}` : ''}`}
       onDragEnter={onDragEnter}
@@ -208,7 +232,7 @@ export function UploadDropzone({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       onClick={openPicker}
-      onKeyDown={e => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openPicker(); } }}
+      onKeyDown={onKeyDown}
       style={{
         // 토큰 기반 스킨 — 디자이너 시안이 index.css 에 값을 넣으면 그대로 반영된다.
         background: 'var(--upload-dropzone-bg, var(--pixel-card))',
@@ -252,6 +276,17 @@ export function UploadDropzone({
         // 시각적으로 숨기되 스크린리더에는 존재해야 하므로 `hidden` 대신 .sr-only 상수 인라인.
         style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}
       />
+      {/*
+        aria-describedby 타깃 — 스크린리더가 드롭존 포커스 시 조용히 읽어 준다.
+        시각 사용자에게는 숨겨지고(sr-only) 키보드 조작법과 지원 형식을 안내한다.
+      */}
+      <span
+        id={describeId}
+        data-testid="upload-dropzone-description"
+        style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}
+      >
+        Enter 또는 스페이스로 파일 선택 창을 엽니다. 드래그&드롭으로도 업로드할 수 있으며, 드래그 중 Esc 를 누르면 취소됩니다. 지원 형식은 PDF, PPTX, 이미지, 영상입니다.
+      </span>
     </div>
   );
 }

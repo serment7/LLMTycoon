@@ -55,6 +55,13 @@ export interface PptxSlide {
   body?: string;
 }
 
+export interface VideoExporterProgress {
+  /** 'queued' = 업로드 직전, 'uploading' = 전송 중, 'finalizing' = 서버 응답 대기, 'done' = 완료. */
+  phase: 'queued' | 'uploading' | 'finalizing' | 'done';
+  /** 0..1. 비대응 어댑터는 0 또는 1 만 보고한다. */
+  ratio: number;
+}
+
 export interface MediaExporterOptions {
   projectId: string;
   /** 기본 globalThis.fetch. 테스트에서 주입으로 교체. */
@@ -62,6 +69,8 @@ export interface MediaExporterOptions {
   signal?: AbortSignal;
   /** 기본 '/api'. */
   apiBase?: string;
+  /** 영상 생성 경로에서 공급자가 호출하는 진행률 콜백. 다른 축에서는 미사용. */
+  onProgress?: (progress: VideoExporterProgress) => void;
 }
 
 export interface DownloadDescriptor {
@@ -229,14 +238,49 @@ export const httpVideoExporterProvider: VideoExporterProvider = {
 };
 
 /**
- * 스텁 공급자 — 네트워크를 타지 않고 항상 `ADAPTER_NOT_REGISTERED` 로 수렴한다.
- * 운영자가 실제 공급자를 붙이기 전(로컬 개발·CI·데모 환경) 에 이걸 등록해 두면
- * `exportVideo` 호출이 사용자 조치 메시지를 동반한 일관된 실패로 떨어진다.
- * 에러 코드는 errorMessages.mapMediaExporterError('ADAPTER_NOT_REGISTERED') 와
- * 정합한다 — UI 는 "변환 엔진이 준비되지 않았어요 + 설정 열기" 배너를 노출한다.
+ * 기본 스텁 공급자 — 최소 기능이 동작하는 "더미 성공" 경로. 네트워크를 타지 않고
+ * 로컬에서 즉시 완료 가짜 `MediaPreview` 를 돌려준다. 운영자가 실제 공급자를 붙이기
+ * 전(로컬 개발·CI·데모 환경) 에 UI 가 실제 흐름(프롬프트 입력 → 진행률 배지 →
+ * 결과 미리보기·다운로드 링크) 을 시연할 수 있어야 하므로, `opts.onProgress` 가
+ * 주어지면 queued → uploading → finalizing → done 네 단계로 비동기 이벤트를
+ * 보고한다. 어떤 이유로 공급자가 명시적으로 거절되길 원하면 `rejectingVideoExporterProvider`
+ * 를 대신 등록한다.
  */
 export const stubVideoExporterProvider: VideoExporterProvider = {
   id: 'stub',
+  async generate(input, opts) {
+    if (opts.signal?.aborted) {
+      throw new MediaExporterError('ABORTED', '호출자가 영상 생성을 중단했습니다.');
+    }
+    opts.onProgress?.({ phase: 'queued', ratio: 0 });
+    // 실제 네트워크 지연을 가볍게 모의한다. 테스트에서는 Promise 해상도 즉시 진행.
+    await Promise.resolve();
+    opts.onProgress?.({ phase: 'uploading', ratio: 0.5 });
+    await Promise.resolve();
+    opts.onProgress?.({ phase: 'finalizing', ratio: 0.9 });
+    const id = `stub-video-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const prompt = input.prompt.trim();
+    await Promise.resolve();
+    opts.onProgress?.({ phase: 'done', ratio: 1 });
+    return {
+      id,
+      kind: 'video',
+      name: `stub-${prompt.slice(0, 24) || 'demo'}.mp4`,
+      mimeType: 'video/mp4',
+      sizeBytes: 0,
+      createdAt: new Date().toISOString(),
+      generatedBy: { adapter: 'stub', prompt },
+    };
+  },
+};
+
+/**
+ * 거절 전용 공급자 — 운영자가 명시적으로 "공급자 미등록" 상태를 시연하고 싶을 때
+ * 등록한다. `stubVideoExporterProvider` 가 최소 기능 시연용이 된 이후, `ADAPTER_NOT_REGISTERED`
+ * 경로를 잠그는 테스트·데모는 이쪽을 등록해 검증한다.
+ */
+export const rejectingVideoExporterProvider: VideoExporterProvider = {
+  id: 'rejecting',
   async generate() {
     throw new MediaExporterError(
       'ADAPTER_NOT_REGISTERED',
