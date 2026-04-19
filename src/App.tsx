@@ -16,6 +16,7 @@ import {
   UserPlus,
   Trash2,
   MessageSquare,
+  Settings,
 } from 'lucide-react';
 import { Agent, Project, GameState, AgentRole, CodeFile, CodeDependency, Task, GitAutomationSettings } from './types';
 import { FileTooltip } from './components/FileTooltip';
@@ -34,15 +35,14 @@ import { createPendingRequestQueue, type PendingRequestQueue } from './utils/pen
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { toastBus } from './components/ToastProvider';
 import { CurrentProjectBadge } from './components/CurrentProjectBadge';
-import { ClaudeTokenUsage } from './components/ClaudeTokenUsage';
-import { TokenUsageIndicator } from './components/TokenUsageIndicator';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider, useToast } from './components/ToastProvider';
 import { UploadDropzone } from './components/UploadDropzone';
 import { OnboardingTour } from './components/OnboardingTour';
-import { ThemeToggle } from './components/ThemeToggle';
 import { ConversationSearch } from './components/ConversationSearch';
+import { SettingsDrawer } from './components/SettingsDrawer';
 import type { SearchableMessage } from './utils/conversationSearch';
+import { registerServiceWorker, applyWaitingUpdate } from './utils/serviceWorkerRegistration';
 import { loadMediaFile } from './utils/mediaLoaders';
 import { mapUnknownError, messageToToastInput } from './utils/errorMessages';
 import { claudeTokenUsageStore } from './utils/claudeTokenUsageStore';
@@ -174,6 +174,35 @@ function App() {
   // 멀티미디어 업로드 토스트(#25c6969c) — UploadDropzone 에서 검증 실패/네트워크 오류를
   // 사용자 친화 메시지로 고지한다. ToastProvider 는 AppRoot 가 감싸므로 본 훅이 안전.
   const mediaToast = useToast();
+  // 설정 드로어(#0dceedcd) 상태. 상단바 톱니 버튼이 열고, 내부의 "투어 다시 보기" 가
+  // OnboardingTour 의 restartKey 를 증가시켜 재개한다.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [onboardingRestartKey, setOnboardingRestartKey] = useState(0);
+
+  // 서비스 워커 등록(#0dceedcd) — 보안 컨텍스트에서만 부팅. 새 버전 발견 시 토스트로
+  // 안내하고 사용자가 수락하면 skipWaiting → 새로고침으로 즉시 갱신한다. 실패는 조용히 무시.
+  useEffect(() => {
+    let registration: ServiceWorkerRegistration | null = null;
+    registerServiceWorker({
+      onUpdate: reg => {
+        registration = reg;
+        mediaToast.push({
+          variant: 'info',
+          title: '새 버전이 있어요',
+          description: '지금 새로고침하면 즉시 갱신됩니다.',
+          duration: 0,
+          action: { label: '새로고침', onClick: () => applyWaitingUpdate(reg) },
+        });
+      },
+      onReady: reg => { registration = reg; },
+    }).catch(() => { /* 등록 실패는 토스트를 띄우지 않는다 — 오프라인 셸은 선택 기능 */ });
+    return () => {
+      // 언마운트 시 특별한 정리는 불필요 — 브라우저가 수명주기를 소유한다.
+      void registration;
+    };
+    // mediaToast 는 참조가 매번 바뀌지 않도록 ToastProvider 가 useMemo 로 안정화한다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [gameState, setGameState] = useState<GameState>({ projects: [], agents: [], files: [], dependencies: [] });
   const [tasks, setTasks] = useState<Task[]>([]);
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -1216,7 +1245,7 @@ function App() {
             toastBus.emit({
               variant: 'success',
               title: '대기 중이던 요청이 전송되었습니다',
-              body: req.payload.conversationId
+              description: req.payload.conversationId
                 ? `대화 ${req.payload.conversationId} 의 지시가 복구됐어요.`
                 : undefined,
             });
@@ -1510,6 +1539,16 @@ function App() {
   return (
     <div className="min-h-screen bg-[var(--pixel-bg)] text-[var(--pixel-white)] font-game flex flex-col overflow-hidden h-screen">
       <ConversationSearch messages={conversationSearchMessages} />
+      <SettingsDrawer
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onReplayOnboarding={() => {
+          setOnboardingRestartKey(k => k + 1);
+          setSettingsOpen(false);
+        }}
+      />
+      {/* 온보딩 투어(#4c9bc4a6) — restartKey 가 바뀌면 재개. AppRoot 쪽 중복 마운트는 제거됨. */}
+      <OnboardingTour restartKey={onboardingRestartKey} />
       {/* Header */}
       <header className="h-[60px] bg-[#0f3460] border-b-4 border-[var(--pixel-border)] flex items-center justify-between px-6 z-20">
         <div className="text-2xl font-bold text-[var(--pixel-accent)] uppercase tracking-[2px]">
@@ -1597,15 +1636,28 @@ function App() {
           >
             협업: {collaborationBadge}
           </div>
-          <span data-tour-anchor="token-usage-indicator">
-            <TokenUsageIndicator />
-          </span>
-          <ClaudeTokenUsage />
-          {/*
-            테마 전환(#e7ba6da5) — 라이트/다크/시스템 3모드. 선택은 localStorage
-            `llmtycoon.theme` 에 유지되며 시스템 모드는 prefers-color-scheme 을 따른다.
-          */}
-          <ThemeToggle />
+          {!online && (
+            <div
+              role="status"
+              aria-live="polite"
+              data-testid="offline-banner"
+              className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border-2 border-amber-400 text-amber-300 bg-amber-500/10 whitespace-nowrap"
+              title="네트워크가 복구되면 대기 중이던 요청이 자동으로 전송됩니다."
+            >
+              오프라인
+            </div>
+          )}
+          {/* 설정 드로어 톱니 버튼(#0dceedcd) */}
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            data-testid="topbar-settings-button"
+            aria-label="설정 열기"
+            className="px-2 py-1 border-2 border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)]"
+            style={{ background: 'var(--color-surface)' }}
+          >
+            <Settings size={14} aria-hidden="true" />
+          </button>
         </div>
       </header>
 
@@ -2295,7 +2347,7 @@ function App() {
               onSubmit={sendLeaderCommand}
               errorToast={directiveErrorToast}
               onDismissError={() => setDirectiveErrorToast(null)}
-              submitLabel={commandBusy ? '대기...' : '지시 전송'}
+              submitLabel={commandBusy ? '대기...' : (online ? '지시 전송' : '대기 큐에 저장')}
               placeholder={commandBusy
                 ? '리더가 응답 중... (Enter 로 전송 · Shift+Enter 로 줄바꿈)'
                 : '예: 로그인 기능 개발 계획 세워줘 (Enter 로 전송 · Shift+Enter 로 줄바꿈)'}
@@ -3195,11 +3247,10 @@ export default function AppRoot(): React.ReactElement {
       <ToastProvider>
         <App />
         {/*
-          최초 접속 온보딩 코치마크(#4c9bc4a6). 완료 여부는 localStorage
-          `llmtycoon.onboarding.completed` 로 잠기며, 재방문 시 자동으로 다시 뜨지 않는다.
-          "다시 보기" 는 추후 설정 패널에서 restartKey 를 증가시키는 방식으로 재개한다.
+          최초 접속 온보딩 코치마크(#4c9bc4a6)는 App 내부로 이관되어 restartKey 가
+          SettingsDrawer 의 "투어 다시 보기" 에 연결된다(#0dceedcd). 본 위치의 중복
+          마운트는 제거.
         */}
-        <OnboardingTour />
       </ToastProvider>
     </ErrorBoundary>
   );

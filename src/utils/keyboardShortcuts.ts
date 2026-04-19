@@ -113,6 +113,53 @@ export function createShortcutRegistry<Id extends string = string>(): ShortcutRe
   };
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// 전역 단축키 카탈로그(#0dceedcd) — SettingsDrawer 의 치트시트가 그대로 나열한다.
+// ────────────────────────────────────────────────────────────────────────────
+//
+// 본 카탈로그는 "사용자에게 보여줄 단축키 목록" 이다. 실제 keydown 핸들러와는 축이
+// 분리돼 있어, 핸들러가 한 곳에서만 청취하되 치트시트에는 누락 없이 나열된다.
+
+export type GlobalShortcutId =
+  | 'search'
+  | 'exportPdf'
+  | 'exportPptx'
+  | 'exportVideo'
+  | 'themeNext'
+  | 'onboardingReplay'
+  | 'uploadOpen';
+
+export const DEFAULT_GLOBAL_SHORTCUTS: ReadonlyArray<ShortcutBinding<GlobalShortcutId>> = Object.freeze([
+  { id: 'search',            keys: 'Control+F', description: '대화 검색 열기(맥은 Cmd+F)', a11yHint: 'Esc 로 닫습니다', priority: 50 },
+  { id: 'exportPdf',         keys: 'Alt+P',     description: 'PDF 리포트 내보내기', priority: 50 },
+  { id: 'exportPptx',        keys: 'Alt+S',     description: 'PPTX 덱 내보내기', priority: 50 },
+  { id: 'exportVideo',       keys: 'Alt+V',     description: '영상 생성 요청', priority: 50 },
+  { id: 'themeNext',         keys: 'Alt+T',     description: '라이트/다크/시스템 테마 순환', priority: 50 },
+  { id: 'onboardingReplay',  keys: 'Alt+O',     description: '온보딩 투어 다시 보기', priority: 50 },
+  { id: 'uploadOpen',        keys: 'Enter',     description: '포커스된 업로드 드롭존 열기', priority: 5 },
+]) as ReadonlyArray<ShortcutBinding<GlobalShortcutId>>;
+
+/** SettingsDrawer 치트시트가 섹션 제목과 함께 나열할 카테고리 묶음. */
+export interface ShortcutCategory {
+  title: string;
+  shortcuts: ReadonlyArray<ShortcutBinding<string>>;
+}
+
+export const GLOBAL_SHORTCUT_CATEGORIES: ReadonlyArray<ShortcutCategory> = Object.freeze([
+  {
+    title: '대화·검색',
+    shortcuts: DEFAULT_GLOBAL_SHORTCUTS.filter(s => s.id === 'search' || s.id === 'onboardingReplay'),
+  },
+  {
+    title: '멀티미디어 내보내기',
+    shortcuts: DEFAULT_GLOBAL_SHORTCUTS.filter(s => s.id.startsWith('export')),
+  },
+  {
+    title: '테마·업로드',
+    shortcuts: DEFAULT_GLOBAL_SHORTCUTS.filter(s => s.id === 'themeNext' || s.id === 'uploadOpen'),
+  },
+]) as ReadonlyArray<ShortcutCategory>;
+
 /**
  * 멀티미디어 입력 축의 기본 단축키 목록. App.tsx 가 부팅 시 한 번 등록하고, Joker 의
  * OnboardingTour 는 같은 registry 를 구독해 툴팁·낭독에 이 description/a11yHint 를

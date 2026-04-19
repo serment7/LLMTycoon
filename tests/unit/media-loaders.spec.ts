@@ -22,7 +22,12 @@ import { extractPptx } from '../../src/services/media/pptLoader.ts';
 import { MediaParseError, MEDIA_ERROR_CODES, isMediaParseError } from '../../src/services/media/errors.ts';
 import { toMediaAttachment } from '../../src/types/media.ts';
 
-const FIXTURE_PDF = path.resolve(process.cwd(), 'tests/fixtures/sample.pdf');
+const FIXTURE_ROOT = path.resolve(process.cwd(), 'tests/fixtures');
+const FIXTURE_PDF = path.join(FIXTURE_ROOT, 'sample.pdf');
+const FIXTURE_PDF_SMALL = path.join(FIXTURE_ROOT, 'small.pdf');
+const FIXTURE_PDF_MEDIUM = path.join(FIXTURE_ROOT, 'medium.pdf');
+const FIXTURE_PDF_LARGE = path.join(FIXTURE_ROOT, 'large.pdf');
+const FIXTURE_PPTX = path.join(FIXTURE_ROOT, 'deck-small.pptx');
 
 async function makeTempFile(name: string, payload: Buffer): Promise<string> {
   const p = path.join(tmpdir(), `${name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -96,19 +101,12 @@ test('extractPdf — 존재하지 않는 경로는 MEDIA_PARSE_FAILED', async ()
 
 // ─── pptLoader ───────────────────────────────────────────────────────────────
 
-test('extractPptx — 매직 통과 후 어댑터 미설치이면 MEDIA_UNSUPPORTED_FORMAT', async () => {
-  const tmp = await makeTempFile(
-    'fake.pptx',
-    Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('payload')]),
+test('extractPptx — 매직 통과 후 어댑터 미설치이면 MEDIA_UNSUPPORTED_FORMAT (fixture: deck-small.pptx)', async () => {
+  // 하드코딩된 임의 바이너리 대신 tests/fixtures/deck-small.pptx 공용 자산을 사용한다.
+  await assert.rejects(
+    () => extractPptx(FIXTURE_PPTX),
+    (err: unknown) => isMediaParseError(err) && err.code === 'MEDIA_UNSUPPORTED_FORMAT',
   );
-  try {
-    await assert.rejects(
-      () => extractPptx(tmp),
-      (err: unknown) => isMediaParseError(err) && err.code === 'MEDIA_UNSUPPORTED_FORMAT',
-    );
-  } finally {
-    await fs.unlink(tmp).catch(() => {});
-  }
 });
 
 test('extractPptx — 매직 바이트 불일치는 MEDIA_UNSUPPORTED_FORMAT', async () => {
@@ -123,36 +121,20 @@ test('extractPptx — 매직 바이트 불일치는 MEDIA_UNSUPPORTED_FORMAT', a
   }
 });
 
-test('extractPptx — maxBytes 초과 시 MEDIA_FILE_TOO_LARGE', async () => {
-  const tmp = await makeTempFile(
-    'big-pptx.pptx',
-    Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(2048)]),
+test('extractPptx — maxBytes 초과 시 MEDIA_FILE_TOO_LARGE (fixture: deck-small.pptx)', async () => {
+  await assert.rejects(
+    () => extractPptx(FIXTURE_PPTX, { maxBytes: 1 }),
+    (err: unknown) => isMediaParseError(err) && err.code === 'MEDIA_FILE_TOO_LARGE',
   );
-  try {
-    await assert.rejects(
-      () => extractPptx(tmp, { maxBytes: 1 }),
-      (err: unknown) => isMediaParseError(err) && err.code === 'MEDIA_FILE_TOO_LARGE',
-    );
-  } finally {
-    await fs.unlink(tmp).catch(() => {});
-  }
 });
 
-test('extractPptx — 사전 abort 된 signal 은 MEDIA_PARSE_ABORTED', async () => {
-  const tmp = await makeTempFile(
-    'abort.pptx',
-    Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('payload')]),
+test('extractPptx — 사전 abort 된 signal 은 MEDIA_PARSE_ABORTED (fixture: deck-small.pptx)', async () => {
+  const ac = new AbortController();
+  ac.abort();
+  await assert.rejects(
+    () => extractPptx(FIXTURE_PPTX, { signal: ac.signal }),
+    (err: unknown) => isMediaParseError(err) && err.code === 'MEDIA_PARSE_ABORTED',
   );
-  try {
-    const ac = new AbortController();
-    ac.abort();
-    await assert.rejects(
-      () => extractPptx(tmp, { signal: ac.signal }),
-      (err: unknown) => isMediaParseError(err) && err.code === 'MEDIA_PARSE_ABORTED',
-    );
-  } finally {
-    await fs.unlink(tmp).catch(() => {});
-  }
 });
 
 // ─── errors / 공용 타입 ──────────────────────────────────────────────────────

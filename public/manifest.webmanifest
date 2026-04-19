@@ -1,0 +1,16 @@
+{
+  "name": "LLMTycoon",
+  "short_name": "LLMTycoon",
+  "description": "에이전트 협업 시뮬레이션 · 코드 그래프·멀티미디어 파이프라인",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "landscape-primary",
+  "lang": "ko-KR",
+  "theme_color": "#0f3460",
+  "background_color": "#1a1a2e",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
