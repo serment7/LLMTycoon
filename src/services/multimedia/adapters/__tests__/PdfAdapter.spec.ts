@@ -234,7 +234,10 @@ test('D2. generatePdf — fake driver 가 DocumentTree 를 받아 Uint8Array 를
   const progress: number[] = [];
   const out = await generatePdf(doc, { generateDriver: gen, onProgress: (r) => progress.push(r) });
   assert.ok(out instanceof Uint8Array);
-  assert.ok(out.toString('utf8').includes('FAKE-OUT'));
+  // 브라우저 호환을 위해 Buffer → Uint8Array 로 전환했으므로(커밋 b2fdfe8) 디코딩은
+  // TextDecoder 를 사용한다. Uint8Array.toString('utf8') 는 인자를 무시하고 쉼표
+  // 구분 숫자열을 돌려주기 때문에 과거 방식은 'FAKE-OUT' 을 찾지 못한다.
+  assert.ok(new TextDecoder('utf-8').decode(out).includes('FAKE-OUT'));
   const inspector = gen as unknown as { lastCall: { doc: DocumentTree } };
   assert.equal(inspector.lastCall.doc.title, '리포트');
   assert.equal(inspector.lastCall.doc.sections.length, 2);
