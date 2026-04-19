@@ -1,4 +1,10 @@
 @import "tailwindcss";
+/*
+ * 통합 디자인 토큰(#e7ba6da5) — 의미 토큰 + 라이트/다크 페어 + 모션.
+ * 본 파일의 하위 도메인 토큰은 여기에서 정의된 `--color-*` / `--motion-*` / `--space-*`
+ * 를 점진 참조해, 디자이너가 팔레트를 교체하면 모든 컴포넌트가 일괄 전환된다.
+ */
+@import "./styles/tokens.css";
 
 @theme {
   --font-game: 'Courier New', Courier, monospace;
@@ -12,12 +18,14 @@
 }
 
 :root {
-  --pixel-bg: #1a1a2e;
-  --pixel-card: #16213e;
-  --pixel-border: #4e4e6a;
-  --pixel-accent: #00d2ff;
-  --pixel-text: #e94560;
-  --pixel-white: #ffffff;
+  /* 기존 픽셀 팔레트(#e7ba6da5) — 이제 통합 의미 토큰을 참조한다. 도메인 값이 필요하면
+   * 하단 --upload-dropzone-* 등 도메인 토큰에서 다시 var() 체인으로 내려 받는다. */
+  --pixel-bg: var(--color-bg);
+  --pixel-card: var(--color-surface);
+  --pixel-border: var(--color-border);
+  --pixel-accent: var(--color-accent);
+  --pixel-text: var(--color-danger);
+  --pixel-white: var(--color-text);
 
   /* ── 에이전트 상태 뱃지 디자인 토큰 (2026-04-18 디자이너 정의) ──────────
    * ProjectManagement.tsx 의 에이전트 카드 UI 3-상태(대기/작업/재개) 시각
@@ -1246,6 +1254,20 @@
   --export-button-accent-pdf: var(--pixel-accent);
   --export-button-accent-pptx: var(--token-usage-caution-border);
   --export-button-accent-video: var(--token-usage-warning-border);
+
+  /* ── 온보딩 코치마크(#4c9bc4a6) — OnboardingTour ──
+   * 최초 접속 투어의 스크림·카드·주조색 토큰. 디자이너 시안이 합류하면 이 값들만
+   * 교체해 스킨이 바뀐다. fallback 은 본 파일 상단의 픽셀 팔레트로 자연스럽게 수렴.
+   */
+  --onboarding-scrim-bg: rgba(0, 0, 0, 0.55);
+  --onboarding-card-bg: var(--pixel-card);
+  --onboarding-card-fg: var(--shared-goal-modal-header-fg);
+  --onboarding-card-border: var(--pixel-border);
+  --onboarding-card-accent: var(--pixel-accent);
+  --onboarding-primary-bg: var(--pixel-accent);
+  --onboarding-primary-fg: #000;
+  --onboarding-primary-border: var(--pixel-accent);
+  --onboarding-z-index: 1200;
 }
 
 /* ── F4 쓰기 잠금 전역 규칙 (2026-04-19 디자이너) ─────────────────────────────

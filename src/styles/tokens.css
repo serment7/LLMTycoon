@@ -1,0 +1,143 @@
+/*
+ * 통합 디자인 토큰(#e7ba6da5) — 라이트/다크 팔레트 · 여백 · 타이포 · 라운딩 · 모션.
+ *
+ * 본 파일은 "의미 단위" 토큰을 정의한다. 각 값은 구체 색상/시간 대신 `--color-surface`,
+ * `--motion-ease-out` 같은 역할 기반 이름을 갖고, 도메인 컴포넌트 토큰(예:
+ * --upload-dropzone-bg) 은 index.css 에서 이 의미 토큰을 참조하도록 점진 이관한다.
+ *
+ * 구조
+ *   :root 에 공통 + 다크 기본값(기존 --pixel-* 팔레트가 다크 기조였으므로 기본을 다크로).
+ *   [data-theme="light"] 에서 라이트 팔레트로 덮어쓴다.
+ *   [data-theme="dark"] 는 명시적 다크 선택(시스템이 라이트라도 사용자가 다크를 고른 경우).
+ *   @media (prefers-color-scheme: light) :root:not([data-theme]) 는 "시스템 모드"
+ *     (data-theme 속성 없음) 에서 시스템이 라이트이면 라이트로 전환.
+ *   prefers-reduced-motion 응답은 --motion-duration-* 를 0 으로 덮어 컴포넌트가 별도
+ *     분기 없이 즉시 전환이 되도록 한다(기존 useReducedMotion 훅과는 독립 축).
+ *
+ * 이 파일을 변경해도 기존 컴포넌트가 참조하는 도메인 토큰은 깨지지 않는다 — 도메인
+ * 토큰이 의미 토큰을 참조하도록 index.css 에서 점진 교체한다.
+ */
+
+:root {
+  /* ── 공통 여백 · 라운딩 · 타이포 · 모션 ─────────────────────────────── */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+
+  --font-size-xxs: 10px;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 14px;
+  --font-size-xl: 16px;
+
+  --font-weight-regular: 400;
+  --font-weight-bold: 700;
+
+  --motion-duration-xs: 80ms;
+  --motion-duration-sm: 140ms;
+  --motion-duration-md: 220ms;
+  --motion-duration-lg: 360ms;
+
+  /* easing — 디자이너 시안의 "감속 우선" 규약. ease-out 계열이 진입, ease-in 이 퇴장. */
+  --motion-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-ease-in:  cubic-bezier(0.64, 0, 0.78, 0);
+  --motion-ease-inout: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* ── 다크 팔레트(기본) ─────────────────────────────────────────────── */
+  --color-bg: #1a1a2e;
+  --color-surface: #16213e;
+  --color-surface-elevated: #0f3460;
+  --color-border: #4e4e6a;
+  --color-accent: #00d2ff;
+  --color-accent-contrast: #000000;
+  --color-text: #f4f4fb;
+  --color-text-muted: rgba(244, 244, 251, 0.72);
+  --color-text-subtle: rgba(244, 244, 251, 0.56);
+  --color-danger: #e94560;
+  --color-danger-surface: rgba(233, 69, 96, 0.12);
+  --color-warning: #f59e0b;
+  --color-warning-surface: rgba(245, 158, 11, 0.12);
+  --color-success: #34d399;
+  --color-success-surface: rgba(52, 211, 153, 0.12);
+  --color-info: #7fd4ff;
+  --color-info-surface: rgba(127, 212, 255, 0.12);
+
+  /* 포커스 링 — WCAG 2.4.7 대응. 배경 위 3:1 이상 대비 유지. */
+  --color-focus-ring: #7fd4ff;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+}
+
+/* 명시적 다크 선택 — :root 기본과 동일 값. 사용자가 시스템 라이트에서 다크를 고를 때 쓰인다. */
+[data-theme='dark'] {
+  --color-bg: #1a1a2e;
+  --color-surface: #16213e;
+  --color-surface-elevated: #0f3460;
+  --color-border: #4e4e6a;
+  --color-text: #f4f4fb;
+  --color-text-muted: rgba(244, 244, 251, 0.72);
+  --color-text-subtle: rgba(244, 244, 251, 0.56);
+}
+
+/* 라이트 팔레트 — 시스템 감지 경로. `data-theme` 속성이 없을 때만 적용한다. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --color-bg: #f6f7fb;
+    --color-surface: #ffffff;
+    --color-surface-elevated: #f0f2f8;
+    --color-border: #cfd3de;
+    --color-accent: #0077cc;
+    --color-accent-contrast: #ffffff;
+    --color-text: #161a2d;
+    --color-text-muted: rgba(22, 26, 45, 0.72);
+    --color-text-subtle: rgba(22, 26, 45, 0.55);
+    --color-danger: #cc1f3e;
+    --color-danger-surface: rgba(204, 31, 62, 0.08);
+    --color-warning: #b55f00;
+    --color-warning-surface: rgba(181, 95, 0, 0.10);
+    --color-success: #0f8a57;
+    --color-success-surface: rgba(15, 138, 87, 0.10);
+    --color-info: #0077cc;
+    --color-info-surface: rgba(0, 119, 204, 0.10);
+    --color-focus-ring: #0077cc;
+  }
+}
+
+/* 명시적 라이트 선택 — 시스템이 다크여도 라이트를 강제. 미디어 쿼리 블록과 독립이다. */
+[data-theme='light'] {
+  --color-bg: #f6f7fb;
+  --color-surface: #ffffff;
+  --color-surface-elevated: #f0f2f8;
+  --color-border: #cfd3de;
+  --color-accent: #0077cc;
+  --color-accent-contrast: #ffffff;
+  --color-text: #161a2d;
+  --color-text-muted: rgba(22, 26, 45, 0.72);
+  --color-text-subtle: rgba(22, 26, 45, 0.55);
+  --color-danger: #cc1f3e;
+  --color-danger-surface: rgba(204, 31, 62, 0.08);
+  --color-warning: #b55f00;
+  --color-warning-surface: rgba(181, 95, 0, 0.10);
+  --color-success: #0f8a57;
+  --color-success-surface: rgba(15, 138, 87, 0.10);
+  --color-info: #0077cc;
+  --color-info-surface: rgba(0, 119, 204, 0.10);
+  --color-focus-ring: #0077cc;
+}
+
+/* 모션 감소 대응 — prefers-reduced-motion: reduce 사용자는 트랜지션을 0 으로. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration-xs: 0ms;
+    --motion-duration-sm: 0ms;
+    --motion-duration-md: 0ms;
+    --motion-duration-lg: 0ms;
+  }
+}

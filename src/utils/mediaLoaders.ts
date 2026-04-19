@@ -35,7 +35,9 @@ export type MediaLoaderErrorCode =
   | 'GENERATE_FAILED'
   | 'ADAPTER_NOT_REGISTERED'
   | 'SESSION_EXHAUSTED'
-  | 'ABORTED';
+  | 'ABORTED'
+  | 'AUDIO_UNSUPPORTED'
+  | 'AUDIO_PERMISSION_DENIED';
 
 /**
  * 대용량 가드 기본 한도. 서버 multer 상한(200MB, server.ts:440) 보다 낮게 잡아
@@ -112,9 +114,16 @@ export interface MediaLoaderOptions {
  * 같은 근거를 잡을 수 있게 한다. 서버가 당장 이 필드를 해석하지 않아도 무시만 되고
  * 기존 플로와 충돌하지 않는다.
  */
+/**
+ * 대화 첨부로 실을 수 있는 kind. `MediaKind`(파이프라인 자산) 외에 'audio' 가 추가돼
+ * 마이크 녹음·오디오 파일 업로드를 같은 축에 합류시킨다. MediaAsset/MediaPreview
+ * 의 원본 kind 는 변경하지 않는다(파이프라인 전반의 영향을 최소화).
+ */
+export type MediaChatAttachmentKind = MediaKind | 'audio';
+
 export interface MediaChatAttachment {
   id: string;
-  kind: MediaKind;
+  kind: MediaChatAttachmentKind;
   name: string;
   mimeType: string;
   sizeBytes: number;
@@ -126,6 +135,10 @@ export interface MediaChatAttachment {
   pageIndices?: number[];
   /** PPTX 일 때 1-base 슬라이드 인덱스 배열. 현재 서버가 슬라이드별로 쪼개 주기 전에는 undefined. */
   slideIndices?: number[];
+  /** audio 전용 — 녹음/업로드 길이(ms). */
+  durationMs?: number;
+  /** audio 전용 — 파형 요약(0..1 사이 64개 샘플). UI 스파크라인·접근성 낭독에 쓴다. */
+  waveformPeaks?: number[];
 }
 
 export const DEFAULT_CHAT_ATTACHMENT_EXCERPT = 256;
@@ -495,6 +508,229 @@ export function extractFilesFromClipboard(
     }
   }
   return out;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 오디오 입력 경로 (#222ece09 §1)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// 오디오는 파이프라인 원본 `MediaKind`(video/pdf/pptx/image) 축이 아니다 — 오디오
+// 자산은 서버에서 MediaAsset 형태로 영속되지 않고 리더 컨텍스트에만 파형 요약·녹음
+// 길이가 담겨 전달된다. 그래서 `MediaPreview` 는 건드리지 않고 `AudioPreview` 별도
+// 타입을 돌려준 뒤, `toAudioChatAttachment` 에서 `MediaChatAttachment`(kind: 'audio')
+// 로 정규화한다. Claude Messages API 는 오디오 블록을 받지 않으므로(2026-04 기준)
+// 본 축은 `claudeSubscriptionSession.buildClaudeAttachmentBlocks` 에서 텍스트 요약
+// 블록으로 수렴한다.
+
+const AUDIO_EXT = new Set(['mp3', 'wav', 'ogg', 'webm', 'm4a', 'aac', 'flac']);
+
+export function isAudioFile(name: string, mimeType?: string): boolean {
+  const ext = (name.toLowerCase().split('.').pop() ?? '').trim();
+  const mime = (mimeType || '').toLowerCase();
+  return AUDIO_EXT.has(ext) || mime.startsWith('audio/');
+}
+
+export interface AudioPreview {
+  id: string;
+  kind: 'audio';
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+  /** 녹음/파일 길이(ms). 미측정이면 undefined — UI 는 '알 수 없음' 으로 표기한다. */
+  durationMs?: number;
+  /** 0..1 사이 64개 샘플로 축약된 파형 peaks. 시각화·접근성 낭독에 쓴다. */
+  waveformPeaks?: number[];
+}
+
+export interface AudioLoadOptions {
+  /** 기본 25MB — 마이크 녹음이 길어지면 네트워크 전에 거절한다. */
+  maxBytes?: number;
+  /** 파형 요약을 계산할 때 쓰는 주입형 함수. Blob→Float32Array→peaks 변환 방식. */
+  waveformAnalyzer?: (blob: Blob) => Promise<number[]>;
+  /** 녹음 길이 측정 주입형 함수. 미주입 시 undefined 로 남는다. */
+  durationProbe?: (blob: Blob) => Promise<number>;
+  signal?: AbortSignal;
+}
+
+/**
+ * 로컬 오디오 파일을 AudioPreview 로 변환한다. 크기 가드·형식 가드는 다른 축과
+ * 동일하게 표준 오류 코드로 수렴한다.
+ */
+export async function loadAudioFile(file: File, opts: AudioLoadOptions = {}): Promise<AudioPreview> {
+  if (!isAudioFile(file.name, file.type)) {
+    throw new MediaLoaderError('UNSUPPORTED_KIND', `오디오 형식이 아닙니다: ${file.name}`);
+  }
+  const maxBytes = opts.maxBytes ?? (25 * 1024 * 1024);
+  if (maxBytes > 0 && file.size > maxBytes) {
+    throw new MediaLoaderError(
+      'FILE_TOO_LARGE',
+      `오디오 크기 ${file.size}B 가 최대 ${maxBytes}B 를 초과합니다: ${file.name}`,
+    );
+  }
+  if (opts.signal?.aborted) {
+    throw new MediaLoaderError('ABORTED', '호출자가 오디오 처리를 중단했습니다.');
+  }
+
+  let waveformPeaks: number[] | undefined;
+  let durationMs: number | undefined;
+  try {
+    if (opts.waveformAnalyzer) waveformPeaks = await opts.waveformAnalyzer(file);
+  } catch {
+    // 파형 실패는 업로드 본체와 독립 — 조용히 비운다.
+  }
+  try {
+    if (opts.durationProbe) durationMs = await opts.durationProbe(file);
+  } catch {
+    /* noop */
+  }
+
+  return {
+    id: `local-audio-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+    kind: 'audio',
+    name: file.name,
+    mimeType: file.type || 'audio/webm',
+    sizeBytes: file.size,
+    createdAt: new Date().toISOString(),
+    durationMs,
+    waveformPeaks,
+  };
+}
+
+// ─── 마이크 녹음 어댑터 ──────────────────────────────────────────────────────
+
+export interface AudioRecorderHandle {
+  /** 현재 녹음 중이면 true. */
+  readonly isRecording: boolean;
+  /** 녹음 시작. 권한 요청이 들어가며, 거부되면 AUDIO_PERMISSION_DENIED. */
+  start(): Promise<void>;
+  /** 녹음 중지. 최종 Blob 과 메타를 돌려준다. */
+  stop(): Promise<{ blob: Blob; durationMs: number }>;
+}
+
+export interface AudioRecorderOptions {
+  /** ms 단위 timeslice — MediaRecorder.start(timeslice). 기본 undefined(한 덩어리). */
+  timeslice?: number;
+  /** 기본 `navigator.mediaDevices.getUserMedia({ audio: true })`. 테스트 주입 가능. */
+  mediaStreamProvider?: () => Promise<MediaStream>;
+  /**
+   * 기본 globalThis.MediaRecorder. 테스트에서는 가짜 생성자를 넘겨 이벤트·데이터
+   * 흐름을 통제한다.
+   */
+  mediaRecorderFactory?: (stream: MediaStream, options?: MediaRecorderOptions) => MediaRecorder;
+  /** 녹음 MIME. 기본 'audio/webm'. */
+  mimeType?: string;
+  /** 테스트·결정적 시간. 기본 Date.now. */
+  now?: () => number;
+}
+
+/**
+ * 마이크 녹음 어댑터 팩토리. 브라우저 MediaRecorder 가 없으면 즉시
+ * `AUDIO_UNSUPPORTED` 를 던진다. 반환 핸들의 start() 에서 권한 거부가 발생하면
+ * `AUDIO_PERMISSION_DENIED`, 그 외 예외는 UPLOAD_FAILED 로 수렴한다.
+ */
+export function createAudioRecorder(opts: AudioRecorderOptions = {}): AudioRecorderHandle {
+  const now = opts.now ?? Date.now;
+  const Factory = opts.mediaRecorderFactory
+    ?? ((globalThis as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder
+      ? (stream: MediaStream, o?: MediaRecorderOptions) =>
+          new (globalThis as unknown as { MediaRecorder: typeof MediaRecorder }).MediaRecorder(stream, o)
+      : null);
+  const mediaStreamProvider = opts.mediaStreamProvider
+    ?? (async () => {
+      const nav = (globalThis as { navigator?: Navigator }).navigator;
+      if (!nav?.mediaDevices?.getUserMedia) {
+        throw new MediaLoaderError('AUDIO_UNSUPPORTED', '마이크 API(getUserMedia) 를 사용할 수 없습니다.');
+      }
+      return nav.mediaDevices.getUserMedia({ audio: true });
+    });
+
+  if (!Factory) {
+    // 기본 환경에 MediaRecorder 가 없음. 이 상태에서 start() 를 호출하면 실패하지만
+    // 팩토리 자체는 통과시켜 두고, 실제 start 에서 표준 코드로 throw.
+  }
+
+  let recorder: MediaRecorder | null = null;
+  let chunks: Blob[] = [];
+  let stream: MediaStream | null = null;
+  let startedAt = 0;
+  let recording = false;
+  const handle: AudioRecorderHandle = {
+    get isRecording() { return recording; },
+    async start() {
+      if (recording) return;
+      if (!Factory) {
+        throw new MediaLoaderError('AUDIO_UNSUPPORTED', '이 브라우저는 MediaRecorder 를 지원하지 않습니다.');
+      }
+      try {
+        stream = await mediaStreamProvider();
+      } catch (err) {
+        if (err instanceof MediaLoaderError) throw err;
+        const name = (err as { name?: string })?.name ?? '';
+        if (/NotAllowed|PermissionDenied|SecurityError/i.test(name)) {
+          throw new MediaLoaderError('AUDIO_PERMISSION_DENIED', '마이크 권한이 거부되었습니다.', { cause: err });
+        }
+        throw new MediaLoaderError('UPLOAD_FAILED', '마이크 스트림을 열 수 없습니다.', { cause: err });
+      }
+      const mimeType = opts.mimeType ?? 'audio/webm';
+      const rec = Factory(stream, { mimeType });
+      chunks = [];
+      rec.ondataavailable = (e: BlobEvent) => {
+        if (e.data && e.data.size > 0) chunks.push(e.data);
+      };
+      recorder = rec;
+      startedAt = now();
+      recording = true;
+      rec.start(opts.timeslice);
+    },
+    async stop() {
+      if (!recorder || !recording) {
+        throw new MediaLoaderError('UPLOAD_FAILED', '녹음이 진행 중이 아닙니다.');
+      }
+      const rec = recorder;
+      const durationMs = Math.max(0, now() - startedAt);
+      const blob = await new Promise<Blob>((resolve) => {
+        rec.onstop = () => {
+          const type = rec.mimeType || opts.mimeType || 'audio/webm';
+          resolve(new Blob(chunks, { type }));
+        };
+        try { rec.stop(); } catch {
+          // stop() 이 동기 throw 한 경우 빈 Blob 으로 수렴.
+          resolve(new Blob([], { type: opts.mimeType ?? 'audio/webm' }));
+        }
+      });
+      recording = false;
+      // 트랙 정리 — 마이크 인디케이터가 멈추게 한다.
+      try { stream?.getTracks().forEach(t => t.stop()); } catch { /* safe */ }
+      stream = null;
+      recorder = null;
+      return { blob, durationMs };
+    },
+  };
+  return handle;
+}
+
+/**
+ * 녹음 Blob 을 MediaChatAttachment 로 정규화한다. name 이 비면 "recording-<ts>.webm"
+ * 로 자동 생성, summary 는 "오디오 · N초 · 녹음" 형태.
+ */
+export function toAudioChatAttachment(audio: AudioPreview): MediaChatAttachment {
+  const seconds = audio.durationMs ? Math.max(1, Math.round(audio.durationMs / 1000)) : undefined;
+  const sizeKb = Math.max(1, Math.round(audio.sizeBytes / 1024));
+  const parts = ['오디오'];
+  if (seconds !== undefined) parts.push(`${seconds}초`);
+  parts.push(`${sizeKb}KB`);
+  parts.push(audio.name);
+  return {
+    id: audio.id,
+    kind: 'audio',
+    name: audio.name,
+    mimeType: audio.mimeType,
+    sizeBytes: audio.sizeBytes,
+    summary: parts.join(' · '),
+    durationMs: audio.durationMs,
+    waveformPeaks: audio.waveformPeaks,
+  };
 }
 
 // ────────────────────────────────────────────────────────────────────────────

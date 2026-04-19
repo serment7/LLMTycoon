@@ -34,6 +34,8 @@ import { TokenUsageIndicator } from './components/TokenUsageIndicator';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider, useToast } from './components/ToastProvider';
 import { UploadDropzone } from './components/UploadDropzone';
+import { OnboardingTour } from './components/OnboardingTour';
+import { ThemeToggle } from './components/ThemeToggle';
 import { loadMediaFile } from './utils/mediaLoaders';
 import { mapUnknownError, messageToToastInput } from './utils/errorMessages';
 import { claudeTokenUsageStore } from './utils/claudeTokenUsageStore';
@@ -1455,8 +1457,15 @@ function App() {
           >
             협업: {collaborationBadge}
           </div>
-          <TokenUsageIndicator />
+          <span data-tour-anchor="token-usage-indicator">
+            <TokenUsageIndicator />
+          </span>
           <ClaudeTokenUsage />
+          {/*
+            테마 전환(#e7ba6da5) — 라이트/다크/시스템 3모드. 선택은 localStorage
+            `llmtycoon.theme` 에 유지되며 시스템 모드는 prefers-color-scheme 을 따른다.
+          */}
+          <ThemeToggle />
         </div>
       </header>
 
@@ -3045,6 +3054,12 @@ export default function AppRoot(): React.ReactElement {
     <ErrorBoundary>
       <ToastProvider>
         <App />
+        {/*
+          최초 접속 온보딩 코치마크(#4c9bc4a6). 완료 여부는 localStorage
+          `llmtycoon.onboarding.completed` 로 잠기며, 재방문 시 자동으로 다시 뜨지 않는다.
+          "다시 보기" 는 추후 설정 패널에서 restartKey 를 증가시키는 방식으로 재개한다.
+        */}
+        <OnboardingTour />
       </ToastProvider>
     </ErrorBoundary>
   );

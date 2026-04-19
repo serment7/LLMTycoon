@@ -610,7 +610,38 @@ function clampText(text: string, max: number): string {
 function attachmentToTextFallback(att: MediaChatAttachment): ClaudeContentBlock {
   const lines: string[] = [`[첨부 ${att.summary}]`];
   if (att.textExcerpt) lines.push(att.textExcerpt);
+  // audio 전용 메타 — 파형 요약은 peaks 배열을 8개 구간으로 축약해 '▁▃▅…' 같은
+  // 스파크 시그니처로 모델이 톤·강약을 유추할 수 있게 한다. Anthropic API 는 아직
+  // 오디오 블록을 받지 않아 text 로 전달하는 것이 최선이다.
+  if (att.kind === 'audio') {
+    if (typeof att.durationMs === 'number') {
+      lines.push(`길이: ${Math.max(1, Math.round(att.durationMs / 1000))}초`);
+    }
+    if (Array.isArray(att.waveformPeaks) && att.waveformPeaks.length > 0) {
+      lines.push(`파형: ${spark(att.waveformPeaks)}`);
+    }
+  }
   return { type: 'text', text: lines.join('\n') };
+}
+
+/** 0..1 사이 peaks 배열을 한 줄 블록 문자 시그니처로 축약. 텍스트 LLM 이 소비한다. */
+function spark(peaks: readonly number[]): string {
+  if (peaks.length === 0) return '';
+  const blocks = '▁▂▃▄▅▆▇█';
+  // 최대 8개 구간으로 리샘플링한다 — 너무 긴 파형은 토큰만 먹는다.
+  const SLOTS = Math.min(8, peaks.length);
+  const step = peaks.length / SLOTS;
+  let out = '';
+  for (let i = 0; i < SLOTS; i += 1) {
+    const s = Math.floor(i * step);
+    const e = Math.min(peaks.length, Math.floor((i + 1) * step));
+    let sum = 0;
+    for (let j = s; j < e; j += 1) sum += Math.max(0, Math.min(1, peaks[j]));
+    const avg = sum / Math.max(1, e - s);
+    const idx = Math.min(blocks.length - 1, Math.round(avg * (blocks.length - 1)));
+    out += blocks[idx];
+  }
+  return out;
 }
 
 /**
@@ -631,8 +662,8 @@ export function buildClaudeAttachmentBlocks(
   for (const att of attachments) {
     summaries.push(att.summary);
 
-    if (att.kind === 'video') {
-      // Claude API 는 현재 영상 블록을 받지 않는다 — 요약 텍스트로만 전달한다.
+    if (att.kind === 'video' || att.kind === 'audio') {
+      // Claude API 는 현재 영상·오디오 블록을 받지 않는다 — 요약 텍스트로만 전달.
       blocks.push(attachmentToTextFallback(att));
       continue;
     }

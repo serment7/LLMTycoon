@@ -151,11 +151,11 @@ test('SEC-4 · ErrorBoundary 는 mapUnknownError 경유로 서버 원문을 한 
   assert.match(src, /mapUnknownError\(/);
 });
 
-test('SEC-4 · 토스트 버스 emit 경로가 title/body/variant 3 필드만 받는 좁은 타입을 유지한다', () => {
+test('SEC-4 · 토스트 버스 emit 경로가 title/description/variant 3 필드 좁은 타입을 유지한다', () => {
   const toastSrc = readSrc('components/ToastProvider.tsx');
   // Toast 버스 타입을 과도하게 자유롭게 바꾸면 임의 HTML 이 주입될 수 있다.
   assert.match(toastSrc, /title\s*:\s*string/);
-  assert.match(toastSrc, /body\??:\s*string/);
+  assert.match(toastSrc, /description\?:\s*string/);
 });
 
 // SEC-DEF-2 — mapUnknownError 가 원문 body 를 그대로 노출(현재 결함).

@@ -80,6 +80,17 @@ const MEDIA_LOADER_TABLE: Readonly<Record<MediaLoaderErrorCode, UserFacingMessag
     title: '요청이 취소되었습니다',
     severity: 'info',
   },
+  AUDIO_UNSUPPORTED: {
+    title: '이 브라우저는 마이크 녹음을 지원하지 않아요',
+    body: '최신 브라우저(크롬·엣지·사파리)에서 다시 시도해 주세요.',
+    severity: 'warning',
+  },
+  AUDIO_PERMISSION_DENIED: {
+    title: '마이크 권한이 거부되었습니다',
+    body: '브라우저 주소창의 자물쇠 아이콘에서 마이크 권한을 허용해 주세요.',
+    severity: 'warning',
+    action: { label: '설정 열기', kind: 'open-settings' },
+  },
 };
 
 const MEDIA_EXPORTER_TABLE: Readonly<Record<MediaExporterErrorCode, UserFacingMessage>> = {

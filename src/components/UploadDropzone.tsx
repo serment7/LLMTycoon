@@ -142,9 +142,10 @@ export function UploadDropzone({
     for (const file of list) {
       const gate = gateFile(file, { maxBytes });
       if (!gate.ok) {
-        // 실패 분기 — `{ ok: false; message; reason }` 로 narrow.
-        if (onRejected) onRejected(file, gate.message);
-        else toast.push(messageToToastInput(gate.message));
+        // `Extract` 로 실패 분기 타입을 명시해 TS narrowing 한계를 우회한다.
+        const failure = gate as Extract<FileGateResult, { ok: false }>;
+        if (onRejected) onRejected(file, failure.message);
+        else toast.push(messageToToastInput(failure.message));
         continue;
       }
       accepted.push(file);
