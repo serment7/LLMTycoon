@@ -419,6 +419,91 @@ function buildSummary(preview: MediaPreview, pageIndices?: number[]): string {
  * 소비된다. `excerptLength` 는 기본 256자 — Claude 컨텍스트가 커지는 걸 막고,
  * 전체 본문이 필요하면 서버가 fileId 로 별도 조회하도록 분리했다.
  */
+// ────────────────────────────────────────────────────────────────────────────
+// 썸네일 지연 생성 + 캐시 (#e5965192 §2)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// PDF 페이지·PPTX 슬라이드 썸네일(data URL)은 다음 두 곳에서 참조된다:
+//   · MediaAttachmentPanel/미리보기 카드 — 사용자 눈으로 확인.
+//   · Claude 컨텐츠 블록(`type: 'image'`) — 문서·이미지 폴백 경로.
+// 동일 자산·페이지를 매번 다시 렌더링하면 네트워크/CPU 비용이 크다. 본 모듈은
+// `getThumbnail` 안에서 키(=`${preview.id}:${pageIndex}`) 기반 메모리 캐시를 유지해
+// 렌더러가 "첫 호출 한 번만" 실행되도록 잠근다. 렌더러는 호출자가 주입한다(브라우저
+// 에서는 pdfjs-dist Canvas, 서버에서는 puppeteer 등). 본 모듈은 렌더 방식을 모른다.
+
+export type ThumbnailRenderer = (
+  preview: MediaPreview,
+  pageIndex: number | undefined,
+) => Promise<string>;
+
+interface ThumbnailCacheEntry {
+  dataUrl: string;
+  cachedAtMs: number;
+}
+
+const thumbnailCache = new Map<string, ThumbnailCacheEntry>();
+
+function thumbnailKey(preview: Pick<MediaPreview, 'id'>, pageIndex?: number): string {
+  return `${preview.id}:${typeof pageIndex === 'number' ? pageIndex : 'default'}`;
+}
+
+export interface GetThumbnailOptions {
+  pageIndex?: number;
+  /** 미주입이면 캐시 히트만 반환하고 미스 시 null. 주입 시 미스 경로에서 1회 렌더한다. */
+  renderer?: ThumbnailRenderer;
+  /** 테스트·강제 무효화용 — true 면 캐시를 무시하고 재렌더 후 덮어쓴다. */
+  bypassCache?: boolean;
+}
+
+/**
+ * 썸네일을 지연 생성 후 캐시에 저장한다. 반환값은 data URL(또는 서버 URL) 문자열.
+ * 캐시 키는 `${preview.id}:${pageIndex ?? 'default'}` — 동일 자산이라도 페이지 단위
+ * 별로 따로 캐시된다.
+ */
+export async function getThumbnail(
+  preview: MediaPreview,
+  opts: GetThumbnailOptions = {},
+): Promise<string | null> {
+  const key = thumbnailKey(preview, opts.pageIndex);
+  if (!opts.bypassCache) {
+    const cached = thumbnailCache.get(key);
+    if (cached) return cached.dataUrl;
+  }
+  if (!opts.renderer) return null;
+  const dataUrl = await opts.renderer(preview, opts.pageIndex);
+  thumbnailCache.set(key, { dataUrl, cachedAtMs: Date.now() });
+  return dataUrl;
+}
+
+/** 캐시에 이미 있는 값을 동기로 꺼낸다. 없으면 null. UI 가 초기 렌더에 즉시 쓴다. */
+export function peekThumbnail(
+  preview: Pick<MediaPreview, 'id'>,
+  pageIndex?: number,
+): string | null {
+  return thumbnailCache.get(thumbnailKey(preview, pageIndex))?.dataUrl ?? null;
+}
+
+/** 단일 자산의 모든 페이지 캐시를 비운다. 파일이 재업로드되면 호출자가 불러준다. */
+export function invalidateThumbnailCache(assetId: string): void {
+  const prefix = `${assetId}:`;
+  for (const key of thumbnailCache.keys()) {
+    if (key.startsWith(prefix)) thumbnailCache.delete(key);
+  }
+}
+
+/** 테스트 teardown 전용 — 전체 캐시 초기화. 프로덕션 코드는 호출하지 않는다. */
+export function clearThumbnailCache(): void {
+  thumbnailCache.clear();
+}
+
+export function getThumbnailCacheSize(): number {
+  return thumbnailCache.size;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 대화 문맥 정규화 — MediaPreview → MediaChatAttachment
+// ────────────────────────────────────────────────────────────────────────────
+
 export function toChatAttachment(
   preview: MediaPreview,
   opts?: { excerptLength?: number },

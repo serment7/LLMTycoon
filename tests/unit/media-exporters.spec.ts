@@ -13,6 +13,11 @@ import {
   exportVideo,
   prepareDownload,
   MediaExporterError,
+  registerVideoExporterProvider,
+  resetVideoExporterProvider,
+  getVideoExporterProvider,
+  httpVideoExporterProvider,
+  type VideoExporterProvider,
 } from '../../src/utils/mediaExporters.ts';
 import type { MediaPreview } from '../../src/utils/mediaLoaders.ts';
 
@@ -226,6 +231,56 @@ test('prepareDownload — 확장자 없는 이름은 kind 기본 확장자를 �
   };
   const dl = prepareDownload(preview);
   assert.equal(dl.filename, 'hero-shot.mp4');
+});
+
+// ─── 영상 공급자 Provider 패턴 (#e36d53f8 §3) ────────────────────────────────
+
+test('registerVideoExporterProvider — 등록된 mock 이 호출되고, reset 후 HTTP 로 복귀', async () => {
+  let called = 0;
+  const mockProvider: VideoExporterProvider = {
+    id: 'mock',
+    async generate({ prompt }, opts) {
+      called += 1;
+      return {
+        id: `mock-${called}`,
+        kind: 'video',
+        name: `${prompt}.mp4`,
+        mimeType: 'video/mp4',
+        sizeBytes: 0,
+        createdAt: '2026-04-19T00:00:00Z',
+        generatedBy: { adapter: 'mock', prompt },
+      };
+    },
+  };
+  registerVideoExporterProvider(mockProvider);
+  try {
+    assert.equal(getVideoExporterProvider().id, 'mock');
+    const preview = await exportVideo(
+      { prompt: 'shot' },
+      { projectId: 'proj-1', fetcher: async () => { throw new Error('HTTP 경로가 호출되면 안 됨'); } },
+    );
+    assert.equal(called, 1);
+    assert.equal(preview.generatedBy?.adapter, 'mock');
+  } finally {
+    resetVideoExporterProvider();
+  }
+  assert.equal(getVideoExporterProvider().id, httpVideoExporterProvider.id);
+});
+
+test('기본 HTTP Provider — exportVideo 는 /api/media/generate 로 JSON 을 보낸다', async () => {
+  let capturedBody: unknown;
+  const preview = await exportVideo(
+    { prompt: 'hero' },
+    {
+      projectId: 'proj-1',
+      fetcher: async (_url, init) => {
+        capturedBody = JSON.parse(String(init!.body));
+        return jsonResponse(fakeAsset({ kind: 'video', name: 'hero.mp4', mimeType: 'video/mp4' }));
+      },
+    },
+  );
+  assert.deepEqual(capturedBody, { kind: 'video', prompt: 'hero', projectId: 'proj-1' });
+  assert.equal(preview.kind, 'video');
 });
 
 test('prepareDownload — name 이 비어 있으면 kind-id 폴백', () => {

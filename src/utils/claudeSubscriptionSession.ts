@@ -455,6 +455,95 @@ export function reconcileRestoredWithServer(params: {
   return { state: null, status: 'active' };
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// 세션 신호 → 토스트 변환(#3773fc8d)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// 배경 — 서버가 방송하는 토큰 소진·구독 만료·레이트리밋·네트워크 단절은
+// 상단바 배너만으로는 "지금 재시도 중인지" 가 드러나지 않는다. 본 함수는 신호와
+// 현재 재시도 큐 길이를 받아 ToastProvider 가 그대로 소비할 수 있는 페이로드를
+// 돌려준다. 재시도 큐에 대기 항목이 있으면 "지금 N건 재시도" 액션 버튼을 노출하고,
+// 없으면 액션을 생략해 조용한 배너로 수렴한다.
+
+export type SessionToastSignal =
+  | 'token_exhausted'
+  | 'subscription_expired'
+  | 'rate_limit'
+  | 'network_offline'
+  | 'session_restored';
+
+export interface SessionToastPayload {
+  /** ToastVariant 와 동일 축: 팔레트/아이콘이 이 값으로 결정된다. */
+  severity: 'info' | 'warning' | 'error';
+  /** 한 줄 제목(필수). */
+  title: string;
+  /** 보조 설명(선택). */
+  body?: string;
+  /** aria-live. error 는 assertive, 그 외 polite. */
+  ariaLive: 'polite' | 'assertive';
+  /** 조치 버튼. 재시도 큐가 비어 있으면 label/kind 를 생략해 "조용한 배너" 로. */
+  action?: { label: string; kind: 'retry-now' | 'open-settings' };
+}
+
+/**
+ * 세션 신호를 토스트 페이로드로 변환한다. 본 함수는 순수하며, React · DOM 접근이
+ * 없어 Node 에서 직접 호출해 계약을 잠글 수 있다.
+ */
+export function sessionSignalToToast(params: {
+  signal: SessionToastSignal;
+  queueLength: number;
+}): SessionToastPayload {
+  const queueN = Math.max(0, Number.isFinite(params.queueLength) ? params.queueLength : 0);
+  // 재시도 큐에 대기 항목이 있을 때만 "지금 N건 재시도" 조치 버튼을 노출한다.
+  const retry = queueN > 0
+    ? { label: `${queueN}건 지금 재시도`, kind: 'retry-now' as const }
+    : undefined;
+
+  switch (params.signal) {
+    case 'token_exhausted':
+      return {
+        severity: 'warning',
+        title: '세션 토큰이 소진되었습니다',
+        body: '5시간 창이 갱신되면 자동으로 이어집니다.',
+        ariaLive: 'polite',
+        action: retry,
+      };
+    case 'subscription_expired':
+      return {
+        severity: 'error',
+        title: '구독이 만료되었습니다',
+        body: '결제 상태를 확인하거나 다시 구독해 주세요.',
+        ariaLive: 'assertive',
+        action: { label: '설정 열기', kind: 'open-settings' },
+      };
+    case 'rate_limit':
+      return {
+        severity: 'warning',
+        title: '요청이 잠시 제한되었습니다',
+        body: '잠시 후 자동으로 다시 시도합니다.',
+        ariaLive: 'polite',
+        action: retry,
+      };
+    case 'network_offline':
+      return {
+        severity: 'info',
+        title: '네트워크가 일시적으로 끊겼어요',
+        body: '연결이 복구되면 자동으로 이어집니다.',
+        ariaLive: 'polite',
+        action: retry,
+      };
+    case 'session_restored':
+      return {
+        severity: 'info',
+        title: '세션이 복구되었습니다',
+        // 복구 직후 큐가 남아 있으면 사용자 확인을 기다리는 편이 UX 상 분명.
+        body: queueN > 0 ? `대기 중인 ${queueN}건을 다시 시도할 수 있어요.` : undefined,
+        ariaLive: 'polite',
+        action: retry,
+      };
+  }
+}
+
 /** 지정 시각(ms) 을 HH:MM 형식의 로컬 시간 문자열로 포매팅. 툴팁 라벨 용. */
 export function formatResetClock(resetAtMs: number, locale: string = 'ko-KR'): string {
   if (!Number.isFinite(resetAtMs)) return '--:--';
@@ -466,6 +555,136 @@ export function formatResetClock(resetAtMs: number, locale: string = 'ko-KR'): s
   // 미래에 다국어화되면 Intl.DateTimeFormat 으로 교체한다.
   void locale;
   return `${hh}:${mm}`;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Claude Messages API 첨부 어댑터 (#e5965192)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// `MediaChatAttachment`(클라가 정규화한 첨부) 를 Claude Messages API 의 컨텐츠 블록
+// (`type: 'text' | 'document' | 'image'`) 배열로 변환한다. 본 모듈은 바이트를 다루지
+// 않으므로 파일 바이트 원본은 호출자(서버 라우트 또는 App.tsx) 가 `sourceResolver`
+// 콜백으로 주입한다. 콜백이 null 을 반환하거나 미주입이면 요약 텍스트 블록으로
+// 폴백해 "첨부가 컨텍스트에서 사라지는" 회귀를 막는다. 영상은 Anthropic API 가 현재
+// 지원하지 않으므로 언제나 텍스트 요약 블록으로 수렴한다.
+//
+// 설계상 본 함수는 React/DOM 접근이 없다. tsx --test 환경에서 입력·출력만으로 계약을
+// 잠글 수 있도록 순수함수로 유지한다.
+
+import type { MediaChatAttachment } from './mediaLoaders';
+
+/** Claude Messages API 에서 문서·이미지 블록이 공유하는 소스 표현. */
+export type ClaudeAttachmentSource =
+  | { type: 'base64'; media_type: string; data: string }
+  | { type: 'url'; url: string };
+
+/** 본 모듈이 돌려주는 컨텐츠 블록. Claude SDK 타입과 호환되도록 최소 필드만 둔다. */
+export type ClaudeContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'document'; source: ClaudeAttachmentSource; title?: string; context?: string }
+  | { type: 'image'; source: ClaudeAttachmentSource };
+
+export interface BuildClaudeAttachmentBlocksOptions {
+  /**
+   * 첨부마다 바이트·URL 소스를 돌려주는 콜백. 반환이 null 이면 텍스트 폴백 블록으로
+   * 대체된다. 서버 라우트가 MediaAsset.storageUrl 을 조회하거나, App.tsx 가 이미
+   * 메모리에 가진 Blob 을 base64 로 인코딩해 넘길 때 이 자리에 끼워 넣는다.
+   */
+  sourceResolver?: (attachment: MediaChatAttachment) => ClaudeAttachmentSource | null;
+  /** 요약 한 줄의 최대 길이. 기본 120자. */
+  maxSummaryChars?: number;
+}
+
+export interface BuiltClaudeAttachmentPayload {
+  /** 시스템/유저 메시지 앞에 접두로 붙일 요약. 빈 문자열이면 붙이지 않는다. */
+  summaryText: string;
+  /** 변환된 컨텐츠 블록 배열(첨부 0건이면 빈 배열). */
+  blocks: ClaudeContentBlock[];
+}
+
+function clampText(text: string, max: number): string {
+  if (!text) return '';
+  return text.length > max ? text.slice(0, max) + '…' : text;
+}
+
+function attachmentToTextFallback(att: MediaChatAttachment): ClaudeContentBlock {
+  const lines: string[] = [`[첨부 ${att.summary}]`];
+  if (att.textExcerpt) lines.push(att.textExcerpt);
+  return { type: 'text', text: lines.join('\n') };
+}
+
+/**
+ * 첨부 배열을 Claude 컨텐츠 블록으로 변환하고, 리더 시스템/유저 메시지에 접두로
+ * 붙일 요약 문자열도 함께 돌려준다. 첨부가 비면 빈 블록과 빈 요약을 반환한다.
+ */
+export function buildClaudeAttachmentBlocks(
+  attachments: readonly MediaChatAttachment[],
+  options: BuildClaudeAttachmentBlocksOptions = {},
+): BuiltClaudeAttachmentPayload {
+  const maxSummary = options.maxSummaryChars && options.maxSummaryChars > 0
+    ? options.maxSummaryChars
+    : 120;
+  const resolver = options.sourceResolver;
+  const blocks: ClaudeContentBlock[] = [];
+  const summaries: string[] = [];
+
+  for (const att of attachments) {
+    summaries.push(att.summary);
+
+    if (att.kind === 'video') {
+      // Claude API 는 현재 영상 블록을 받지 않는다 — 요약 텍스트로만 전달한다.
+      blocks.push(attachmentToTextFallback(att));
+      continue;
+    }
+
+    const source = resolver ? resolver(att) : null;
+    if (!source) {
+      blocks.push(attachmentToTextFallback(att));
+      continue;
+    }
+
+    if (att.kind === 'image') {
+      blocks.push({ type: 'image', source });
+      continue;
+    }
+
+    // pdf / pptx → document 블록. Claude 는 PDF 를 직접 소비하지만 PPT 는 아직
+    // 미지원이므로, MIME 에 따라 text 폴백으로 수렴한다.
+    if (att.mimeType === 'application/pdf') {
+      blocks.push({
+        type: 'document',
+        source,
+        title: clampText(att.name, maxSummary),
+        context: att.textExcerpt ? clampText(att.textExcerpt, maxSummary) : undefined,
+      });
+      continue;
+    }
+
+    // PPTX(혹은 예외 MIME) 는 텍스트 발췌만 전달.
+    blocks.push(attachmentToTextFallback(att));
+  }
+
+  const summaryText = summaries.length > 0
+    ? `첨부 ${summaries.length}건: ${summaries.map(s => clampText(s, maxSummary)).join(' · ')}`
+    : '';
+
+  return { summaryText, blocks };
+}
+
+/**
+ * 기존 시스템 프롬프트 문자열 앞에 첨부 요약 섹션을 접두로 붙인다. 첨부가 없으면
+ * 원본을 그대로 돌려주어 호출자가 분기 없이 사용할 수 있다. 구분자는 두 줄 공백
+ * 으로 고정해 리더 프롬프트의 기존 섹션 헤더 패턴과 충돌하지 않게 한다.
+ */
+export function prefixSystemPromptWithAttachments(
+  systemPrompt: string,
+  attachments: readonly MediaChatAttachment[],
+  options: BuildClaudeAttachmentBlocksOptions = {},
+): string {
+  if (!attachments || attachments.length === 0) return systemPrompt;
+  const { summaryText } = buildClaudeAttachmentBlocks(attachments, options);
+  if (!summaryText) return systemPrompt;
+  return `## 첨부 요약\n${summaryText}\n\n${systemPrompt}`;
 }
 
 /** `resetAtMs` 까지 남은 시간을 'Xh Ym' · 'Ym' · '<1m' 형태로 포매팅. 툴팁 보조 라벨용. */

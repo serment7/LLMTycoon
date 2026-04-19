@@ -391,6 +391,97 @@ test('detectMediaKind — 빈 이름과 빈 MIME 모두 null 을 돌려준다', 
   assert.equal(detectMediaKind('.', 'application/octet-stream'), null);
 });
 
+// ─── 대용량 경계값 & 진행률 (#e36d53f8) ──────────────────────────────────────
+
+test('loadPdfFile — maxBytes 초과 시 네트워크 전에 FILE_TOO_LARGE', async () => {
+  // 10MB+1 바이트 파일을 만들되, FormData 로 직렬화되기 전에 거절되어야 하므로 실제
+  // 버퍼가 크게 할당되지 않도록 Blob 의 size 만 허위로 확장하는 대신 작은 배열을 쓴다.
+  const file = new File([new Uint8Array(11)], 'big.pdf', { type: 'application/pdf' });
+  let fetchCalled = false;
+  await assert.rejects(
+    () => loadPdfFile(file, {
+      projectId: 'proj-1',
+      maxBytes: 10,
+      fetcher: async () => { fetchCalled = true; return jsonResponse({}); },
+    }),
+    (err: unknown) => err instanceof MediaLoaderError && err.code === 'FILE_TOO_LARGE',
+  );
+  assert.equal(fetchCalled, false, 'maxBytes 초과 시 네트워크를 타면 안 된다');
+});
+
+test('loadPdfFile — 진행률 콜백이 precheck → upload → finalize 순서로 호출된다', async () => {
+  const file = new File(['%PDF-1.4 small'], 'a.pdf', { type: 'application/pdf' });
+  const phases: MediaLoaderProgress[] = [];
+  const fetcher = async () => jsonResponse({
+    id: 'asset-2', projectId: 'proj-1', kind: 'pdf', name: 'a.pdf',
+    mimeType: 'application/pdf', sizeBytes: file.size,
+    createdAt: new Date().toISOString(),
+  });
+  await loadPdfFile(file, {
+    projectId: 'proj-1',
+    fetcher,
+    onProgress: p => phases.push(p),
+  });
+  const seqs = phases.map(p => p.phase);
+  assert.deepEqual(seqs, ['precheck', 'upload', 'upload', 'finalize']);
+  assert.ok(phases.every(p => p.total === file.size));
+});
+
+test('DEFAULT_MAX_BYTES — 50MB 상한을 수출한다', () => {
+  assert.equal(DEFAULT_MAX_BYTES, 50 * 1024 * 1024);
+});
+
+// ─── 첨부 정규화 toChatAttachment (#e36d53f8 §2) ──────────────────────────────
+
+test('toChatAttachment — PDF 에서 페이지 인덱스·요약·발췌를 채운다', () => {
+  const preview: MediaPreview = {
+    id: 'asset-3', kind: 'pdf', name: 'report.pdf',
+    mimeType: 'application/pdf', sizeBytes: 2048,
+    createdAt: new Date().toISOString(),
+    extractedText: '첫 페이지\f둘째 페이지\f셋째 페이지',
+    pageCount: 3,
+  };
+  const att = toChatAttachment(preview);
+  assert.equal(att.kind, 'pdf');
+  assert.deepEqual(att.pageIndices, [1, 2, 3]);
+  assert.match(att.summary, /PDF/);
+  assert.match(att.summary, /3페이지/);
+  assert.match(att.summary, /report\.pdf/);
+  assert.equal(att.textExcerpt, '첫 페이지\f둘째 페이지\f셋째 페이지');
+});
+
+test('toChatAttachment — extractedText 가 길면 excerptLength 로 잘라 … 를 붙인다', () => {
+  const preview: MediaPreview = {
+    id: 'asset-4', kind: 'pdf', name: 'long.pdf',
+    mimeType: 'application/pdf', sizeBytes: 10,
+    createdAt: new Date().toISOString(),
+    extractedText: 'A'.repeat(500),
+  };
+  const att = toChatAttachment(preview, { excerptLength: 64 });
+  assert.equal(att.textExcerpt?.length, 65); // 64자 + … 한 글자
+  assert.ok(att.textExcerpt?.endsWith('…'));
+});
+
+test('toChatAttachment — PPTX 는 slideIndices, 영상/이미지는 인덱스 없음', () => {
+  const pptx = toChatAttachment({
+    id: 'p1', kind: 'pptx', name: 'deck.pptx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    sizeBytes: 1024, createdAt: new Date().toISOString(), pageCount: 4,
+  });
+  assert.deepEqual(pptx.slideIndices, [1, 2, 3, 4]);
+  assert.equal(pptx.pageIndices, undefined);
+
+  const video = toChatAttachment({
+    id: 'v1', kind: 'video', name: 'hero.mp4',
+    mimeType: 'video/mp4', sizeBytes: 0, createdAt: new Date().toISOString(),
+    generatedBy: { adapter: 'video-mock', prompt: 'hero' },
+  });
+  assert.equal(video.pageIndices, undefined);
+  assert.equal(video.slideIndices, undefined);
+  assert.equal(video.textExcerpt, undefined);
+  assert.match(video.summary, /영상/);
+});
+
 test('loadMediaFile — fetcher 미주입 + 전역 fetch 없음 → UPLOAD_FAILED', async () => {
   // globalThis.fetch 를 일시적으로 가려 "실행 환경에 fetch 가 없을 때" 경로를 잠근다.
   const file = new File(['%PDF-1.4'], 'a.pdf', { type: 'application/pdf' });

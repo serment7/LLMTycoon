@@ -31,6 +31,8 @@ import type { MediaChatAttachment } from './utils/mediaLoaders';
 import { CurrentProjectBadge } from './components/CurrentProjectBadge';
 import { ClaudeTokenUsage } from './components/ClaudeTokenUsage';
 import { TokenUsageIndicator } from './components/TokenUsageIndicator';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { ToastProvider } from './components/ToastProvider';
 import { claudeTokenUsageStore } from './utils/claudeTokenUsageStore';
 import {
   SUBSCRIPTION_SESSION_STORAGE_KEY,
@@ -154,7 +156,7 @@ const AGENT_PATH_MAX_POINTS = 10;
 const AGENT_PATH_RETENTION_MS = 3000;
 const AGENT_PATH_CLEANUP_MS = 500;
 
-export default function App() {
+function App() {
   // Agents 탭 라이브 닷·기타 펄스 마이크로 인터랙션을 prefers-reduced-motion 사용자에게 비활성화한다.
   const reducedMotion = useReducedMotion();
   const [gameState, setGameState] = useState<GameState>({ projects: [], agents: [], files: [], dependencies: [] });
@@ -2984,4 +2986,20 @@ const FILE_TYPE_LABEL_KO: Record<NonNullable<CodeFile['type']> | string, string>
 export function translateFileType(type?: CodeFile['type'] | string): string {
   if (!type) return '파일';
   return FILE_TYPE_LABEL_KO[type] ?? type;
+}
+
+// 전역 오류 표면화 래퍼(#3773fc8d) — App 본체 렌더 오류와 전역 Promise 거부를
+// `ErrorBoundary` 가 포획하고, 비 React 경로에서 쏘는 토스트는 `ToastProvider` 의
+// 모듈 버스가 같은 스택으로 수렴한다. 래핑 순서는 바깥 → 안:
+//   ErrorBoundary (렌더 오류 포획·복구 UI)
+//   └ ToastProvider (우상단 스택·역할 분리·토스트 버스 구독)
+//     └ App (기존 본체)
+export default function AppRoot(): React.ReactElement {
+  return (
+    <ErrorBoundary>
+      <ToastProvider>
+        <App />
+      </ToastProvider>
+    </ErrorBoundary>
+  );
 }

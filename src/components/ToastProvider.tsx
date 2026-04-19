@@ -61,6 +61,71 @@ const DEFAULT_DURATION: Record<ToastVariant, number> = {
 
 const MAX_VISIBLE = 3;
 
+// ────────────────────────────────────────────────────────────────────────────
+// 순수 리듀서(#3773fc8d) — Node 테스트에서 React 없이 스택 동작을 잠근다.
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface ToastStackState {
+  items: ReadonlyArray<ToastItem>;
+}
+
+export type ToastStackAction =
+  | { type: 'PUSH'; item: ToastItem }
+  | { type: 'DISMISS'; id: string }
+  | { type: 'CLEAR' };
+
+export const EMPTY_TOAST_STACK: ToastStackState = Object.freeze({
+  items: Object.freeze([]) as ReadonlyArray<ToastItem>,
+}) as ToastStackState;
+
+/**
+ * 토스트 스택을 갱신하는 순수 리듀서. 동일 id 재방출은 **수명 리셋(merge)** —
+ * 디자이너 시안 T-09 와 동일 계약. 실제 Provider 는 useState 기반이지만, 본
+ * 리듀서는 "동일 스택 동작" 을 React 밖에서도 검증할 수 있도록 공개한다.
+ */
+export function toastStackReducer(state: ToastStackState, action: ToastStackAction): ToastStackState {
+  switch (action.type) {
+    case 'PUSH': {
+      const idx = state.items.findIndex(t => t.id === action.item.id);
+      if (idx >= 0) {
+        // T-09: 동일 id 는 병합(수명만 리셋). DOM 항목은 그대로, 데이터만 교체.
+        const next = state.items.slice();
+        next[idx] = action.item;
+        return { items: next };
+      }
+      return { items: [...state.items, action.item] };
+    }
+    case 'DISMISS':
+      if (!state.items.some(t => t.id === action.id)) return state;
+      return { items: state.items.filter(t => t.id !== action.id) };
+    case 'CLEAR':
+      return state.items.length === 0 ? state : EMPTY_TOAST_STACK;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 토스트 버스(#3773fc8d) — 비 React 맥락(ErrorBoundary·소켓 핸들러·순수 유틸)
+// 에서도 토스트를 쏘아 올릴 수 있는 모듈 레벨 pub/sub. Provider 가 마운트되면
+// 자동으로 구독해 같은 스택에 합친다. Provider 가 없으면 조용히 버려진다.
+// ────────────────────────────────────────────────────────────────────────────
+
+type ToastBusListener = (input: ToastInput) => void;
+const busListeners = new Set<ToastBusListener>();
+
+export const toastBus = {
+  emit(input: ToastInput): void {
+    for (const l of busListeners) {
+      try { l(input); } catch { /* 개별 리스너 실패는 나머지에 영향 없음 */ }
+    }
+  },
+  subscribe(listener: ToastBusListener): () => void {
+    busListeners.add(listener);
+    return () => { busListeners.delete(listener); };
+  },
+  // 테스트 전용.
+  __resetForTest(): void { busListeners.clear(); },
+};
+
 const ToastContext = createContext<UseToast | null>(null);
 
 // Provider 가 없을 때도 useToast() 호출이 터지지 않도록 no-op 을 돌려준다.
@@ -117,6 +182,14 @@ export function ToastProvider({ children }: ProviderProps) {
   }, []);
 
   const api = useMemo<UseToast>(() => ({ push, dismiss, dismissAll }), [push, dismiss, dismissAll]);
+
+  // 모듈 버스 구독(#3773fc8d) — ErrorBoundary·소켓 핸들러 등 비 React 경로에서
+  // `toastBus.emit(...)` 으로 쏜 메시지를 같은 Provider 스택에 병합한다. Provider 가
+  // 마운트돼 있지 않은 SSR·테스트에서는 자연스럽게 발화된 메시지가 버려진다.
+  useEffect(() => {
+    const off = toastBus.subscribe(input => { push(input); });
+    return () => { off(); };
+  }, [push]);
 
   // T-08: 동시 표시 3개 + 나머지 큐잉. 가장 오래된 것이 먼저 노출된다.
   const visible = queue.slice(0, MAX_VISIBLE);
