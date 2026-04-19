@@ -12,6 +12,7 @@ import { GitCredentialsSection } from './GitCredentialsSection';
 import { SharedGoalForm } from './SharedGoalForm';
 import { EmptyState } from './EmptyState';
 import { ProjectEditingHeader } from './EmptyProjectPlaceholder';
+import { FileHistoryPanel } from './FileHistoryPanel';
 import { startGitAutomationScheduler } from '../utils/gitAutomation';
 
 // UX: PR 대상 라디오 선택은 "매번 다시 고르기"보다 "한 번 정해두면 그대로"가 실수를
@@ -1556,6 +1557,29 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
           })}
         </div>
       </section>
+
+      {/* FileHistoryPanel(#472c5b8d) — 현재 편집 중인 프로젝트의 업로드/생성 파일을 최신순으로
+          보여 준다. 상단바/채팅 입력창의 첨부 버튼이 이 저장소에 기록한 MediaAsset 이 여기로
+          수렴한다. 선택된 프로젝트가 없으면 빈 상태 카드로 자연스럽게 대체된다. */}
+      {selectedProjectId && (
+        <section aria-labelledby="file-history-panel-heading">
+          <h2
+            id="file-history-panel-heading"
+            className="sr-only"
+          >
+            업로드 파일 내역
+          </h2>
+          <div
+            className="p-4 border-2"
+            style={{
+              background: 'var(--pixel-card, rgba(15, 52, 96, 0.6))',
+              borderColor: 'var(--pixel-border)',
+            }}
+          >
+            <FileHistoryPanel projectId={selectedProjectId} />
+          </div>
+        </section>
+      )}
 
       {showPrTargetSelector && (
         <PrTargetSelectorModal

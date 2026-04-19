@@ -43,7 +43,8 @@ import { OnboardingTour } from './components/OnboardingTour';
 import { ConversationSearch } from './components/ConversationSearch';
 import { SettingsDrawer } from './components/SettingsDrawer';
 import type { SearchableMessage } from './utils/conversationSearch';
-import { registerServiceWorker, applyWaitingUpdate } from './utils/serviceWorkerRegistration';
+// Service Worker 비활성화 — 개발 중 캐시 문제 유발
+// import { registerServiceWorker, applyWaitingUpdate } from './utils/serviceWorkerRegistration';
 import { loadMediaFile } from './utils/mediaLoaders';
 import { mapUnknownError, messageToToastInput } from './utils/errorMessages';
 import { claudeTokenUsageStore } from './utils/claudeTokenUsageStore';
@@ -183,24 +184,14 @@ function App() {
   // 서비스 워커 등록(#0dceedcd) — 보안 컨텍스트에서만 부팅. 새 버전 발견 시 토스트로
   // 안내하고 사용자가 수락하면 skipWaiting → 새로고침으로 즉시 갱신한다. 실패는 조용히 무시.
   useEffect(() => {
-    let registration: ServiceWorkerRegistration | null = null;
-    registerServiceWorker({
-      onUpdate: reg => {
-        registration = reg;
-        mediaToast.push({
-          variant: 'info',
-          title: '새 버전이 있어요',
-          description: '지금 새로고침하면 즉시 갱신됩니다.',
-          duration: 0,
-          action: { label: '새로고침', onClick: () => applyWaitingUpdate(reg) },
-        });
-      },
-      onReady: reg => { registration = reg; },
-    }).catch(() => { /* 등록 실패는 토스트를 띄우지 않는다 — 오프라인 셸은 선택 기능 */ });
-    return () => {
-      // 언마운트 시 특별한 정리는 불필요 — 브라우저가 수명주기를 소유한다.
-      void registration;
-    };
+    // Service Worker 비활성화 — 개발 중 캐시된 이전 번들을 서빙하여 변경이 반영 안 되는 문제 유발.
+    // 기존에 등록된 SW가 있으면 해제한다.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(regs => {
+        for (const reg of regs) reg.unregister();
+      });
+    }
+    return () => {};
     // mediaToast 는 참조가 매번 바뀌지 않도록 ToastProvider 가 useMemo 로 안정화한다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
