@@ -226,6 +226,32 @@
 
 ---
 
+## 8. 회귀 테스트 잠금 레지스트리
+
+본 보고서의 블로커·중대 결함은 `tests/uiSmokeReportBlockerContracts.regression.test.ts`
+에 소스 레벨 정규식 계약으로 승격되었다(2026-04-19 추가, 13 테스트 중 7건 통과 / 6건
+`test.skip`). 각 `CONTRACT §x.y` 테스트는 **현재 skip 상태**로, 해당 블로커가 수정
+되는 즉시 `test.skip` → `test` 로 전환하면 정규식이 App.tsx / ProjectManagement.tsx
+를 감사해 "와이어링 완료 여부" 를 자동 잠금한다.
+
+| 보고서 섹션 | 잠금 테스트 | 상태 |
+|---|---|---|
+| §1.1 MediaAttachmentPanel 미렌더 | `CONTRACT §1.1` | skip(미수정) |
+| §1.2 claude-session:status 미구독 | `CONTRACT §1.2` | skip(미수정) |
+| §1.3 mediaEvents prop 미전달 | `CONTRACT §1.3` | skip(미수정) |
+| §2.1 reset 이벤트에서 sessionStatus 미복원 | `CONTRACT §2.1` | skip(미수정) |
+| §2.2 readOnlyMode prop 미전달 | `CONTRACT §2.2` | skip(미수정) |
+| §2.4 PR 대상 선택 버튼 disabled 가드 부재 | `CONTRACT §2.4` | skip(미수정) |
+
+BASE 블록(통과 7건) 은 "빌딩블록이 사라지면 수정 자체가 불가능" 인 계약
+(예: DirectivePrompt 의 `readOnlyMode` prop 선언, MediaAttachmentPanel 정의) 을
+상시 가드한다. 본 보고서의 섹션 번호가 바뀌면 `META` 테스트가 즉시 어긋나 동기화
+누락을 잡는다.
+
+---
+
 부록: 본 보고서 작성 시 회귀 테스트 실행 결과 —
 `tests/branchStrategySaveLoad.regression.test.ts` 24건, `src/utils/projectOptions.test.ts`
-15건 전부 통과(2026-04-19 세션).
+15건, `tests/claudeSubscriptionSession.regression.test.ts` 13건,
+`tests/unit/media-loaders.spec.ts` 13건, `tests/uiSmokeReportBlockerContracts.regression.test.ts`
+13건(7 pass / 6 skip) 모두 실행 성공(2026-04-19 세션).

@@ -26,8 +26,10 @@ import { AgentContextBubble, AgentLogLine } from './components/AgentContextBubbl
 import { CollabTimeline } from './components/CollabTimeline';
 import { EmptyProjectPlaceholder, EmptyProjectPlaceholderSkeleton } from './components/EmptyProjectPlaceholder';
 import { DirectivePrompt, AttachmentPreviewModal, classifyAttachment, type DirectiveAttachment as UiDirectiveAttachment } from './components/DirectivePrompt';
+import { MediaPipelinePanel } from './components/MediaPipelinePanel';
 import { CurrentProjectBadge } from './components/CurrentProjectBadge';
 import { ClaudeTokenUsage } from './components/ClaudeTokenUsage';
+import { TokenUsageIndicator } from './components/TokenUsageIndicator';
 import { claudeTokenUsageStore } from './utils/claudeTokenUsageStore';
 import type { ClaudeTokenUsage as ClaudeTokenUsageDelta, ClaudeTokenUsageTotals } from './types';
 import { computeWorkspaceInsights } from './utils/workspaceInsights';
@@ -1384,6 +1386,7 @@ export default function App() {
           >
             협업: {collaborationBadge}
           </div>
+          <TokenUsageIndicator />
           <ClaudeTokenUsage />
         </div>
       </header>
@@ -2082,6 +2085,9 @@ export default function App() {
               maxBytes={10 * 1024 * 1024}
               disabled={commandBusy}
             />
+            <div className="mt-3">
+              <MediaPipelinePanel projectId={selectedProjectId} />
+            </div>
           </div>
         ) : (
           <div

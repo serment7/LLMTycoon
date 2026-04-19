@@ -83,7 +83,9 @@ function normalizeLimit(limit: number | undefined): number {
  * 임계값을 바꾸면 본 함수와 TokenUsageIndicator 테스트를 함께 갱신해야 한다.
  */
 export function severityFromRatio(ratio: number): SubscriptionSessionSeverity {
-  if (!Number.isFinite(ratio) || ratio < 0) return 'ok';
+  // NaN / 음수는 "아직 데이터 없음/비정상" 으로 보고 ok 로 안전 폴백.
+  // +∞ 는 "한도 초과" 로 해석해 critical 로 승격 — 사용자가 즉시 인지해야 한다.
+  if (Number.isNaN(ratio) || ratio < 0) return 'ok';
   if (ratio >= 0.8) return 'critical';
   if (ratio >= 0.5) return 'caution';
   return 'ok';
@@ -138,6 +140,97 @@ export function computeSubscriptionSessionSnapshot(params: {
   const resetAtMs = state.windowStartMs + windowMs;
 
   return { state, used, remaining, limit, ratioUsed, resetAtMs, severity, isReset };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 만료→재리셋 복구 큐 — "세션 소진 중 도착한 요청" 을 유실 없이 보관
+// ────────────────────────────────────────────────────────────────────────────
+//
+// 배경 — 서버가 `token_exhausted`/`subscription_expired` 를 내려보낸 직후에는
+// DirectivePrompt·SharedGoalForm 이 읽기 전용으로 전환된다. 그러나 사용자가
+// 만료 직전에 이미 enter 로 눌러 "보내기" 를 큐에 올렸거나, 소켓 지연으로 전송이
+// 미뤄진 요청은 그대로 사라지면 체감상 "요청이 증발" 한다. 본 유틸은 그 사이에
+// 쌓인 요청을 FIFO 로 보관했다가 5시간 윈도우 리셋 또는 상태 전환(active 복귀)
+// 시점에 단 1회 flush 하도록 돕는 **순수 함수 집합** 이다. React state · 타이머는
+// 호출자(상위 컴포넌트) 책임이다.
+
+/** 큐에 담기는 재시도 항목. 페이로드 내용은 호출자가 자유롭게 정한다. */
+export interface PendingSessionRequest<T = unknown> {
+  /** 큐 내 동일성을 위한 안정적 id. 호출자가 uuid 등으로 발급. */
+  id: string;
+  /** 실제 재시도 대상 페이로드(예: DirectivePrompt payload). */
+  payload: T;
+  /** 큐잉된 시각(ms). flush 시 순서 보존에 활용. */
+  queuedAtMs: number;
+}
+
+/** 큐 상태. 불변으로 취급해 React state 에 그대로 저장할 수 있다. */
+export interface PendingSessionQueue<T = unknown> {
+  items: ReadonlyArray<PendingSessionRequest<T>>;
+}
+
+/** 최초 상태 — 빈 큐. 공유 상수라 호출자 간 참조 동일성이 유지된다. */
+export const EMPTY_PENDING_QUEUE: PendingSessionQueue<never> = Object.freeze({
+  items: Object.freeze([]) as ReadonlyArray<PendingSessionRequest<never>>,
+}) as PendingSessionQueue<never>;
+
+/**
+ * 새 요청을 큐 뒤쪽에 추가한다. 동일 id 가 이미 있으면 원본을 유지해 사용자가
+ * "enter 를 두 번 눌렀다" 같은 실수로 중복 재시도가 발생하지 않게 한다.
+ * 페이로드/queuedAtMs 가 바뀌어도 기존 항목을 우선한다 — 큐 선두 기준 순서 보존.
+ */
+export function enqueuePendingRequest<T>(
+  queue: PendingSessionQueue<T>,
+  req: PendingSessionRequest<T>,
+): PendingSessionQueue<T> {
+  if (!req || typeof req.id !== 'string' || req.id.length === 0) return queue;
+  if (queue.items.some(existing => existing.id === req.id)) return queue;
+  return { items: [...queue.items, req] };
+}
+
+/**
+ * 큐에서 특정 id 를 제거한다(중간 취소 경로용). 존재하지 않으면 동일 참조 반환.
+ */
+export function dequeuePendingRequest<T>(
+  queue: PendingSessionQueue<T>,
+  id: string,
+): PendingSessionQueue<T> {
+  if (!queue.items.some(existing => existing.id === id)) return queue;
+  return { items: queue.items.filter(existing => existing.id !== id) };
+}
+
+/**
+ * 만료→재리셋 전환 판정. 다음 두 조건 중 하나면 "지금 flush 해야 한다".
+ *   1) 5시간 윈도우가 경계를 넘어 새로 열림(snapshot.isReset=true).
+ *   2) 세션 상태가 exhausted/warning → active 로 풀림.
+ * `prevStatus=null` 은 초기 마운트로 해석해 flush 하지 않는다(큐가 비어 있는
+ * 상황에서도 괜한 재렌더를 유발하지 않기 위함).
+ */
+export function shouldFlushPendingQueue(params: {
+  prevStatus: 'active' | 'warning' | 'exhausted' | null;
+  nextStatus: 'active' | 'warning' | 'exhausted';
+  snapshot: Pick<SubscriptionSessionSnapshot, 'isReset'>;
+}): boolean {
+  if (params.snapshot.isReset) return true;
+  if (params.prevStatus === 'exhausted' && params.nextStatus !== 'exhausted') return true;
+  if (params.prevStatus === 'warning' && params.nextStatus === 'active') return true;
+  return false;
+}
+
+/**
+ * 큐를 비우고 queuedAtMs 오름차순으로 정렬된 항목 배열을 반환한다. shouldFlush
+ * 가 false 면 큐를 건드리지 않고 빈 released 를 돌려준다. 호출자는 released 를
+ * 순회하며 실제 재시도를 수행하고, 실패한 항목만 다시 enqueue 하면 된다.
+ */
+export function flushPendingOnReset<T>(
+  queue: PendingSessionQueue<T>,
+  shouldFlush: boolean,
+): { next: PendingSessionQueue<T>; released: ReadonlyArray<PendingSessionRequest<T>> } {
+  if (!shouldFlush || queue.items.length === 0) {
+    return { next: queue, released: [] };
+  }
+  const released = [...queue.items].sort((a, b) => a.queuedAtMs - b.queuedAtMs);
+  return { next: EMPTY_PENDING_QUEUE as unknown as PendingSessionQueue<T>, released };
 }
 
 /** 지정 시각(ms) 을 HH:MM 형식의 로컬 시간 문자열로 포매팅. 툴팁 라벨 용. */

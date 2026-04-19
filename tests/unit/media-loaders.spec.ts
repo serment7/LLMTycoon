@@ -188,3 +188,183 @@ test('toMediaAttachment — PdfDocument 를 첨부 모양으로 압축한다', a
   assert.equal(attachment.pageCount, doc.pageCount);
   assert.equal(attachment.text, doc.text);
 });
+
+// ─── src/utils/mediaLoaders (client dispatcher · #f6052a91 1차 스켈레톤) ────
+//
+// 분류기 · 업로드 어댑터 · 영상 생성 어댑터 스텁의 경로별 단위 테스트. 실제 네트워크
+// 를 타지 않도록 모든 테스트는 `fetcher` mock 을 주입한다. 이 축은 `extractPdf/Pptx`
+// (Node 전용) 와 같은 파일에서 잠겨 있어야, 멀티미디어 파이프라인 회귀를 단일 spec
+// 하나로 관측할 수 있다.
+
+import {
+  detectMediaKind,
+  loadMediaFile,
+  loadPdfFile,
+  loadPptFile,
+  requestVideoGeneration,
+  MediaLoaderError,
+} from '../../src/utils/mediaLoaders.ts';
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+test('detectMediaKind — 확장자 우선, MIME 승격, 미판정은 null', () => {
+  assert.equal(detectMediaKind('report.pdf'), 'pdf');
+  assert.equal(detectMediaKind('deck.pptx'), 'pptx');
+  assert.equal(detectMediaKind('slides.ppt'), 'pptx');
+  assert.equal(detectMediaKind('promo.mp4'), 'video');
+  assert.equal(detectMediaKind('frame.png'), 'image');
+  assert.equal(detectMediaKind('unknown.bin'), null);
+  // MIME 만으로 승격
+  assert.equal(detectMediaKind('bin', 'application/pdf'), 'pdf');
+  assert.equal(detectMediaKind('bin', 'video/mp4'), 'video');
+  assert.equal(detectMediaKind('bin', 'image/png'), 'image');
+  assert.equal(
+    detectMediaKind('bin', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'),
+    'pptx',
+  );
+});
+
+test('loadPdfFile — /api/media/upload 로 POST 해 MediaAsset 을 MediaPreview 로 투영한다', async () => {
+  const file = new File(['%PDF-1.4 stub'], 'report.pdf', { type: 'application/pdf' });
+  let calledUrl = '';
+  let sentProjectId: FormDataEntryValue | null = null;
+  const fetcher = async (url: string, init?: RequestInit) => {
+    calledUrl = url;
+    sentProjectId = (init!.body as FormData).get('projectId');
+    return jsonResponse({
+      id: 'asset-1', projectId: 'proj-1', kind: 'pdf', name: 'report.pdf',
+      mimeType: 'application/pdf', sizeBytes: 13,
+      createdAt: new Date().toISOString(), extractedText: '안녕',
+    });
+  };
+  const preview = await loadPdfFile(file, { projectId: 'proj-1', fetcher });
+  assert.equal(calledUrl, '/api/media/upload');
+  assert.equal(sentProjectId, 'proj-1');
+  assert.equal(preview.kind, 'pdf');
+  assert.equal(preview.extractedText, '안녕');
+});
+
+test('loadPptFile — 어댑터 미등록 501 은 ADAPTER_NOT_REGISTERED 로 분류된다', async () => {
+  const file = new File(['fake'], 'deck.pptx', {
+    type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  });
+  const fetcher = async () => jsonResponse({ error: 'PPT 파서 어댑터가 등록되지 않았습니다.' }, 501);
+  await assert.rejects(
+    () => loadPptFile(file, { projectId: 'proj-1', fetcher }),
+    (err: unknown) => err instanceof MediaLoaderError
+      && err.code === 'ADAPTER_NOT_REGISTERED'
+      && err.status === 501,
+  );
+});
+
+test('loadMediaFile — 영상 파일은 UNSUPPORTED_KIND 로 막고 생성 경로로 안내한다', async () => {
+  const file = new File([new Uint8Array([0, 0, 0, 32])], 'promo.mp4', { type: 'video/mp4' });
+  await assert.rejects(
+    () => loadMediaFile(file, { projectId: 'proj-1', fetcher: async () => jsonResponse({}) }),
+    (err: unknown) => err instanceof MediaLoaderError && err.code === 'UNSUPPORTED_KIND',
+  );
+});
+
+test('loadMediaFile — 이미지는 업로드 없이 로컬 메타 MediaPreview 를 돌려준다', async () => {
+  const file = new File([new Uint8Array([137, 80])], 'frame.png', { type: 'image/png' });
+  let fetchCalled = false;
+  const preview = await loadMediaFile(file, {
+    projectId: 'proj-1',
+    fetcher: async () => { fetchCalled = true; return jsonResponse({}); },
+  });
+  assert.equal(fetchCalled, false, '이미지 경로는 서버를 호출하지 않는다');
+  assert.equal(preview.kind, 'image');
+  assert.equal(preview.name, 'frame.png');
+});
+
+test('loadMediaFile — 판정 불가 파일은 UNSUPPORTED_KIND 로 거절', async () => {
+  const file = new File([new Uint8Array(4)], 'binary.bin', { type: '' });
+  await assert.rejects(
+    () => loadMediaFile(file, { projectId: 'proj-1', fetcher: async () => jsonResponse({}) }),
+    (err: unknown) => err instanceof MediaLoaderError && err.code === 'UNSUPPORTED_KIND',
+  );
+});
+
+test('requestVideoGeneration — 빈 프롬프트는 즉시 GENERATE_FAILED', async () => {
+  await assert.rejects(
+    () => requestVideoGeneration(
+      { prompt: '   ', projectId: 'proj-1' },
+      { fetcher: async () => jsonResponse({}) },
+    ),
+    (err: unknown) => err instanceof MediaLoaderError && err.code === 'GENERATE_FAILED',
+  );
+});
+
+test('requestVideoGeneration — 성공 시 MediaAsset → MediaPreview 로 투영된다', async () => {
+  const now = new Date().toISOString();
+  let sentBody: unknown;
+  const fetcher = async (_url: string, init?: RequestInit) => {
+    sentBody = JSON.parse(String(init!.body));
+    return jsonResponse({
+      id: 'video-1', projectId: 'proj-1', kind: 'video',
+      name: 'promo.mp4', mimeType: 'video/mp4', sizeBytes: 0, createdAt: now,
+      generatedBy: { adapter: 'video-mock', prompt: 'hero shot' },
+    });
+  };
+  const preview = await requestVideoGeneration(
+    { prompt: 'hero shot', projectId: 'proj-1' },
+    { fetcher },
+  );
+  assert.deepEqual(sentBody, { projectId: 'proj-1', kind: 'video', prompt: 'hero shot' });
+  assert.equal(preview.kind, 'video');
+  assert.equal(preview.generatedBy?.adapter, 'video-mock');
+});
+
+test('requestVideoGeneration — 세션 소진 503 은 SESSION_EXHAUSTED 로 분류된다', async () => {
+  const fetcher = async () => jsonResponse(
+    { error: '세션이 소진되어 외부 영상 생성 호출이 차단되었습니다.' },
+    503,
+  );
+  await assert.rejects(
+    () => requestVideoGeneration(
+      { prompt: '시네마틱 한 장면', projectId: 'proj-1' },
+      { fetcher },
+    ),
+    (err: unknown) => err instanceof MediaLoaderError
+      && err.code === 'SESSION_EXHAUSTED'
+      && err.status === 503,
+  );
+});
+
+test('requestVideoGeneration — 어댑터 미등록 503 은 ADAPTER_NOT_REGISTERED 로 분류된다', async () => {
+  const fetcher = async () => jsonResponse(
+    { error: '영상 생성 어댑터가 등록되어 있지 않습니다.' },
+    503,
+  );
+  await assert.rejects(
+    () => requestVideoGeneration(
+      { prompt: 'hero shot', projectId: 'proj-1' },
+      { fetcher },
+    ),
+    (err: unknown) => err instanceof MediaLoaderError
+      && err.code === 'ADAPTER_NOT_REGISTERED'
+      && err.status === 503,
+  );
+});
+
+test('요청 중단 — 사전 abort 된 signal 은 업로드·생성 모두 ABORTED', async () => {
+  const ac = new AbortController();
+  ac.abort();
+  const file = new File(['%PDF-1.4'], 'a.pdf', { type: 'application/pdf' });
+  await assert.rejects(
+    () => loadPdfFile(file, { projectId: 'proj-1', signal: ac.signal, fetcher: async () => jsonResponse({}) }),
+    (err: unknown) => err instanceof MediaLoaderError && err.code === 'ABORTED',
+  );
+  await assert.rejects(
+    () => requestVideoGeneration(
+      { prompt: '샷', projectId: 'proj-1' },
+      { signal: ac.signal, fetcher: async () => jsonResponse({}) },
+    ),
+    (err: unknown) => err instanceof MediaLoaderError && err.code === 'ABORTED',
+  );
+});
