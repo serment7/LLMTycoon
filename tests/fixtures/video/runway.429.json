@@ -1,0 +1,13 @@
+{
+  "_meta": {
+    "provider": "runway",
+    "httpStatus": 429,
+    "contentType": "application/json",
+    "scenarios": ["F-03"]
+  },
+  "error": {
+    "code": "rate_limited",
+    "message": "Too many requests. Retry after 5 seconds.",
+    "retryAfterSeconds": 5
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "_meta": {
+    "provider": "runway",
+    "httpStatus": 200,
+    "contentType": "application/json",
+    "scenarios": ["A-03", "E-02", "E-06"],
+    "notes": "웹훅 수신자가 어댑터 onWebhookEvent 로 포워드할 이벤트 본문",
+    "signatureHeader": "X-Runway-Signature: sha256=DEADBEEF_PLACEHOLDER_VALID"
+  },
+  "type": "job.updated",
+  "job": {
+    "id": "job_abc",
+    "status": "succeeded",
+    "updatedAt": "2026-04-19T10:00:55Z",
+    "finishedAt": "2026-04-19T10:00:55Z",
+    "progress": 1,
+    "assets": {
+      "finalUrl": "https://cdn.example.invalid/final/job_abc.mp4",
+      "sizeBytes": 24576000,
+      "durationMs": 15000
+    }
+  }
+}

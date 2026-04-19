@@ -21,6 +21,7 @@ import {
 import { Agent, Project, GameState, AgentRole, CodeFile, CodeDependency, Task, GitAutomationSettings } from './types';
 import { FileTooltip } from './components/FileTooltip';
 import { ProjectManagement } from './components/ProjectManagement';
+import { MultimediaHub } from './views/multimedia/MultimediaHub';
 import { SharedGoalModal } from './components/SharedGoalModal';
 import { AgentStatusPanel, type GitAutomationDigest, type GitAutomationStageKey, type GitAutomationStageState } from './components/AgentStatusPanel';
 import { AgentContextBubble, AgentLogLine } from './components/AgentContextBubble';
@@ -208,7 +209,7 @@ function App() {
   const [gameState, setGameState] = useState<GameState>({ projects: [], agents: [], files: [], dependencies: [] });
   const [tasks, setTasks] = useState<Task[]>([]);
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [activeTab, setActiveTab] = useState<'game' | 'projects' | 'agents' | 'tasks' | 'project-management'>('game');
+  const [activeTab, setActiveTab] = useState<'game' | 'projects' | 'agents' | 'tasks' | 'project-management' | 'multimedia'>('game');
   const [showHireModal, setShowHireModal] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [manageMembersProjectId, setManageMembersProjectId] = useState<string | null>(null);
@@ -992,6 +993,7 @@ function App() {
       '3': 'tasks',
       '4': 'agents',
       '5': 'project-management',
+      '6': 'multimedia',
     };
     const anyModalOpen = !!(showHireModal || showProjectModal || manageMembersProjectId || confirmFire || confirmDeleteProject || sharedGoalPromptOpen);
 
@@ -1808,6 +1810,14 @@ function App() {
               <span className="text-sm font-bold block">프로젝트 관리</span>
               <span className="text-[10px] opacity-70">GitHub · GitLab</span>
             </button>
+            <button
+              onClick={() => setActiveTab('multimedia')}
+              data-testid="sidebar-nav-multimedia"
+              className={`w-full text-left p-3 border-2 transition-all ${activeTab === 'multimedia' ? 'border-[var(--pixel-accent)] bg-[var(--pixel-bg)]' : 'border-[var(--pixel-border)] bg-[#0f3460] hover:bg-[#1a1a2e]'}`}
+            >
+              <span className="text-sm font-bold block">멀티미디어</span>
+              <span className="text-[10px] opacity-70">PDF · PPT · 검색 · 리서치 · 영상 · QA</span>
+            </button>
           </nav>
 
           <div className="mt-auto pt-4 space-y-3">
@@ -2172,6 +2182,10 @@ function App() {
               currentProjectId={selectedProjectId}
               onLog={(text, from) => addLog(text, from || '시스템')}
             />
+          )}
+
+          {activeTab === 'multimedia' && (
+            <MultimediaHub />
           )}
 
           {activeTab === 'agents' && (

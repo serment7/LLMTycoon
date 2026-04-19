@@ -1,0 +1,18 @@
+{
+  "_meta": {
+    "provider": "runway",
+    "httpStatus": 200,
+    "contentType": "application/json",
+    "scenarios": ["A-02"]
+  },
+  "id": "job_abc",
+  "status": "running",
+  "createdAt": "2026-04-19T10:00:00Z",
+  "updatedAt": "2026-04-19T10:00:20Z",
+  "model": "gen3-alpha",
+  "prompt": "고양이가 공원을 달리다가 꽃을 만난다",
+  "seed": 42,
+  "resolution": "1080p",
+  "durationSeconds": 15,
+  "progress": 0.35
+}

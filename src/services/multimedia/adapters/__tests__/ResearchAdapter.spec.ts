@@ -138,12 +138,13 @@ test('R4. 요청 breadth 가 maxSearchCalls 예산을 초과하면 BUDGET_EXCEED
 });
 
 test('R4b. 토큰 예산 초과 시 details.partial.sections 에 완료분이 담긴다', async () => {
-  // 섹션 요약을 매우 큰 본문으로 만들어 maxTokens 를 두 번째 섹션에서 넘게 한다.
-  const bigText = 'x'.repeat(40_000);
+  // 섹션 요약을 중간 크기 본문 두 건으로 만들어, 첫 섹션은 통과하고 두 번째에서
+  // 예산을 넘게 한다. 각 서브쿼리마다 고유 URL 을 돌려줘 중복 제거를 피한다.
+  const midText = 'y'.repeat(24_000); // 약 6_000 토큰 추정
   const runtime: ResearchRuntime = {
-    budget: { maxTokens: 11_000, maxSearchCalls: 10 },
-    searchRunner: stubRunner(() => [makeResult({ url: 'https://e.com/x', snippet: 's' })]),
-    summarizer: async () => ({ body: bigText, citationNumbers: [] }),
+    budget: { maxTokens: 8_000, maxSearchCalls: 10 },
+    searchRunner: stubRunner((sub) => [makeResult({ url: `https://e.com/${encodeURIComponent(sub.question)}`, snippet: 's' })]),
+    summarizer: async () => ({ body: midText, citationNumbers: [] }),
   };
   await assert.rejects(
     async () => research('예산 본문', { depth: 2, breadth: 4 }, runtime),
@@ -190,7 +191,10 @@ test('R5. 동일 URL 은 1 건으로 중복 제거되고 trust 는 도메인 기
 test('R7. onProgress 는 decompose/gather/synthesize/done 을 모두 발화', async () => {
   const stages: ResearchProgress['stage'][] = [];
   const runtime: ResearchRuntime = {
-    searchRunner: stubRunner(() => [makeResult({ url: 'https://e.com/p' })]),
+    searchRunner: stubRunner((sub) => [
+      makeResult({ url: `https://e.com/${encodeURIComponent(sub.question)}` }),
+      makeResult({ url: `https://edu.com/${encodeURIComponent(sub.question)}` }),
+    ]),
   };
   await research('진행률', { depth: 1, onProgress: (p) => { stages.push(p.stage); } }, runtime);
   assert.ok(stages.includes('decompose'));
@@ -220,7 +224,10 @@ test('R8. createDefaultRegistry().resolveByKind("research") 는 실구현(priori
 test('ResearchAdapter.research() 는 runtime 을 통해 전달된 runner 를 사용', async () => {
   const adapter = new ResearchAdapter(
     { maxBytes: 0, timeoutMs: 1_000 },
-    { runtime: { searchRunner: stubRunner(() => [makeResult({ url: 'https://e.com/ok' })]) } },
+    { runtime: { searchRunner: stubRunner((sub) => [
+      makeResult({ url: `https://e.com/${encodeURIComponent(sub.question)}` }),
+      makeResult({ url: `https://arxiv.org/${encodeURIComponent(sub.question)}` }),
+    ]) } },
   );
   const report = await adapter.research('어댑터 경로', { depth: 1 });
   assert.ok(report.sections.length >= 1);
@@ -230,7 +237,10 @@ test('ResearchAdapter.research() 는 runtime 을 통해 전달된 runner 를 사
 test('ResearchAdapter.invoke() 는 OutputMap 에 맞춰 summary + citations 축약 반환', async () => {
   const adapter = new ResearchAdapter(
     { maxBytes: 0, timeoutMs: 1_000 },
-    { runtime: { searchRunner: stubRunner(() => [makeResult({ url: 'https://e.com/ok' })]) } },
+    { runtime: { searchRunner: stubRunner((sub) => [
+      makeResult({ url: `https://e.com/${encodeURIComponent(sub.question)}` }),
+      makeResult({ url: `https://arxiv.org/${encodeURIComponent(sub.question)}` }),
+    ]) } },
   );
   const outcome = await adapter.invoke({ input: { topic: '어댑터', depth: 1 } });
   assert.equal(typeof outcome.result.summary, 'string');

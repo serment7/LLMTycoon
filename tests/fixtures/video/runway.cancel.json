@@ -1,0 +1,14 @@
+{
+  "_meta": {
+    "provider": "runway",
+    "httpStatus": 200,
+    "contentType": "application/json",
+    "scenarios": ["E-05"],
+    "notes": "POST /v1/jobs/{id}/cancel 응답"
+  },
+  "id": "job_abc",
+  "status": "cancelled",
+  "updatedAt": "2026-04-19T10:00:12Z",
+  "finishedAt": "2026-04-19T10:00:12Z",
+  "progress": 0.12
+}

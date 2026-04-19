@@ -1,0 +1,29 @@
+{
+  "_meta": {
+    "provider": "stability",
+    "httpStatus": 200,
+    "contentType": "application/json",
+    "scenarios": ["F-04"]
+  },
+  "generation_id": "sd_gen_789",
+  "status": "SUCCEEDED",
+  "created": "2026-04-19T10:10:00Z",
+  "finished": "2026-04-19T10:11:00Z",
+  "engine": "stable-video-xl",
+  "prompt": "고양이가 공원을 달리다가 꽃을 만난다",
+  "seed": 42,
+  "width": 1920,
+  "height": 1080,
+  "duration_seconds": 15,
+  "output": {
+    "video": {
+      "url": "https://cdn.example.invalid/stability/sd_gen_789.mp4",
+      "mime_type": "video/mp4",
+      "bytes": 20100000
+    },
+    "cover": {
+      "url": "https://cdn.example.invalid/stability/sd_gen_789.jpg"
+    }
+  },
+  "credits_used": 45
+}

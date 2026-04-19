@@ -1,0 +1,22 @@
+{
+  "_meta": {
+    "provider": "pika",
+    "httpStatus": 200,
+    "contentType": "application/json",
+    "scenarios": ["A-05"],
+    "notes": "공급자가 워터마크를 내리지 않은 응답 — 어댑터가 default 를 덧씌우거나 설정 OFF 면 undefined 로 생략"
+  },
+  "job_id": "pk_job_nowm",
+  "state": "completed",
+  "created_at": "2026-04-19T10:05:00Z",
+  "completed_at": "2026-04-19T10:06:30Z",
+  "prompt": "일출",
+  "seed": 7,
+  "resolution": "720p",
+  "duration_s": 8,
+  "outputs": {
+    "video_url": "https://cdn.example.invalid/pika/pk_job_nowm.mp4",
+    "size_bytes": 12000000,
+    "duration_ms": 8000
+  }
+}

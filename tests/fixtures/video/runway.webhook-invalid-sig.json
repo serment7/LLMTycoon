@@ -1,0 +1,17 @@
+{
+  "_meta": {
+    "provider": "runway",
+    "httpStatus": 401,
+    "contentType": "application/json",
+    "scenarios": ["E-07"],
+    "notes": "잘못된 HMAC 서명으로 전송된 이벤트 — 수신자가 401 로 거절해야 함",
+    "signatureHeader": "X-Runway-Signature: sha256=WRONG_SIG_PLACEHOLDER"
+  },
+  "type": "job.updated",
+  "job": {
+    "id": "job_abc",
+    "status": "succeeded",
+    "updatedAt": "2026-04-19T10:00:55Z",
+    "progress": 1
+  }
+}

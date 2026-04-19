@@ -31,8 +31,7 @@ import {
   type MultimediaAdapterConfig,
   type ResearchInput,
 } from '../types';
-import { WEB_SEARCH_ADAPTER_ID } from '../WebSearchAdapter';
-import type { SearchResult, WebSearchOptions } from './WebSearchAdapter';
+import { WEB_SEARCH_REAL_ADAPTER_ID, type SearchResult, type WebSearchOptions } from './WebSearchAdapter';
 
 export const RESEARCH_REAL_ADAPTER_ID = 'research-v1';
 export const RESEARCH_ALIAS = 'research/deep';
@@ -484,13 +483,16 @@ export async function research(
       language: options.language,
       signal: options.signal,
     });
-    tokensUsed += estimateTokensFromText(body);
-    if (tokensUsed > budget.maxTokens) {
+    // 예산 초과 시 이미 완성된 섹션들(sections) 은 partial 로 돌려주되, 현재 섹션은
+    // 반영하지 않는다 — 본문이 통째로 잘렸음을 한계점으로 기록한다.
+    const tokensAfter = tokensUsed + estimateTokensFromText(body);
+    if (tokensAfter > budget.maxTokens) {
+      limitations.push(`"${sub.question}" 요약이 토큰 예산 초과로 잘렸습니다.`);
       throw researchError(
         'RESEARCH_BUDGET_EXCEEDED',
-        `요약 본문 토큰 합계(${tokensUsed}) 가 예산(${budget.maxTokens}) 을 초과했습니다.`,
+        `요약 본문 토큰 합계(${tokensAfter}) 가 예산(${budget.maxTokens}) 을 초과했습니다.`,
         {
-          tokensUsed,
+          tokensUsed: tokensAfter,
           maxTokens: budget.maxTokens,
           partial: buildPartial(
             normalizedTopic, depth, breadth, modelId, startedAtMs,
@@ -499,6 +501,7 @@ export async function research(
         },
       );
     }
+    tokensUsed = tokensAfter;
     let id = slugifyHeading(sub.question, `section-${i + 1}`);
     let suffix = 1;
     while (usedIds.has(id)) { suffix += 1; id = `${slugifyHeading(sub.question, `section-${i + 1}`)}-${suffix}`; }
@@ -655,7 +658,9 @@ function createDescriptor(): MediaAdapterDescriptor {
       requiresUserConsent: false,
     },
     priority: -10,
-    dependsOn: [WEB_SEARCH_ADAPTER_ID],
+    // 웹 검색 실구현에 의존(지시 #f64dc11e 의 id). 스켈레톤(builtin-web-search) 은
+    // 레지스트리 기본 구성에서 더 이상 직접 등록되지 않는다.
+    dependsOn: [WEB_SEARCH_REAL_ADAPTER_ID],
   };
 }
 

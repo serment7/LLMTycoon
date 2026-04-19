@@ -1,0 +1,24 @@
+{
+  "_meta": {
+    "provider": "runway",
+    "httpStatus": 200,
+    "contentType": "application/json",
+    "scenarios": ["W-04"],
+    "notes": "ffprobe -show_format -of json 의 출력을 흉내냄 — 실제 MP4 바이트 없이 tags 만 검증"
+  },
+  "format": {
+    "filename": "job_abc.mp4",
+    "nb_streams": 2,
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "duration": "15.000000",
+    "size": "24576000",
+    "bit_rate": "13107200",
+    "tags": {
+      "major_brand": "mp42",
+      "minor_version": "0",
+      "compatible_brands": "mp42mp41isomavc1",
+      "encoder": "LLMTycoon-videoAdapter-1.0",
+      "comment": "LLMTycoon-runway-42"
+    }
+  }
+}

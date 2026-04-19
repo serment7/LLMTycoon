@@ -29,6 +29,7 @@ import { createRealPdfAdapter } from './adapters/PdfAdapter';
 import { createPptAdapter } from './PptAdapter';
 import { createRealPptAdapter } from './adapters/PptAdapter';
 import { createVideoAdapter } from './VideoAdapter';
+import { createVideoRealAdapter, VIDEO_ALIAS } from './adapters/VideoAdapter';
 import { createWebSearchAdapter } from './WebSearchAdapter';
 import { createWebSearchRealAdapter, WEB_SEARCH_ALIAS } from './adapters/WebSearchAdapter';
 import { createResearchAdapter } from './ResearchAdapter';
@@ -158,7 +159,14 @@ export function createDefaultRegistry(
   void createPptAdapter;
   reg.register(createRealPdfAdapter, createRealPdfAdapter(reg.getConfig()).descriptor);
   reg.register(createRealPptAdapter, createRealPptAdapter(reg.getConfig()).descriptor);
-  reg.register(createVideoAdapter, createVideoAdapter(reg.getConfig()).descriptor);
+  // 지시 #804155ce — 영상 생성 실구현 등록(별칭 'video/generate'). 스켈레톤(priority=0)
+  // 보다 우선(priority=-10) 이라 resolveByKind('video') 는 실구현을 채택한다.
+  void createVideoAdapter; // 구 스켈레톤 재수출 경로 유지(테스트가 직접 참조)
+  const videoInstance = createVideoRealAdapter(reg.getConfig());
+  reg.register(createVideoRealAdapter, {
+    ...videoInstance.descriptor,
+    displayName: `${videoInstance.descriptor.displayName} (${VIDEO_ALIAS})`,
+  });
   // 지시 #f64dc11e — 웹 검색 실구현 등록(별칭 'search/web'). 스켈레톤(priority=0) 보다
   // 우선(priority=-10) 이라 resolveByKind('web-search') 는 실구현을 채택한다.
   void createWebSearchAdapter; // 구 스켈레톤 재수출 경로 유지(테스트가 직접 참조)

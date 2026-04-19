@@ -1,0 +1,30 @@
+{
+  "_meta": {
+    "provider": "pika",
+    "httpStatus": 200,
+    "contentType": "application/json",
+    "scenarios": ["F-02", "F-03"]
+  },
+  "job_id": "pk_job_xyz",
+  "state": "completed",
+  "created_at": "2026-04-19T10:05:00Z",
+  "completed_at": "2026-04-19T10:06:30Z",
+  "model_version": "1.0",
+  "prompt": "고양이가 공원을 달리다가 꽃을 만난다",
+  "seed": 42,
+  "resolution": "1080p",
+  "duration_s": 15,
+  "outputs": {
+    "video_url": "https://cdn.example.invalid/pika/pk_job_xyz.mp4",
+    "thumbnail_url": "https://cdn.example.invalid/pika/pk_job_xyz.jpg",
+    "size_bytes": 22340000,
+    "duration_ms": 15000
+  },
+  "watermark": {
+    "label": "LLMTycoon · 2026-04-19",
+    "anchor": "bottom-right"
+  },
+  "usage": {
+    "credits": 60
+  }
+}
