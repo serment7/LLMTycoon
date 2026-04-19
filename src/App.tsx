@@ -30,6 +30,7 @@ import { DirectivePrompt, AttachmentPreviewModal, classifyAttachment, type Direc
 import { MediaPipelinePanel } from './components/MediaPipelinePanel';
 import type { MediaChatAttachment } from './utils/mediaLoaders';
 import { createDraftStore, type DraftStore } from './utils/draftStore';
+import { deleteAllProjectFiles } from './store/projectFiles';
 import { createShortcutRegistry, DEFAULT_MEDIA_SHORTCUTS, type MediaShortcutId, type ShortcutRegistry } from './utils/keyboardShortcuts';
 import { createPendingRequestQueue, type PendingRequestQueue } from './utils/pendingRequestQueue';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
@@ -1110,6 +1111,15 @@ function App() {
   const deleteProject = async (projectId: string, name: string) => {
     try {
       await safeFetch(`/api/projects/${projectId}`, { method: 'DELETE' });
+      // 서버 삭제가 성공해야만 로컬 파일 저장소 cascade 를 돌린다 — 네트워크 실패 시
+      // 서버/클라 불일치를 만들지 않도록 순서를 고정한다. 실패해도 서버는 이미 지웠으니
+      // 토스트만 남기고 재시도 훅은 다음 기동 시점에서 listProjectFiles 가 빈 집합으로
+      // 수렴해 자연 정리된다.
+      try {
+        await deleteAllProjectFiles(projectId);
+      } catch (cascadeErr) {
+        addLog(`프로젝트 파일 정리 실패 (${name}): ${(cascadeErr as Error).message}`);
+      }
       addLog(`프로젝트 삭제: ${name}`);
       if (selectedProjectId === projectId) {
         const remaining = gameState.projects.filter(p => p.id !== projectId);

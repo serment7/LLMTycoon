@@ -22,6 +22,8 @@ export interface MediaAssetStore {
   listByProject(projectId: string): readonly MediaAsset[];
   /** id 로 단건 조회. 없으면 null. */
   get(id: string): MediaAsset | null;
+  /** id 로 단건 삭제. 존재하지 않으면 false. */
+  delete(id: string): boolean;
   /** 테스트/재기동 초기화. */
   clear(): void;
 }
@@ -46,6 +48,18 @@ export function createMediaAssetStore(): MediaAssetStore {
     },
     get(id) {
       return byId.get(id) ?? null;
+    },
+    delete(id) {
+      const existing = byId.get(id);
+      if (!existing) return false;
+      byId.delete(id);
+      const arr = byProject.get(existing.projectId);
+      if (arr) {
+        const idx = arr.findIndex(a => a.id === id);
+        if (idx >= 0) arr.splice(idx, 1);
+        if (arr.length === 0) byProject.delete(existing.projectId);
+      }
+      return true;
     },
     clear() {
       byId.clear();

@@ -471,6 +471,9 @@ async function startServer() {
         extractedText: parseResult.extractedText,
         thumbnails: parseResult.thumbnails,
       };
+      // 업로드 경로도 프로젝트 단위 자료 축(mediaAssetStore)에 적재해 FileHistoryPanel 이
+      // 최신순 리스트를 그릴 수 있게 한다. generate 경로와 같은 저장소를 공유한다.
+      mediaAssetStore.save(asset);
       res.json(asset);
     } catch (e) {
       if (e instanceof NotImplementedMediaError) {
@@ -481,6 +484,33 @@ async function startServer() {
       console.error('[media/upload] failed:', (e as Error)?.stack || (e as Error)?.message || e);
       res.status(500).json({ error: '미디어 업로드에 실패했습니다.' });
     }
+  });
+
+  // FileHistoryPanel(#472c5b8d) — 프로젝트별 업로드/생성 파일 내역을 최신순으로 돌려 준다.
+  // 클라이언트는 `src/utils/listProjectFiles.ts` 래퍼로 호출한다. 서버는 mediaAssetStore
+  // 에서 프로젝트 단위 목록을 그대로 투영한다(버퍼·스토리지 URL 은 별도 경로).
+  app.get('/api/projects/:id/files', async (req, res) => {
+    const projectId = typeof req.params?.id === 'string' ? req.params.id.trim() : '';
+    if (!projectId) { res.status(400).json({ error: 'projectId required' }); return; }
+    const project = await projectsCol.findOne({ id: projectId });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+    const items = mediaAssetStore.listByProject(projectId);
+    res.json({ items });
+  });
+
+  // 개별 파일 삭제 — FileHistoryPanel 의 삭제 버튼이 호출. 서버 영속은 인메모리 저장소
+  // 뿐이라 삭제는 즉시 반영되며, Mongo 이관 시 본 경로에서 DB 삭제를 덧붙이면 된다.
+  app.delete('/api/projects/:id/files/:fileId', async (req, res) => {
+    const projectId = typeof req.params?.id === 'string' ? req.params.id.trim() : '';
+    const fileId = typeof req.params?.fileId === 'string' ? req.params.fileId.trim() : '';
+    if (!projectId || !fileId) { res.status(400).json({ error: 'projectId and fileId required' }); return; }
+    const existing = mediaAssetStore.get(fileId);
+    if (!existing || existing.projectId !== projectId) {
+      res.status(404).json({ error: 'file not found' });
+      return;
+    }
+    const removed = mediaAssetStore.delete(fileId);
+    res.json({ ok: removed });
   });
 
   // 지시 #b425328e §1~§2 — 생성 축 실제 라우팅.
