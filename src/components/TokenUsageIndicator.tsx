@@ -88,6 +88,15 @@ function formatTokensShort(n: number): string {
   return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 2 : 1)}M`;
 }
 
+/** API 가 0~1 또는 0~100 퍼센트 둘 다 줄 수 있음 */
+function oauthUtilizationToRatio(u: number): number {
+  if (!Number.isFinite(u) || u < 0) return 0;
+  if (u <= 1) return u;
+  return Math.min(1, u / 100);
+}
+
+type OAuthUsageApi = { ok: true; data: Record<string, unknown> } | { ok: false; reason?: string };
+
 export interface TokenUsageIndicatorProps {
   /** 세션 한도(토큰). 생략 시 DEFAULT_SUBSCRIPTION_TOKEN_LIMIT. */
   tokenLimit?: number;
@@ -163,6 +172,20 @@ export function TokenUsageIndicator({
   }, [snapshot.isReset, snapshot.state.windowStartMs]);
 
   const [hovered, setHovered] = useState(false);
+  /** GET /api/claude/oauth-usage — claude.ai OAuth + /api/oauth/usage (대화형 `/usage` 와 동일 계열) */
+  const [oauthUsage, setOauthUsage] = useState<OAuthUsageApi | null>(null);
+
+  useEffect(() => {
+    const load = () => {
+      fetch('/api/claude/oauth-usage')
+        .then((r) => (r.ok ? r.json() as Promise<OAuthUsageApi> : Promise.resolve({ ok: false as const, reason: `http_${r.status}` })))
+        .then(setOauthUsage)
+        .catch(() => setOauthUsage({ ok: false, reason: 'fetch_failed' }));
+    };
+    load();
+    const id = setInterval(load, 120_000);
+    return () => clearInterval(id);
+  }, []);
 
   if (hasError) {
     // 폴백 배지 — 클릭/호버 상호작용 없이 "토큰 정보 없음" 한 줄만 표시해 UI 가 깨지지 않게.
@@ -172,6 +195,7 @@ export function TokenUsageIndicator({
         aria-live="polite"
         aria-label="토큰 정보 없음 — 잠시 후 다시 시도하세요"
         data-testid="token-usage-indicator"
+        data-tour-anchor="token-usage-indicator"
         data-fallback="true"
         className="px-3 py-1 border-2 border-l-[6px] flex items-center gap-2"
         style={{
@@ -187,26 +211,48 @@ export function TokenUsageIndicator({
     );
   }
 
-  const palette = severityPalette(snapshot.severity);
-  const ratioPct = Math.min(100, Math.max(0, Math.round(snapshot.ratioUsed * 100)));
-  const resetClock = formatResetClock(snapshot.resetAtMs);
-  const untilReset = formatTimeUntilReset(snapshot.resetAtMs, now);
+  const oauthFive = oauthUsage?.ok === true
+    ? oauthUsage.data.five_hour as { utilization?: number; resets_at?: string } | undefined
+    : undefined;
+  const oauthSeven = oauthUsage?.ok === true
+    ? oauthUsage.data.seven_day as { utilization?: number; resets_at?: string } | undefined
+    : undefined;
+  const useOauthQuota = typeof oauthFive?.utilization === 'number';
 
-  // 스크린리더 축은 시각 바(사용률) 와 같은 방향으로 읽히도록 "사용 N%, 남은
-  // 토큰 X" 순서로 맞춘다. 이전 구현은 "(남은 N 퍼센트)" 였는데 바는 사용 비율을
-  // 칠해 음성/시각이 반대를 가리켰다. 리셋 레이블은 `formatTimeUntilReset` 의
-  // `Xh Ym / Ym / <1m` 포맷을 그대로 읽히게 둔다.
-  const ariaLabel = `구독 세션 사용 ${ratioPct}%, 남은 토큰 ${formatTokensShort(snapshot.remaining)}, 약 ${untilReset} 뒤 리셋`;
+  const palette = severityPalette(
+    useOauthQuota
+      ? (() => {
+          const r = oauthUtilizationToRatio(oauthFive!.utilization!);
+          if (r >= 0.8) return 'critical';
+          if (r >= 0.5) return 'caution';
+          return 'ok';
+        })()
+      : snapshot.severity,
+  );
+  const ratioPct = useOauthQuota
+    ? Math.min(100, Math.max(0, Math.round(oauthUtilizationToRatio(oauthFive!.utilization!) * 100)))
+    : Math.min(100, Math.max(0, Math.round(snapshot.ratioUsed * 100)));
+  const resetAtMs = useOauthQuota && oauthFive?.resets_at
+    ? Date.parse(oauthFive.resets_at)
+    : snapshot.resetAtMs;
+  const resetClock = formatResetClock(Number.isFinite(resetAtMs) ? resetAtMs : snapshot.resetAtMs);
+  const untilReset = formatTimeUntilReset(Number.isFinite(resetAtMs) ? resetAtMs : snapshot.resetAtMs, now);
+
+  const ariaLabel = useOauthQuota
+    ? `Claude usage OAuth, 5시간 창 사용 ${ratioPct}퍼센트, 다음 리셋 약 ${untilReset} 뒤 시각 ${resetClock}`
+    : `Claude usage, 구독 세션 사용 ${ratioPct}%, 남은 토큰 ${formatTokensShort(snapshot.remaining)}, 다음 리셋 약 ${untilReset} 뒤 시각 ${resetClock}`;
 
   return (
     <div
-      className="relative token-usage-indicator"
+      className="relative token-usage-indicator shrink-0"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => setHovered(true)}
       onBlur={() => setHovered(false)}
       data-testid="token-usage-indicator"
-      data-severity={snapshot.severity}
+      data-tour-anchor="token-usage-indicator"
+      data-severity={useOauthQuota ? (oauthUtilizationToRatio(oauthFive!.utilization!) >= 0.8 ? 'critical' : oauthUtilizationToRatio(oauthFive!.utilization!) >= 0.5 ? 'caution' : 'ok') : snapshot.severity}
+      data-oauth={useOauthQuota ? 'true' : 'false'}
       data-reset={snapshot.isReset ? 'true' : 'false'}
       data-just-reset={justReset ? 'true' : 'false'}
     >
@@ -215,7 +261,9 @@ export function TokenUsageIndicator({
         aria-live="polite"
         aria-label={ariaLabel}
         tabIndex={0}
-        title={`구독 세션 남은 토큰 — ${untilReset} 뒤(${resetClock}) 리셋`}
+        title={useOauthQuota
+          ? `claude.ai OAuth — 5시간 창 ${ratioPct}% · ${untilReset} 뒤(${resetClock})`
+          : `구독 세션 남은 토큰 — ${untilReset} 뒤(${resetClock}) 리셋`}
         className="token-usage-indicator__badge px-3 py-1 border-2 border-l-[6px] flex items-center gap-2 cursor-help"
         style={{
           background: palette.bg,
@@ -225,10 +273,23 @@ export function TokenUsageIndicator({
         }}
       >
         <span style={{ color: palette.iconColor }} aria-hidden="true">
-          <SeverityIcon severity={snapshot.severity} />
+          <SeverityIcon severity={useOauthQuota
+            ? (oauthUtilizationToRatio(oauthFive!.utilization!) >= 0.8 ? 'critical' : oauthUtilizationToRatio(oauthFive!.utilization!) >= 0.5 ? 'caution' : 'ok')
+            : snapshot.severity}
+          />
         </span>
-        <span data-testid="token-usage-indicator-summary">
-          세션 토큰: {formatTokensShort(snapshot.remaining)} 남음
+        <span
+          className="flex flex-col min-[900px]:flex-row min-[900px]:items-baseline gap-0 min-[900px]:gap-1"
+          data-testid="token-usage-indicator-summary"
+        >
+          <span className="text-[10px] uppercase tracking-tight opacity-80 whitespace-nowrap" aria-hidden>
+            /usage
+          </span>
+          <span className="text-[11px] sm:text-xs whitespace-nowrap">
+            {useOauthQuota
+              ? `5h ${ratioPct}% · ${resetClock} (${untilReset} 후)`
+              : `${formatTokensShort(snapshot.remaining)} 남음 · ${resetClock} (${untilReset} 후)`}
+          </span>
         </span>
         {/* 한눈 그래프 — 높이 3px 얇은 막대. 상단바 세로 공간에 과부하를 주지 않는다. */}
         <span
@@ -268,26 +329,49 @@ export function TokenUsageIndicator({
         >
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--token-usage-axis-input-fg)' }}>
-              구독 세션(5시간)
+              {useOauthQuota ? 'OAuth /usage 동등' : '구독 세션(5시간)'}
             </span>
             <span className="text-[10px]" style={{ color: 'var(--token-usage-tooltip-subtle-fg)' }}>
               {ratioPct}% 사용
             </span>
           </div>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-            <dt style={{ color: 'var(--token-usage-tooltip-subtle-fg)' }}>남은 토큰</dt>
-            <dd className="text-right" style={{ color: palette.fg }} data-testid="token-usage-indicator-remaining">
-              {formatTokensShort(snapshot.remaining)} / {formatTokensShort(snapshot.limit)}
-            </dd>
-            <dt style={{ color: 'var(--token-usage-tooltip-subtle-fg)' }}>사용 토큰</dt>
-            <dd className="text-right">{formatTokensShort(snapshot.used)}</dd>
-            <dt style={{ color: 'var(--token-usage-tooltip-subtle-fg)' }}>리셋 예정</dt>
-            <dd className="text-right" data-testid="token-usage-indicator-reset">
-              {resetClock} (약 {untilReset} 뒤)
-            </dd>
-          </dl>
+          {useOauthQuota ? (
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+              <dt style={{ color: 'var(--token-usage-tooltip-subtle-fg)' }}>5시간 창</dt>
+              <dd className="text-right" style={{ color: palette.fg }} data-testid="token-usage-indicator-remaining">
+                {ratioPct}%
+              </dd>
+              {typeof oauthSeven?.utilization === 'number' ? (
+                <>
+                  <dt style={{ color: 'var(--token-usage-tooltip-subtle-fg)' }}>7일 창</dt>
+                  <dd className="text-right">
+                    {Math.min(100, Math.round(oauthUtilizationToRatio(oauthSeven.utilization) * 100))}%
+                  </dd>
+                </>
+              ) : null}
+              <dt style={{ color: 'var(--token-usage-tooltip-subtle-fg)' }}>리셋 예정</dt>
+              <dd className="text-right" data-testid="token-usage-indicator-reset">
+                {resetClock} (약 {untilReset} 뒤)
+              </dd>
+            </dl>
+          ) : (
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+              <dt style={{ color: 'var(--token-usage-tooltip-subtle-fg)' }}>남은 토큰</dt>
+              <dd className="text-right" style={{ color: palette.fg }} data-testid="token-usage-indicator-remaining">
+                {formatTokensShort(snapshot.remaining)} / {formatTokensShort(snapshot.limit)}
+              </dd>
+              <dt style={{ color: 'var(--token-usage-tooltip-subtle-fg)' }}>사용 토큰</dt>
+              <dd className="text-right">{formatTokensShort(snapshot.used)}</dd>
+              <dt style={{ color: 'var(--token-usage-tooltip-subtle-fg)' }}>리셋 예정</dt>
+              <dd className="text-right" data-testid="token-usage-indicator-reset">
+                {resetClock} (약 {untilReset} 뒤)
+              </dd>
+            </dl>
+          )}
           <div className="mt-2 pt-2 text-[10px]" style={{ borderTop: `1px solid var(--token-usage-tooltip-divider)`, color: 'var(--token-usage-tooltip-subtle-fg)' }}>
-            * 구독 세션 한도는 대략치이며 실제 앤트로픽 정산 기준과 다를 수 있습니다. 기본 한도: {formatTokensShort(snapshot.limit)} / 5시간.
+            {useOauthQuota
+              ? '* claude.ai OAuth `api/oauth/usage` — 공식 문서화 전 엔드포인트로 변경될 수 있습니다. `claude login` 후 ~/.claude/.credentials.json 이 있어야 합니다.'
+              : `* 구독 세션 한도는 대략치이며 실제 앤트로픽 정산 기준과 다를 수 있습니다. 기본 한도: ${formatTokensShort(snapshot.limit)} / 5시간. OAuth 실패 시 서버 집계 모델로 표시됩니다.`}
           </div>
         </div>
       )}

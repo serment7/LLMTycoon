@@ -29,6 +29,23 @@ const SERVER_SRC = readFileSync(resolve(__dirname, '..', 'server.ts'), 'utf8');
 // GET /api/claude/session-status — 서버 계약 정적 잠금
 // ────────────────────────────────────────────────────────────────────────────
 
+test('서버는 `/api/claude/slash-usage-preview` 로 Claude CLI `/usage` 프롬프트 프리뷰를 노출한다', () => {
+  assert.match(
+    SERVER_SRC,
+    /app\.get\(\s*['"]\/api\/claude\/slash-usage-preview['"]/,
+    'TokenUsageIndicator 가 마운트 시 headless /usage 시도 결과를 받을 수 있어야 한다',
+  );
+});
+
+test('서버는 로컬 Claude Code JSONL 집계용 `/api/claude/jsonl-aggregate`·`POST …/sync-jsonl-usage` 를 노출한다', () => {
+  assert.match(SERVER_SRC, /app\.get\(\s*['"]\/api\/claude\/jsonl-aggregate['"]/);
+  assert.match(SERVER_SRC, /app\.post\(\s*['"]\/api\/claude\/sync-jsonl-usage['"]/);
+});
+
+test('서버는 OAuth `/usage` 동등 조회용 `GET /api/claude/oauth-usage` 를 노출한다', () => {
+  assert.match(SERVER_SRC, /app\.get\(\s*['"]\/api\/claude\/oauth-usage['"]/);
+});
+
 test('서버는 `/api/claude/session-status` 엔드포인트를 등록하고 { status, reason, at } 을 돌려준다', () => {
   assert.match(
     SERVER_SRC,

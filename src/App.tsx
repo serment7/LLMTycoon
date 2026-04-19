@@ -51,6 +51,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider, useToast } from './components/ToastProvider';
 import { UploadDropzone } from './components/UploadDropzone';
 import { OnboardingTour } from './components/OnboardingTour';
+import { TokenUsageIndicator } from './components/TokenUsageIndicator';
 import { ConversationSearch } from './components/ConversationSearch';
 import { SettingsDrawer } from './components/SettingsDrawer';
 import type { SearchableMessage } from './utils/conversationSearch';
@@ -1651,7 +1652,7 @@ function App() {
           ClaudeTokenUsage 가 자체 role="button"+aria-expanded 로 가지고 있다.
         */}
         <div
-          className="flex gap-5 text-sm"
+          className="flex flex-wrap items-center gap-3 sm:gap-5 text-sm"
           role="group"
           aria-label="상단 요약 지표"
           data-testid="app-header-metrics"
@@ -1734,6 +1735,7 @@ function App() {
               오프라인
             </div>
           )}
+          <TokenUsageIndicator />
           {/* 설정 드로어 톱니 버튼(#0dceedcd) */}
           <button
             type="button"

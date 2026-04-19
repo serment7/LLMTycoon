@@ -62,6 +62,14 @@ import {
   redactRemoteUrl,
 } from './src/utils/projectGitCredentials';
 import { spawnSync } from 'child_process';
+import {
+  aggregateUsageFromJsonlRoots,
+  DEFAULT_JSONL_BASELINE_PATH,
+  resolveClaudeCodeJsonlRoots,
+  syncJsonlUsageDeltas,
+} from './src/server/claudeJsonlUsage';
+import type { OAuthUsageFetchResult } from './src/server/claudeOAuthUsage';
+import { loadOAuthUsageFromDisk } from './src/server/claudeOAuthUsage';
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const DEBUG_CLAUDE = process.env.DEBUG_CLAUDE === '1';
@@ -165,6 +173,29 @@ function recordClaudeUsage(usage: ClaudeTokenUsage) {
   const stamped: ClaudeTokenUsage = { ...usage, at: usage.at ?? new Date().toISOString() };
   claudeUsageTotals = mergeClaudeUsageTotals(claudeUsageTotals, stamped);
   if (claudeUsageBroadcaster) claudeUsageBroadcaster(claudeUsageTotals, stamped);
+}
+
+const CLAUDE_JSONL_BASELINE_PATH = process.env.CLAUDE_JSONL_BASELINE_PATH || DEFAULT_JSONL_BASELINE_PATH;
+
+function runLocalJsonlUsageSync() {
+  return syncJsonlUsageDeltas({
+    baselinePath: CLAUDE_JSONL_BASELINE_PATH,
+    record: recordClaudeUsage,
+  });
+}
+
+/** OAuth /usage 동등 API 응답 캐시 — 짧은 TTL 로 앤트로픽 호출 빈도 제한 */
+let oauthUsageCache: { t: number; payload: OAuthUsageFetchResult } | null = null;
+const OAUTH_USAGE_CACHE_MS = 60_000;
+
+async function getOAuthUsageCached(): Promise<OAuthUsageFetchResult> {
+  const now = Date.now();
+  if (oauthUsageCache && now - oauthUsageCache.t < OAUTH_USAGE_CACHE_MS) {
+    return oauthUsageCache.payload;
+  }
+  const payload = await loadOAuthUsageFromDisk();
+  oauthUsageCache = { t: now, payload };
+  return payload;
 }
 
 // 카테고리별 에러 누적(server in-memory totals.errors). 브로드캐스터가 있으면
@@ -2069,6 +2100,88 @@ async function startServer() {
     res.json(claudeUsageTotals);
   });
 
+  // Claude Code IDE 의 `/usage` 슬래시 명령과 동일한 프롬프트를 headless 로 시도한다.
+  // 대화형 TTY 가 아니면 Anthropic 쪽에서 거절되는 경우가 많으며, 그때는 클라이언트가
+  // 구독 세션 모델(TokenUsageIndicator)만 신뢰하면 된다.
+  app.get('/api/claude/slash-usage-preview', (_req, res) => {
+    try {
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        PYTHONIOENCODING: 'utf-8',
+        LANG: 'en_US.UTF-8',
+      };
+      delete env.ANTHROPIC_API_KEY;
+      delete env.CLAUDE_API_KEY;
+      delete env.ANTHROPIC_AUTH_TOKEN;
+      const r = spawnSync(CLAUDE_BIN, ['-p', '/usage', '--dangerously-skip-permissions', '--output-format', 'text'], {
+        shell: true,
+        windowsHide: true,
+        encoding: 'utf8',
+        timeout: 30_000,
+        env,
+      });
+      if (r.error) {
+        res.json({
+          ok: false,
+          unavailable: true,
+          exitCode: null,
+          output: null,
+          error: r.error.message,
+        });
+        return;
+      }
+      const stdout = (r.stdout ?? '').trim();
+      const stderr = (r.stderr ?? '').trim();
+      const combined = [stdout, stderr].filter(Boolean).join('\n').slice(0, 8000);
+      const unavailable = /isn'?t available|not available in this environment/i.test(combined);
+      res.json({
+        ok: typeof r.status === 'number' && r.status === 0 && !unavailable && combined.length > 0,
+        exitCode: r.status,
+        output: combined.length > 0 ? combined : null,
+        unavailable: unavailable || combined.length === 0,
+      });
+    } catch (e) {
+      res.status(500).json({
+        ok: false,
+        unavailable: true,
+        error: (e as Error).message,
+        output: null,
+      });
+    }
+  });
+
+  // Claude Code 로컬 세션 로그(*.jsonl) 합산 — `/usage` CLI 없이도 동일 머신의 사용량을
+  // 집계한다. 증분은 data/claude-jsonl-usage-baseline.json 기준으로만 record 된다.
+  app.get('/api/claude/jsonl-aggregate', (_req, res) => {
+    try {
+      const roots = resolveClaudeCodeJsonlRoots();
+      const aggregate = aggregateUsageFromJsonlRoots(roots);
+      res.json({ roots, aggregate });
+    } catch (e) {
+      res.status(500).json({ error: (e as Error).message });
+    }
+  });
+
+  app.post('/api/claude/sync-jsonl-usage', (_req, res) => {
+    try {
+      const out = runLocalJsonlUsageSync();
+      res.json(out);
+    } catch (e) {
+      res.status(500).json({ ok: false, error: (e as Error).message });
+    }
+  });
+
+  // claude.ai OAuth 토큰(~/.claude/.credentials.json)으로 `/usage` 와 동일 계열의
+  // 구독 할당량 JSON 을 가져온다(비공개 엔드포인트 — 커뮤니티 표준 우회).
+  app.get('/api/claude/oauth-usage', async (_req, res) => {
+    try {
+      const out = await getOAuthUsageCached();
+      res.json(out);
+    } catch (e) {
+      res.status(500).json({ ok: false, reason: (e as Error).message });
+    }
+  });
+
   // 누적을 수동으로 0 으로 되돌린다. 관측 편의용 — UI 에서 "이번 세션부터 다시
   // 측정" 시나리오를 만들기 위해 별도 엔드포인트로 분리했다. 전 클라이언트에
   // 리셋 이벤트를 푸시해 동시 접속 탭들도 함께 0 으로 맞춘다.
@@ -2130,6 +2243,30 @@ async function startServer() {
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    // 로컬 JSONL 합산은 기본 끔. 필요 시 CLAUDE_JSONL_AUTO_SYNC=1 로 주기 동기화.
+    if (process.env.CLAUDE_JSONL_AUTO_SYNC === '1') {
+      const intervalMs = Math.max(
+        30_000,
+        parseInt(process.env.CLAUDE_JSONL_SYNC_INTERVAL_MS || '120000', 10) || 120_000,
+      );
+      setTimeout(() => {
+        try {
+          const r = runLocalJsonlUsageSync();
+          if (DEBUG_CLAUDE && (r.deltaRecorded || r.aggregate.usageLineCount > 0)) {
+            console.log('[claude-jsonl] initial sync', r.deltaRecorded ? '+delta' : 'noop', r.aggregate);
+          }
+        } catch (e) {
+          console.warn('[claude-jsonl] initial sync failed:', (e as Error).message);
+        }
+      }, 4000);
+      setInterval(() => {
+        try {
+          runLocalJsonlUsageSync();
+        } catch {
+          /* 주기 동기화 실패는 치명적이지 않음 */
+        }
+      }, intervalMs);
+    }
   });
 }
 
