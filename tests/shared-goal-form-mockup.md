@@ -136,3 +136,45 @@ empty ─(입력 시작)──▶ editing ─(저장 클릭)──▶ saved ─(
 2. 서버: `sharedGoals` 테이블 스키마(프로젝트당 1행, 이력은 `sharedGoalHistory` 로 분리).
 3. 리더 프롬프트 조정(`src/server/prompts.ts`): 공동 목표 블록을 시스템 프롬프트 상단에 고정 주입.
 4. 추후 "목표 진행률 게이지" (e.g. `3/7 subtasks done`) 배너를 `running` 상태 하단에 추가 검토.
+
+---
+
+## 12. 시안 ↔ 실 구현 매핑 (2026-04-19, Joker)
+
+본 문서는 디자인 시안으로서 시점이 고정돼 있다. 이 섹션은 시안이 실 코드로
+얼마나 이식됐는지를 추적해, 후속 개발자가 "어디가 이미 구현됐고 어디가 아직
+시안 상태인지" 를 한 번에 파악할 수 있게 한다.
+
+| 시안 항목 | 상태 | 실 구현 경로 |
+| --- | --- | --- |
+| §2 레이아웃 · 필드(title/description/priority/dueDate) | ✅ 구현 | `src/components/SharedGoalForm.tsx` |
+| §3 4상태 머신(empty/editing/saved/running) | 🟡 부분 — empty·editing·saved 3상태만 | 같은 파일. `running` 은 자동 개발 토글 연동 후속 |
+| §4 자동 개발 토글 시각 잠금 | ✅ 구현 | `src/App.tsx` 토글 pre-check + `SharedGoalModal` 모달 on-ramp |
+| §5 `--shared-goal-*` 디자인 토큰 | ✅ 도입 | `src/index.css:54~91` |
+| §6 상태 배지 매트릭스 | 🟡 부분 — `empty/editing/saved` 배지 | `SharedGoalForm.tsx::StatusBadge`. `running` 배지는 후속 |
+| §7 접근성(role/aria-*) | ✅ 구현 | `SharedGoalForm.tsx` — `role="group"` · `aria-labelledby` · `aria-required` · 라디오그룹 |
+| §8 리더 미리보기 박스 | 🔲 미구현 | 이관 — 후속 PR |
+| §9 카피 스펙 | 🟡 부분 | 본 문서의 카피를 직접 문자열로 이식. 일부 문구(삭제 확인 등) 는 모달 부재로 이관 |
+| §10 구현 시 주의 (POST 엔드포인트·리더 프롬프트 연결) | ✅ 구현 | `server.ts:985~1018` · `src/server/prompts.ts::renderSharedGoalBlock` |
+| §11-1 SharedGoalForm.tsx 구현 | ✅ | 위와 동일 |
+| §11-2 sharedGoals 테이블 스키마 | ✅ | `server.ts:241~246` — `shared_goals` 컬렉션 + `projectId` · `status` 인덱스 |
+| §11-3 리더 프롬프트 블록 주입 | ✅ | `src/server/prompts.ts::buildLeaderPlanPrompt` + `renderSharedGoalBlock` |
+| §11-4 목표 진행률 게이지 | 🔲 미구현 | 후속 마일스톤 검토 |
+
+### 12.1 관련 회귀 테스트
+
+시안 계약을 잠그는 회귀 테스트 현황(2026-04-19):
+
+```bash
+npx tsx --test tests/sharedGoalFormDisplay.regression.test.ts           # 17 / 17
+npx tsx --test tests/projectManagementSharedGoalMount.regression.test.ts # 3 / 3
+npx tsx --test tests/sharedGoalModalAtomic.regression.test.ts            # 5 / 5
+npx tsx --test tests/projectManagementNoProjectPlaceholder.regression.test.ts  # 4 / 4
+npx tsx --test tests/sharedGoal.regression.test.ts                       # 12 / 12 · 0 skip
+```
+
+### 12.2 시안 변경 정책
+
+본 §12 는 "현재 어디까지 왔는가" 를 기록하는 **살아있는 테이블** 이다. 시안 본문
+(§0~§11) 은 스냅샷이므로 변경 금지. 새로운 상태(예: `running` 배지 도입) 가 합류
+하면 본 §12 표의 ✅/🟡/🔲 아이콘만 갱신한다.

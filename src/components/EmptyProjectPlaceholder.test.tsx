@@ -88,3 +88,35 @@ test('커스텀 gatedScopes 와 activeScope 조합이 동작한다', () => {
   const active = container.querySelector('.empty-project-placeholder__scope-badge[data-active="true"]');
   assert.equal(active?.textContent, '모니터링');
 });
+
+// ─── 지시 #893b9a4f 보강 ──────────────────────────────────────────────────────
+
+test('currentProjectId 에 실제 ID 가 있으면 플레이스홀더가 숨겨진다', () => {
+  const { container } = renderPlaceholder({ currentProjectId: 'proj-abc' });
+  assert.equal(
+    container.querySelector('.empty-project-placeholder'),
+    null,
+    '프로젝트가 선택된 상태에서 플레이스홀더가 떠 있으면 회귀',
+  );
+});
+
+test('projectCount === 0 이면 primary CTA(프로젝트 목록 열기) 가 disabled + aria-disabled 이다', () => {
+  const { container } = renderPlaceholder({ projectCount: 0 });
+  const primary = container.querySelector<HTMLButtonElement>(
+    '.empty-project-placeholder__cta--primary',
+  );
+  assert.ok(primary, 'primary CTA 가 렌더되어야 한다');
+  assert.equal(primary!.disabled, true, 'primary CTA 는 disabled');
+  assert.equal(primary!.getAttribute('aria-disabled'), 'true', 'aria-disabled 중복 선언');
+});
+
+test('projectCount > 0 이면 primary CTA 가 활성화된다', () => {
+  const { container } = renderPlaceholder({ projectCount: 3 });
+  const primary = container.querySelector<HTMLButtonElement>(
+    '.empty-project-placeholder__cta--primary',
+  );
+  assert.ok(primary);
+  assert.equal(primary!.disabled, false, 'primary CTA 는 활성');
+  assert.notEqual(primary!.getAttribute('aria-disabled'), 'true');
+});
+

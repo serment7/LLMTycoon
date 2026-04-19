@@ -74,3 +74,23 @@ npx tsx --test tests/sharedGoal.regression.test.ts
 1. `SharedGoalForm.tsx` 실 구현 PR 에서 본 시뮬레이터를 컴포넌트 렌더 조건으로 치환하고, `@testing-library/react` 기반 UI 레벨 검증 테스트를 추가로 붙인다.
 2. `hydrating` 플래그의 실제 상태 관리(App/ProjectManagement 중 어디에서 소유할지)는 `useProjectOptions` 와 동일한 레이어에 두는 것이 추천 — `project-settings-panel-hydration-regression.md` 와 한 레이어에서 처리해야 플리커 회귀가 한꺼번에 잡힌다.
 3. `SharedGoalModal` 이 도입될 때는 본 문서의 P4 를 실 DOM 스냅샷 테스트로 승격(모달 오픈 상태에서 `getByRole('form')` 이 DOM 에 잔존하는지 확인).
+
+---
+
+## 8. 후속 업데이트 (2026-04-19, Joker)
+
+본 문서 §1 이 인용한 `tests/sharedGoal.regression.test.ts` 는 작성 시점에 **11 통과
++ 1 skip** 이었다. skip 건은 `buildLeaderPlanPrompt 네이티브 도입 TODO` 가드로
+S2 시나리오 하나를 예약해 둔 상태였다.
+
+그 이후 `src/server/prompts.ts` 에 `renderSharedGoalBlock` 기반 sharedGoal 네이티브
+필드가 정식 도입되었고, 후속 라운드(지시 #f0798022)에서 해당 `test.skip` 을 실
+`SharedGoal` 타입 변환으로 활성화하는 작업이 합류했다. 결과:
+
+- `tests/sharedGoal.regression.test.ts` 는 현재 **12 통과 · 0 skip · 0 fail**.
+- 본 문서 §1·§6 의 "1 skip" 표기는 **과거 스냅샷 숫자** 로 보존한다(라운드 사이의
+  이정표 역할). 최신 수치를 참조해야 한다면 본 §8 주석과 실행 명령(§6) 을 먼저 본다.
+
+QA 라운드에서 마감 기록을 재집계할 때 본 보고서의 수치가 UAT 문서(`docs/qa-uat-2026-04-19.md`)
+와 1건 차이가 난다면, 그 차이가 바로 본 §8 의 S2 skip 해제분이라는 점을 감사
+경로(audit trail)에 남긴다.

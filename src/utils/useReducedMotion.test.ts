@@ -219,3 +219,71 @@ test('subscribeReducedMotion: add(Event)Listener 둘 다 없으면 cleanup 은 n
   off();
   assert.deepEqual(calls, []);
 });
+
+// ─── (9) API 선택 우선순위 · 쿼리 공유 · cleanup 멱등성 ─────────────────
+//
+// 최초 도입 이후 QA 라운드 7 (#3381daec) 에서 보강. 이전 케이스는 신·구 API
+// 중 "하나씩만" 있는 환경을 검증했지만, 둘 다 있는 환경에서 어느 쪽이 선택되는지
+// 는 테스트로 잠기지 않아 리팩터 시 이중 등록(두 경로 모두 add) 위험이 있었다.
+// 더불어 React 19 StrictMode 에서 이펙트가 이중 마운트되면 cleanup 이 두 번
+// 호출될 수 있으므로, 멱등성도 회귀로 고정한다.
+
+test('subscribeReducedMotion: addEventListener 와 addListener 둘 다 있으면 addEventListener 를 우선 선택', () => {
+  const modern = new Set<() => void>();
+  const legacy = new Set<() => void>();
+  let matches = false;
+  const mq = {
+    get matches() {
+      return matches;
+    },
+    addEventListener(type: string, cb: () => void) {
+      assert.equal(type, 'change');
+      modern.add(cb);
+    },
+    removeEventListener(type: string, cb: () => void) {
+      assert.equal(type, 'change');
+      modern.delete(cb);
+    },
+    addListener(cb: () => void) {
+      legacy.add(cb);
+    },
+    removeListener(cb: () => void) {
+      legacy.delete(cb);
+    },
+  };
+  const win: ReducedMotionWindow = { matchMedia: () => mq };
+  const calls: boolean[] = [];
+  const off = subscribeReducedMotion(win, v => calls.push(v));
+  // 둘 중 하나에만 등록되어야 중복 이벤트 호출이 발생하지 않는다.
+  assert.equal(modern.size, 1, 'addEventListener 경로에 등록되어야 함');
+  assert.equal(legacy.size, 0, 'addListener 경로는 사용되지 않아야 함');
+  matches = true;
+  for (const cb of modern) cb();
+  off();
+  assert.deepEqual(calls, [true]);
+  assert.equal(modern.size, 0, 'cleanup 시 addEventListener 등록이 해제되어야 함');
+  assert.equal(legacy.size, 0);
+});
+
+test('subscribeReducedMotion: 표준 prefers-reduced-motion 쿼리를 matchMedia 에 전달', () => {
+  const queries: string[] = [];
+  const win: ReducedMotionWindow = {
+    matchMedia: (q: string) => {
+      queries.push(q);
+      return { matches: false };
+    },
+  };
+  subscribeReducedMotion(win, () => {});
+  assert.deepEqual(queries, [REDUCED_MOTION_QUERY]);
+});
+
+test('subscribeReducedMotion: cleanup 은 멱등 — 두 번 호출해도 throw 하지 않음 (React StrictMode 대비)', () => {
+  const fake = createMatchMedia(false);
+  const off = subscribeReducedMotion({ matchMedia: fake.matchMedia }, () => {});
+  off();
+  // 두 번째 호출도 안전해야 한다. Set.delete 는 존재하지 않는 키에도 안전하므로
+  // 현재 구현은 이 계약을 자연히 만족하지만, 구독 구조가 교체되어도 같은 계약을
+  // 유지하도록 고정한다.
+  off();
+  assert.equal(fake.listeners.size, 0);
+});

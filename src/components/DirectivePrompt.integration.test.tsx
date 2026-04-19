@@ -358,6 +358,30 @@ test('TC-DP-INT-05: 제출(onSubmit) 후 부모가 attachments 를 비우면 목
 });
 
 // ---------------------------------------------------------------------------
+// 관찰 API: data-uploading 속성 (지시 #0a55dfba)
+// ---------------------------------------------------------------------------
+
+test('data-uploading 속성이 업로드 중 여부를 boolean 으로 반영한다', () => {
+  // 초기(빈 첨부) → false.
+  const idle = render(<Harness />);
+  const idleRoot = idle.container.querySelector<HTMLElement>('.directive-prompt');
+  assert.ok(idleRoot);
+  assert.equal(idleRoot!.getAttribute('data-uploading'), 'false',
+    '첨부가 없거나 전부 done/error 이면 false');
+
+  // 업로드 중 첨부를 `externalAttachments` 로 주입 → true.
+  const uploadingAttachment = makeAttachment({
+    id: 'up-1', name: '업로드중.pdf', kind: 'pdf', size: 10_000,
+    status: 'uploading', progress: 0.3,
+  });
+  const busy = render(<Harness externalAttachments={[uploadingAttachment]} />);
+  const busyRoot = busy.container.querySelector<HTMLElement>('.directive-prompt');
+  assert.ok(busyRoot);
+  assert.equal(busyRoot!.getAttribute('data-uploading'), 'true',
+    'uploading 상태 첨부가 하나라도 있으면 true');
+});
+
+// ---------------------------------------------------------------------------
 // 키보드: Enter 제출 / Shift+Enter 개행 / IME / 가드 / Cmd·Ctrl+Enter 하위 호환
 // ---------------------------------------------------------------------------
 //

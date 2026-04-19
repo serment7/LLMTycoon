@@ -358,6 +358,30 @@ test('U3 회귀 — updatedAt 은 과거 시각으로 덮어쓰이지 않는다(
   assert.equal(earlier.updatedAt, T2, '이전 시각으로 퇴행하면 안 된다');
 });
 
+// ─── 지시 #80831a9e 보강 ──────────────────────────────────────────────────────
+
+test('accumulateUsage — 입력 snapshot 을 mutate 하지 않는다(불변성)', () => {
+  // React state setter 나 socket 이벤트가 같은 객체를 재사용할 때, 내부 mutate 로
+  // 인한 "렌더가 트리거되지 않는" 회귀를 차단한다. 반환값은 새 객체여야 한다.
+  const original = EMPTY_SNAPSHOT;
+  const sessionRef = original.session;
+  const next = accumulateUsage(original, FIRST_CALL, T1);
+  assert.notEqual(next, original, '새 snapshot 참조여야 한다');
+  assert.equal(original.session, sessionRef, 'original.session 참조 유지');
+  assert.equal(original.session.input, 0, 'original 의 누적값은 0 을 유지');
+  assert.ok(next.session.input > 0, '반환값에만 누적이 반영');
+});
+
+test('formatWidgetLabel — 1억·10억 단위 대용량 값에서도 primary 포맷이 깨지지 않는다', () => {
+  const huge = { input: 100_000_000, output: 1_250_000_000, cacheRead: 0, cacheCreate: 0 };
+  const label = formatWidgetLabel(huge);
+  // 배지 텍스트는 문자열이어야 하고(undefined 금지), "입력" / "출력" 레이블을 포함.
+  assert.equal(typeof label.primary, 'string');
+  assert.ok(label.primary.length > 0);
+  assert.match(label.primary, /입력/);
+  assert.match(label.primary, /출력/);
+});
+
 // ---------------------------------------------------------------------------
 // U4 — Joker UI 전수 점검 체크리스트(docs/ui-audit-2026-04-19.md) 기반 재현 케이스.
 // 체크리스트 파일이 아직 합류 전이므로 본 테스트는 "합류 시 반드시 맞춰야 하는
