@@ -124,6 +124,7 @@ export {
   defaultSummarizer,
   trustScoreForUrl,
   defaultBreadth,
+  normalizeUrl as normalizeResearchUrl,
   DEFAULT_BUDGET,
   RESEARCH_REAL_ADAPTER_ID,
   RESEARCH_ALIAS,

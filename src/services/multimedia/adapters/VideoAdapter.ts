@@ -90,7 +90,21 @@ export type VideoErrorCode =
   | 'VIDEO_QUOTA_EXCEEDED'
   | 'VIDEO_PROVIDER_ERROR'
   | 'VIDEO_POLICY_BLOCKED'
-  | 'VIDEO_RENDER_ERROR';
+  | 'VIDEO_RENDER_ERROR'
+  | 'VIDEO_INVALID_INPUT';
+
+// ────────────────────────────────────────────────────────────────────────────
+// 입력 검증 상한 — sanitize 의 clamp 범위보다 넉넉하게 두고, 명백히 비정상인
+// 값만 거절한다. "오타 수준" 은 sanitize 가 정규화(clamp)하고, "의도가 불분명한
+// 과도한 값" 은 여기서 차단해 공급자 호출 전에 빠르게 실패시키는 것이 축이다.
+// ────────────────────────────────────────────────────────────────────────────
+export const MAX_PROMPT_LENGTH = 4_000;
+export const MIN_DURATION_SEC = 1;
+export const MAX_DURATION_SEC = 300;
+export const MIN_FPS = 1;
+export const MAX_FPS = 240;
+export const SUPPORTED_ASPECT_RATIOS: readonly AspectRatio[] = ['16:9', '9:16', '1:1', '4:3', '21:9'];
+export const SUPPORTED_RESOLUTIONS: readonly string[] = ['720p', '1080p', '4k'];
 
 export type VideoProgressStage = 'policy' | 'queue' | 'render' | 'compose' | 'finalize';
 
@@ -376,7 +390,7 @@ export function createRunwayProvider(settings: VideoProviderSettings): VideoProv
     isEnabled: () => typeof apiKey === 'string' && apiKey.length > 0,
     costPerSecond: () => costPerSec,
     async createJob(spec, signal) {
-      if (!apiKey) throw new VideoProviderHttpError('Runway API key missing', 401);
+      if (!apiKey) throw new VideoProviderHttpError('Runway API 키가 설정되어 있지 않습니다.', 401);
       const res = await fetchImpl(`${endpoint}/generate`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -390,17 +404,17 @@ export function createRunwayProvider(settings: VideoProviderSettings): VideoProv
         }),
         signal,
       });
-      if (!res.ok) throw new VideoProviderHttpError(`Runway ${res.status}`, res.status);
+      if (!res.ok) throw new VideoProviderHttpError(`Runway 생성 요청 실패(HTTP ${res.status}).`, res.status);
       const body = await res.json();
       return mapProviderStatusToJob(body, 'runway', spec, costPerSec);
     },
     async pollJob(jobId, signal) {
-      if (!apiKey) throw new VideoProviderHttpError('Runway API key missing', 401);
+      if (!apiKey) throw new VideoProviderHttpError('Runway API 키가 설정되어 있지 않습니다.', 401);
       const res = await fetchImpl(`${endpoint}/jobs/${encodeURIComponent(jobId)}`, {
         headers: { 'Authorization': `Bearer ${apiKey}` },
         signal,
       });
-      if (!res.ok) throw new VideoProviderHttpError(`Runway poll ${res.status}`, res.status);
+      if (!res.ok) throw new VideoProviderHttpError(`Runway 폴링 실패(HTTP ${res.status}).`, res.status);
       const body = await res.json();
       return mapProviderStatusToJob(body, 'runway', {
         prompt: '', durationSec: 0, aspectRatio: '16:9', fps: 24,
@@ -427,7 +441,7 @@ export function createPikaProvider(settings: VideoProviderSettings): VideoProvid
     isEnabled: () => typeof apiKey === 'string' && apiKey.length > 0,
     costPerSecond: () => costPerSec,
     async createJob(spec, signal) {
-      if (!apiKey) throw new VideoProviderHttpError('Pika API key missing', 401);
+      if (!apiKey) throw new VideoProviderHttpError('Pika API 키가 설정되어 있지 않습니다.', 401);
       const res = await fetchImpl(`${endpoint}/videos`, {
         method: 'POST',
         headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
@@ -441,17 +455,17 @@ export function createPikaProvider(settings: VideoProviderSettings): VideoProvid
         }),
         signal,
       });
-      if (!res.ok) throw new VideoProviderHttpError(`Pika ${res.status}`, res.status);
+      if (!res.ok) throw new VideoProviderHttpError(`Pika 생성 요청 실패(HTTP ${res.status}).`, res.status);
       const body = await res.json();
       return mapProviderStatusToJob(body, 'pika', spec, costPerSec);
     },
     async pollJob(jobId, signal) {
-      if (!apiKey) throw new VideoProviderHttpError('Pika API key missing', 401);
+      if (!apiKey) throw new VideoProviderHttpError('Pika API 키가 설정되어 있지 않습니다.', 401);
       const res = await fetchImpl(`${endpoint}/videos/${encodeURIComponent(jobId)}`, {
         headers: { 'x-api-key': apiKey },
         signal,
       });
-      if (!res.ok) throw new VideoProviderHttpError(`Pika poll ${res.status}`, res.status);
+      if (!res.ok) throw new VideoProviderHttpError(`Pika 폴링 실패(HTTP ${res.status}).`, res.status);
       const body = await res.json();
       return mapProviderStatusToJob(body, 'pika', {
         prompt: '', durationSec: 0, aspectRatio: '16:9', fps: 24,
@@ -478,7 +492,7 @@ export function createStabilityVideoProvider(settings: VideoProviderSettings): V
     isEnabled: () => typeof apiKey === 'string' && apiKey.length > 0,
     costPerSecond: () => costPerSec,
     async createJob(spec, signal) {
-      if (!apiKey) throw new VideoProviderHttpError('Stability API key missing', 401);
+      if (!apiKey) throw new VideoProviderHttpError('Stability API 키가 설정되어 있지 않습니다.', 401);
       const res = await fetchImpl(`${endpoint}/image-to-video`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -490,17 +504,17 @@ export function createStabilityVideoProvider(settings: VideoProviderSettings): V
         }),
         signal,
       });
-      if (!res.ok) throw new VideoProviderHttpError(`Stability ${res.status}`, res.status);
+      if (!res.ok) throw new VideoProviderHttpError(`Stability 생성 요청 실패(HTTP ${res.status}).`, res.status);
       const body = await res.json();
       return mapProviderStatusToJob(body, 'stability', spec, costPerSec);
     },
     async pollJob(jobId, signal) {
-      if (!apiKey) throw new VideoProviderHttpError('Stability API key missing', 401);
+      if (!apiKey) throw new VideoProviderHttpError('Stability API 키가 설정되어 있지 않습니다.', 401);
       const res = await fetchImpl(`${endpoint}/image-to-video/result/${encodeURIComponent(jobId)}`, {
         headers: { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json' },
         signal,
       });
-      if (!res.ok) throw new VideoProviderHttpError(`Stability poll ${res.status}`, res.status);
+      if (!res.ok) throw new VideoProviderHttpError(`Stability 폴링 실패(HTTP ${res.status}).`, res.status);
       const body = await res.json();
       return mapProviderStatusToJob(body, 'stability', {
         prompt: '', durationSec: 0, aspectRatio: '16:9', fps: 24,
@@ -531,6 +545,7 @@ function videoError(
 ): MediaAdapterError {
   const mapped = code === 'VIDEO_QUOTA_EXCEEDED' ? 'QUOTA_EXCEEDED'
     : code === 'VIDEO_POLICY_BLOCKED' ? 'PERMISSION_DENIED'
+    : code === 'VIDEO_INVALID_INPUT' ? 'INPUT_INVALID'
     : 'INTERNAL';
   return new MediaAdapterError(mapped, message, {
     adapterId: VIDEO_REAL_ADAPTER_ID,
@@ -582,16 +597,77 @@ function sanitizeSpec(spec: VideoSpec): VideoSpec {
   };
 }
 
+/**
+ * 입력 검증 — sanitize 전에 호출된다. "명백히 비정상" 인 값만 거절해 공급자에
+ * 쓰레기 요청을 보내지 않도록 차단한다. "오타 수준(예: fps=999)" 은 `sanitizeSpec`
+ * 이 clamp 로 정규화하는 경로로 남겨 호환성을 유지한다.
+ */
+export function validateVideoSpec(spec: VideoSpec): void {
+  if (!spec || typeof spec !== 'object') {
+    throw videoError('VIDEO_INVALID_INPUT', '영상 사양(VideoSpec)이 비어 있습니다.');
+  }
+  const prompt = typeof spec.prompt === 'string' ? spec.prompt.trim() : '';
+  if (!prompt) {
+    throw videoError('VIDEO_INVALID_INPUT', '프롬프트가 비어 있습니다. 한 문장 이상 입력해 주세요.', {
+      field: 'prompt',
+    });
+  }
+  if (prompt.length > MAX_PROMPT_LENGTH) {
+    throw videoError(
+      'VIDEO_INVALID_INPUT',
+      `프롬프트가 최대 허용 길이(${MAX_PROMPT_LENGTH}자)를 초과했습니다(${prompt.length}자).`,
+      { field: 'prompt', length: prompt.length, max: MAX_PROMPT_LENGTH },
+    );
+  }
+  if (!Number.isFinite(spec.durationSec)) {
+    throw videoError('VIDEO_INVALID_INPUT', '영상 길이(durationSec)가 숫자가 아닙니다.', {
+      field: 'durationSec', value: spec.durationSec,
+    });
+  }
+  if (spec.durationSec < MIN_DURATION_SEC) {
+    throw videoError(
+      'VIDEO_INVALID_INPUT',
+      `영상 길이는 최소 ${MIN_DURATION_SEC}초 이상이어야 합니다.`,
+      { field: 'durationSec', value: spec.durationSec, min: MIN_DURATION_SEC },
+    );
+  }
+  if (spec.durationSec > MAX_DURATION_SEC) {
+    throw videoError(
+      'VIDEO_INVALID_INPUT',
+      `영상 길이는 최대 ${MAX_DURATION_SEC}초를 초과할 수 없습니다(요청 ${spec.durationSec}초).`,
+      { field: 'durationSec', value: spec.durationSec, max: MAX_DURATION_SEC },
+    );
+  }
+  if (!Number.isFinite(spec.fps)) {
+    throw videoError('VIDEO_INVALID_INPUT', 'fps 가 숫자가 아닙니다.', {
+      field: 'fps', value: spec.fps,
+    });
+  }
+  if (spec.fps < MIN_FPS || spec.fps > MAX_FPS) {
+    throw videoError(
+      'VIDEO_INVALID_INPUT',
+      `fps 는 ${MIN_FPS}~${MAX_FPS} 범위여야 합니다(요청 ${spec.fps}).`,
+      { field: 'fps', value: spec.fps, min: MIN_FPS, max: MAX_FPS },
+    );
+  }
+  if (!SUPPORTED_ASPECT_RATIOS.includes(spec.aspectRatio as AspectRatio)) {
+    throw videoError(
+      'VIDEO_INVALID_INPUT',
+      `지원하지 않는 화면 비율입니다(요청 "${spec.aspectRatio}"). 허용: ${SUPPORTED_ASPECT_RATIOS.join(', ')}.`,
+      { field: 'aspectRatio', value: spec.aspectRatio, supported: SUPPORTED_ASPECT_RATIOS },
+    );
+  }
+}
+
 export async function generateVideo(
   rawSpec: VideoSpec,
   options: VideoGenerateOptions = {},
   runtime: VideoRuntime = {},
 ): Promise<VideoJob> {
   ensureNotAborted(options.signal);
+  // 입력 검증 — 원본 값으로 먼저 점검해 "명백히 과도/비정상" 인 요청을 즉시 거절한다.
+  validateVideoSpec(rawSpec);
   const spec = sanitizeSpec(rawSpec);
-  if (!spec.prompt?.trim()) {
-    throw videoError('VIDEO_RENDER_ERROR', '프롬프트가 비어 있습니다.');
-  }
 
   const provider = runtime.provider ?? pickProvider(runtime.providers ?? []);
   if (!provider) {
@@ -599,7 +675,8 @@ export async function generateVideo(
   }
   const sleep = runtime.sleep ?? defaultSleep;
 
-  // 1) 정책 사전 점검.
+  // 1) 정책 사전 점검. ratio 는 policy→queue→render→finalize 구간에서 단조 증가하도록
+  //    policy 0→0.05, queue 0.05→0.1, render 0.1→0.9, finalize 1.0 으로 매핑한다.
   options.onProgress?.({ stage: 'policy', ratio: 0, message: '컨텐츠 정책 점검' });
   const policyChecker = runtime.policyChecker ?? defaultPolicyChecker;
   const policy = await policyChecker({ spec });
@@ -632,9 +709,12 @@ export async function generateVideo(
     }
   };
 
+  options.onProgress?.({ stage: 'policy', ratio: 0.05, message: '정책 점검 통과' });
+
   // 3) 큐잉.
+  options.onProgress?.({ stage: 'queue', ratio: 0.05, message: '공급자 큐 대기' });
   const release = runtime.jobQueue ? await runtime.jobQueue.acquire() : () => undefined;
-  options.onProgress?.({ stage: 'queue', ratio: 1, message: '공급자 큐에 작업 등록' });
+  options.onProgress?.({ stage: 'queue', ratio: 0.1, message: '공급자 큐에 작업 등록' });
 
   let currentJob: VideoJob;
   try {
@@ -659,9 +739,10 @@ export async function generateVideo(
           { partial: currentJob },
         );
       }
+      // render 구간은 0.1 → 0.9 로 매핑해 policy/queue 이후 단조 증가를 보장한다.
       options.onProgress?.({
         stage: 'render',
-        ratio: currentJob.progress,
+        ratio: 0.1 + 0.8 * Math.max(0, Math.min(1, currentJob.progress)),
         message: `${provider.id} 렌더 진행 ${Math.round(currentJob.progress * 100)}%`,
       });
       await sleep(pollInterval, options.signal);
@@ -808,6 +889,17 @@ export class VideoAdapter implements MediaAdapter<'video'> {
     // types.ts 의 VideoGenerationInput.resolution 은 '720p'|'1080p'|'4k' 이라
     // 화면 비율을 담지 않는다. 본 어댑터는 VideoSpec.aspectRatio 를 16:9 기본으로 두고,
     // UI 가 세부 비율을 원하면 generateVideo() 로 직접 호출하도록 안내한다.
+    // 런타임에서 타입 밖 값이 들어오면(JS 호출 등) 여기서 명시적으로 거절한다.
+    if (
+      call.input.resolution !== undefined &&
+      !SUPPORTED_RESOLUTIONS.includes(call.input.resolution)
+    ) {
+      throw videoError(
+        'VIDEO_INVALID_INPUT',
+        `지원하지 않는 해상도입니다(요청 "${call.input.resolution}"). 허용: ${SUPPORTED_RESOLUTIONS.join(', ')}.`,
+        { field: 'resolution', value: call.input.resolution, supported: SUPPORTED_RESOLUTIONS },
+      );
+    }
     const spec: VideoSpec = {
       prompt: call.input.prompt,
       durationSec: call.input.durationSeconds ?? 6,

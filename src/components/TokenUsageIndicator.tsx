@@ -26,6 +26,8 @@ import {
   computeSubscriptionSessionSnapshot,
   formatResetClock,
   formatTimeUntilReset,
+  normalizeOauthResetsAtWallClockMs,
+  parseOAuthResetsAtToMs,
   type SubscriptionSessionSeverity,
   type SubscriptionSessionState,
 } from '../utils/claudeSubscriptionSession';
@@ -232,8 +234,11 @@ export function TokenUsageIndicator({
   const ratioPct = useOauthQuota
     ? Math.min(100, Math.max(0, Math.round(oauthUtilizationToRatio(oauthFive!.utilization!) * 100)))
     : Math.min(100, Math.max(0, Math.round(snapshot.ratioUsed * 100)));
-  const resetAtMs = useOauthQuota && oauthFive?.resets_at
-    ? Date.parse(oauthFive.resets_at)
+  const oauthResetParsed = useOauthQuota && oauthFive?.resets_at != null
+    ? parseOAuthResetsAtToMs(oauthFive.resets_at as unknown)
+    : null;
+  const resetAtMs = useOauthQuota && oauthResetParsed != null
+    ? normalizeOauthResetsAtWallClockMs(oauthResetParsed)
     : snapshot.resetAtMs;
   const resetClock = formatResetClock(Number.isFinite(resetAtMs) ? resetAtMs : snapshot.resetAtMs);
   const untilReset = formatTimeUntilReset(Number.isFinite(resetAtMs) ? resetAtMs : snapshot.resetAtMs, now);

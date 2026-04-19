@@ -4,7 +4,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -17,6 +17,9 @@ import {
   Trash2,
   MessageSquare,
   Settings,
+  FolderOpen,
+  Code2,
+  Wand2,
 } from 'lucide-react';
 import { Agent, Project, GameState, AgentRole, CodeFile, CodeDependency, Task, GitAutomationSettings } from './types';
 import { FileTooltip } from './components/FileTooltip';
@@ -1054,6 +1057,37 @@ function App() {
     return res;
   };
 
+  const openProjectWorkspaceInFileManager = useCallback(async () => {
+    if (!selectedProjectId) return;
+    try {
+      await safeFetch(`/api/projects/${selectedProjectId}/open-workspace`, { method: 'POST' });
+    } catch (e) {
+      toastBus.emit({
+        variant: 'error',
+        title: '워크스페이스 폴더를 열 수 없습니다',
+        description: (e as Error).message,
+      });
+    }
+  }, [selectedProjectId]);
+
+  const openProjectWorkspaceInIde = useCallback(async (ide: 'code' | 'cursor') => {
+    if (!selectedProjectId) return;
+    try {
+      await safeFetch(`/api/projects/${selectedProjectId}/open-in-ide`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ide }),
+      });
+    } catch (e) {
+      const label = ide === 'code' ? 'Visual Studio Code' : 'Cursor';
+      toastBus.emit({
+        variant: 'error',
+        title: `${label}에서 워크스페이스를 열 수 없습니다`,
+        description: `${(e as Error).message} — 터미널에서 \`${ide === 'code' ? 'code' : 'cursor'}\` 명령이 동작하는지(PATH 등록) 확인하세요.`,
+      });
+    }
+  }, [selectedProjectId]);
+
   // QA: 사용자 입력은 서버가 방어한다고 가정하지 말고 클라이언트에서도 최소한의
   // 무결성을 강제한다. 이름 길이(NAME_MAX_LEN)는 렌더링 시 말줄임표/줄바꿈 깨짐을
   // 유발하는 한계점에서 역산했고, 중복 검사는 실수로 같은 사람을 두 번 고용해
@@ -1697,7 +1731,45 @@ function App() {
           >
             전체 프로젝트: {gameState.projects.length}
           </div>
-          <CurrentProjectBadge projectName={project?.name ?? null} />
+          <div className="flex items-center gap-1 shrink-0 min-w-0">
+            <CurrentProjectBadge projectName={project?.name ?? null} />
+            <button
+              type="button"
+              data-testid="header-open-workspace-button"
+              disabled={!project}
+              onClick={() => { void openProjectWorkspaceInFileManager(); }}
+              title={project ? '탐색기·Finder에서 이 프로젝트 워크스페이스 폴더 열기' : '프로젝트를 먼저 선택하세요'}
+              aria-label="워크스페이스 폴더를 시스템 파일 관리자에서 열기"
+              className="shrink-0 px-2 py-1 border-2 border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--color-border)]"
+              style={{ background: 'var(--color-surface)' }}
+            >
+              <FolderOpen size={14} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              data-testid="header-open-vscode-button"
+              disabled={!project}
+              onClick={() => { void openProjectWorkspaceInIde('code'); }}
+              title={project ? 'Visual Studio Code로 이 워크스페이스 열기 (PATH에 code 필요)' : '프로젝트를 먼저 선택하세요'}
+              aria-label="Visual Studio Code로 워크스페이스 폴더 열기"
+              className="shrink-0 px-2 py-1 border-2 border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--color-border)]"
+              style={{ background: 'var(--color-surface)' }}
+            >
+              <Code2 size={14} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              data-testid="header-open-cursor-button"
+              disabled={!project}
+              onClick={() => { void openProjectWorkspaceInIde('cursor'); }}
+              title={project ? 'Cursor로 이 워크스페이스 열기 (PATH에 cursor 필요)' : '프로젝트를 먼저 선택하세요'}
+              aria-label="Cursor로 워크스페이스 폴더 열기"
+              className="shrink-0 px-2 py-1 border-2 border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--color-border)]"
+              style={{ background: 'var(--color-surface)' }}
+            >
+              <Wand2 size={14} aria-hidden="true" />
+            </button>
+          </div>
           <div
             className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] border-l-[6px]"
             style={{ borderLeftColor: getMetricTierColor(workspaceInsights.coveragePercent) }}

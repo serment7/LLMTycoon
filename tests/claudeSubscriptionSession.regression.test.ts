@@ -34,6 +34,8 @@ import {
   flushPendingOnReset,
   formatResetClock,
   formatTimeUntilReset,
+  normalizeOauthResetsAtWallClockMs,
+  parseOAuthResetsAtToMs,
   parseSessionSyncEnvelope,
   prefixSystemPromptWithAttachments,
   reconcileRestoredWithServer,
@@ -242,6 +244,37 @@ test('T1 — formatTimeUntilReset: 0 이하/비정상은 "<1분"/"--" 폴백', (
   assert.equal(formatTimeUntilReset(now + 30 * 60_000, now), '30분');
   assert.equal(formatTimeUntilReset(now + 3 * 60 * 60_000 + 15 * 60_000, now), '3시간 15분');
   assert.equal(formatTimeUntilReset(Number.NaN, now), '--');
+});
+
+// ---------------------------------------------------------------------------
+// O1~O3 — OAuth `resets_at` 파싱·정각 표시 (#usage 배지와 동일 계열)
+// ---------------------------------------------------------------------------
+
+test('O1 — parseOAuthResetsAtToMs: Unix 초·ISO·ms 를 epoch ms 로 정규화', () => {
+  const iso = '2026-03-10T04:59:59.000Z';
+  const fromIso = parseOAuthResetsAtToMs(iso);
+  assert.equal(fromIso, Date.parse(iso));
+  const sec = Math.floor(Date.parse(iso) / 1000);
+  assert.equal(parseOAuthResetsAtToMs(sec), Date.parse(iso), '초 단위 숫자는 ×1000');
+  const ms = Date.parse(iso);
+  assert.equal(parseOAuthResetsAtToMs(ms), ms, '이미 ms 인 값은 그대로');
+  assert.equal(parseOAuthResetsAtToMs(String(sec)), Date.parse(iso), '숫자만 문자열도 초로 해석');
+  assert.equal(parseOAuthResetsAtToMs(null), null);
+  assert.equal(parseOAuthResetsAtToMs(''), null);
+});
+
+test('O2 — normalizeOauthResetsAtWallClockMs: …:59:59 → 다음 분 정각(ms)', () => {
+  const t = Date.parse('2026-03-10T04:59:59.000Z');
+  const n = normalizeOauthResetsAtWallClockMs(t);
+  assert.equal(n, Date.parse('2026-03-10T05:00:00.000Z'));
+});
+
+test('O3 — OAuth 파이프라인: 정규화 후 formatTimeUntilReset 과 시계가 같은 기준', () => {
+  const raw = Date.parse('2026-03-10T04:59:30.000Z');
+  const ms = normalizeOauthResetsAtWallClockMs(raw);
+  const now = Date.parse('2026-03-10T04:00:00.000Z');
+  assert.equal(formatTimeUntilReset(ms, now), '1시간 0분');
+  assert.match(formatResetClock(ms), /^\d{2}:\d{2}$/);
 });
 
 // ---------------------------------------------------------------------------

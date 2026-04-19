@@ -544,6 +544,39 @@ export function sessionSignalToToast(params: {
   }
 }
 
+/**
+ * OAuth `/api/oauth/usage` 의 `five_hour.resets_at` 은 ISO8601 문자열 또는 Unix 초
+ * (일부 클라이언트·문서) 로 올 수 있다. JS `Date` 는 초 단위를 ms 로 잘못 넣으면
+ * 1970년 근처로 깨지고, 숫자만 문자열로 오면 `Date.parse` 가 실패한다.
+ */
+export function parseOAuthResetsAtToMs(raw: unknown): number | null {
+  if (raw == null) return null;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw < 1e12 ? raw * 1000 : raw;
+  }
+  if (typeof raw === 'string') {
+    const t = raw.trim();
+    if (/^\d+(\.\d+)?$/.test(t)) {
+      const n = Number(t);
+      if (!Number.isFinite(n)) return null;
+      return n < 1e12 ? n * 1000 : n;
+    }
+    const p = Date.parse(t);
+    if (Number.isFinite(p)) return p;
+  }
+  return null;
+}
+
+/**
+ * API 가 창 경계 직전 시각(예: …T04:59:59.000000+00:00)을 주면 로컬 시계가 XX:59 로
+ * 보인다. 다음 분 시작(정각)으로 올려 `/usage` 에서 기대하는 "정각 리셋" 표기와
+ * 남은 시간(`formatTimeUntilReset`) 을 맞춘다.
+ */
+export function normalizeOauthResetsAtWallClockMs(ms: number): number {
+  if (!Number.isFinite(ms)) return ms;
+  return Math.ceil(ms / 60_000) * 60_000;
+}
+
 /** 지정 시각(ms) 을 HH:MM 형식의 로컬 시간 문자열로 포매팅. 툴팁 라벨 용. */
 export function formatResetClock(resetAtMs: number, locale: string = 'ko-KR'): string {
   if (!Number.isFinite(resetAtMs)) return '--:--';

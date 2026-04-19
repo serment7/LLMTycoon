@@ -426,6 +426,145 @@ test('V7c-4. 공급자 canceled 응답은 ABORTED 로 표면화되고 예산 환
 });
 
 // ────────────────────────────────────────────────────────────────────────────
+// V10. 입력 검증 — 빈 프롬프트·과도한 길이·지원하지 않는 해상도/화면 비율은
+//      VIDEO_INVALID_INPUT(INPUT_INVALID) 로 즉시 거절된다. 공급자 호출 전에
+//      터져야 하므로 createJob 이 호출되지 않았는지도 함께 확인.
+// ────────────────────────────────────────────────────────────────────────────
+
+test('V10a. 빈 프롬프트는 VIDEO_INVALID_INPUT 으로 즉시 거절', async () => {
+  let created = 0;
+  const provider = stubProvider({
+    id: 'runway',
+    async createJob(spec) {
+      created += 1;
+      return {
+        id: 'x', status: 'queued', progress: 0, provider: 'runway',
+        costEstimate: spec.durationSec * 0.01,
+        metadata: {
+          createdAtMs: 0, updatedAtMs: 0, prompt: spec.prompt, durationSec: spec.durationSec,
+          aspectRatio: spec.aspectRatio, fps: spec.fps, shotCount: 1, policyChecked: false,
+        },
+      };
+    },
+  });
+  await assert.rejects(
+    () => generateVideo(baseSpec({ prompt: '   ' }), {}, { provider, sleep: noSleep }),
+    (err: unknown) => {
+      const e = err as MediaAdapterError;
+      assert.equal(e.code, 'INPUT_INVALID');
+      assert.equal(e.details?.videoCode, 'VIDEO_INVALID_INPUT');
+      assert.equal(e.details?.field, 'prompt');
+      return true;
+    },
+  );
+  assert.equal(created, 0, '검증 실패 시 공급자 createJob 이 호출되면 안 됨');
+});
+
+test('V10b. 프롬프트 최대 길이(4000자)를 초과하면 VIDEO_INVALID_INPUT', async () => {
+  const provider = stubProvider({ id: 'runway' });
+  const tooLong = 'ㄱ'.repeat(4_001);
+  await assert.rejects(
+    () => generateVideo(baseSpec({ prompt: tooLong }), {}, { provider, sleep: noSleep }),
+    (err: unknown) => {
+      const e = err as MediaAdapterError;
+      assert.equal(e.details?.videoCode, 'VIDEO_INVALID_INPUT');
+      assert.equal(e.details?.field, 'prompt');
+      assert.equal(e.details?.length, 4_001);
+      return true;
+    },
+  );
+});
+
+test('V10c. durationSec 가 최대치(300초)를 넘으면 VIDEO_INVALID_INPUT', async () => {
+  const provider = stubProvider({ id: 'runway' });
+  await assert.rejects(
+    () => generateVideo(baseSpec({ durationSec: 9_999 }), {}, { provider, sleep: noSleep }),
+    (err: unknown) => {
+      const e = err as MediaAdapterError;
+      assert.equal(e.details?.videoCode, 'VIDEO_INVALID_INPUT');
+      assert.equal(e.details?.field, 'durationSec');
+      return true;
+    },
+  );
+});
+
+test('V10d. 지원하지 않는 aspectRatio 는 VIDEO_INVALID_INPUT', async () => {
+  const provider = stubProvider({ id: 'runway' });
+  await assert.rejects(
+    // 타입 밖 값을 일부러 주입하는 시나리오(JS 호출, 잘못된 설정 등).
+    () => generateVideo(
+      baseSpec({ aspectRatio: '2:1' as unknown as '16:9' }),
+      {},
+      { provider, sleep: noSleep },
+    ),
+    (err: unknown) => {
+      const e = err as MediaAdapterError;
+      assert.equal(e.details?.videoCode, 'VIDEO_INVALID_INPUT');
+      assert.equal(e.details?.field, 'aspectRatio');
+      return true;
+    },
+  );
+});
+
+test('V10e. invoke() 가 지원 외 resolution 을 받으면 VIDEO_INVALID_INPUT', async () => {
+  const provider = stubProvider({ id: 'invoke' });
+  const adapter = new VideoAdapter(
+    { maxBytes: 0, timeoutMs: 1_000 },
+    { runtime: { provider, sleep: noSleep } },
+  );
+  await assert.rejects(
+    () => adapter.invoke({
+      input: {
+        prompt: '정상 프롬프트',
+        durationSeconds: 4,
+        resolution: '8k' as unknown as '4k',
+      },
+    }),
+    (err: unknown) => {
+      const e = err as MediaAdapterError;
+      assert.equal(e.code, 'INPUT_INVALID');
+      assert.equal(e.details?.videoCode, 'VIDEO_INVALID_INPUT');
+      assert.equal(e.details?.field, 'resolution');
+      return true;
+    },
+  );
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// V11. 진행률 단조 증가 — policy → queue → render → finalize 구간에서
+//      ratio 는 뒤로 가지 않아야 한다(UX 회귀 방지).
+// ────────────────────────────────────────────────────────────────────────────
+
+test('V11. onProgress 의 ratio 는 단조 증가한다', async () => {
+  const provider = stubProvider({
+    id: 'runway',
+    async createJob(spec) {
+      return {
+        id: 'j', status: 'rendering', progress: 0.4, provider: 'runway',
+        costEstimate: spec.durationSec * 0.01,
+        metadata: {
+          createdAtMs: 0, updatedAtMs: 0, prompt: spec.prompt, durationSec: spec.durationSec,
+          aspectRatio: spec.aspectRatio, fps: spec.fps, shotCount: 1, policyChecked: false,
+        },
+      };
+    },
+  });
+  const ratios: number[] = [];
+  await generateVideo(
+    baseSpec(),
+    { onProgress: (p) => ratios.push(p.ratio), pollIntervalMs: 1 },
+    { provider, sleep: noSleep },
+  );
+  for (let i = 1; i < ratios.length; i += 1) {
+    assert.ok(
+      ratios[i] >= ratios[i - 1] - 1e-9,
+      `ratio 가 감소: [${i - 1}]=${ratios[i - 1]} → [${i}]=${ratios[i]}`,
+    );
+  }
+  assert.equal(ratios[ratios.length - 1], 1, '마지막 ratio 는 1 이어야 함(finalize)');
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 // V8. composeStoryboard
 // ────────────────────────────────────────────────────────────────────────────
 

@@ -5,7 +5,7 @@ import { Server } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { spawn } from 'child_process';
-import { writeFileSync, unlinkSync, mkdirSync, readFileSync, readdirSync } from 'fs';
+import { writeFileSync, unlinkSync, mkdirSync, readFileSync, readdirSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { MongoClient, Db } from 'mongodb';
@@ -108,6 +108,74 @@ function resolveWorkspace(workspacePath: string): string {
     console.error(`[workspace] mkdir failed for ${abs}:`, (e as Error).message);
   }
   return abs;
+}
+
+/** Windows 탐색기 / macOS Finder / Linux 기본 파일 관리자에서 폴더를 연다. */
+function openFolderInOsFileManager(absPath: string): Promise<{ ok: boolean; error?: string }> {
+  const normalized = path.normalize(absPath);
+  return new Promise((resolve) => {
+    if (!existsSync(normalized)) {
+      resolve({ ok: false, error: 'path_not_found' });
+      return;
+    }
+    let settled = false;
+    const finish = (result: { ok: boolean; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    try {
+      const opts = { detached: true, stdio: 'ignore' as const };
+      let child: ReturnType<typeof spawn>;
+      if (process.platform === 'win32') {
+        const explorer = path.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe');
+        child = spawn(explorer, [normalized], opts);
+      } else if (process.platform === 'darwin') {
+        child = spawn('open', [normalized], opts);
+      } else {
+        child = spawn('xdg-open', [normalized], opts);
+      }
+      child.once('error', (err) => finish({ ok: false, error: err.message }));
+      child.unref();
+      setImmediate(() => finish({ ok: true }));
+    } catch (e) {
+      finish({ ok: false, error: (e as Error).message });
+    }
+  });
+}
+
+type WorkspaceIdeCli = 'code' | 'cursor';
+
+/** VS Code(`code`) 또는 Cursor(`cursor`) CLI 로 워크스페이스 폴더를 연다. PATH 에 CLI 가 있어야 한다. */
+function openWorkspaceInIdeCli(absPath: string, ide: WorkspaceIdeCli): Promise<{ ok: boolean; error?: string }> {
+  const normalized = path.normalize(absPath);
+  return new Promise((resolve) => {
+    if (!existsSync(normalized)) {
+      resolve({ ok: false, error: 'path_not_found' });
+      return;
+    }
+    const bin = ide === 'code' ? 'code' : 'cursor';
+    let settled = false;
+    const finish = (result: { ok: boolean; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    try {
+      const opts = {
+        detached: true,
+        stdio: 'ignore' as const,
+        // Windows 에서 PATH 의 code.cmd / Cursor.cmd 를 찾기 위해
+        shell: process.platform === 'win32',
+      };
+      const child = spawn(bin, [normalized], opts);
+      child.once('error', (err) => finish({ ok: false, error: err.message }));
+      child.unref();
+      setImmediate(() => finish({ ok: true }));
+    } catch (e) {
+      finish({ ok: false, error: (e as Error).message });
+    }
+  });
 }
 
 function writeMcpConfig(ctx: AgentContext): string {
@@ -915,6 +983,52 @@ async function startServer() {
     io.emit('state:updated', await getGameState());
     io.emit('tasks:updated', await getTasks());
     res.json({ success: true });
+  });
+
+  // 현재 프로젝트 워크스페이스 절대 경로를 OS 파일 관리자(Explorer / Finder / xdg-open)로 연다.
+  app.post('/api/projects/:id/open-workspace', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) {
+      res.status(404).json({ ok: false, error: 'project_not_found' });
+      return;
+    }
+    const abs = resolveWorkspace(project.workspacePath);
+    const out = await openFolderInOsFileManager(abs);
+    if (!out.ok) {
+      const status = out.error === 'path_not_found' ? 404 : 500;
+      res.status(status).json({ ok: false, error: out.error ?? 'open_failed' });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
+  // VS Code / Cursor CLI — 본체 설치 후 "PATH에 shell 명령 등록" 이 되어 있어야 한다.
+  app.post('/api/projects/:id/open-in-ide', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) {
+      res.status(404).json({ ok: false, error: 'project_not_found' });
+      return;
+    }
+    const raw = req.body && typeof (req.body as { ide?: unknown }).ide === 'string'
+      ? String((req.body as { ide: string }).ide).trim().toLowerCase()
+      : '';
+    const ide: WorkspaceIdeCli | null = raw === 'code' || raw === 'vscode' ? 'code'
+      : raw === 'cursor' ? 'cursor'
+        : null;
+    if (!ide) {
+      res.status(400).json({ ok: false, error: 'ide_required' });
+      return;
+    }
+    const abs = resolveWorkspace(project.workspacePath);
+    const out = await openWorkspaceInIdeCli(abs, ide);
+    if (!out.ok) {
+      const status = out.error === 'path_not_found' ? 404 : 500;
+      res.status(status).json({ ok: false, error: out.error ?? 'open_failed' });
+      return;
+    }
+    res.json({ ok: true });
   });
 
   app.post('/api/projects/:id/agents', async (req, res) => {

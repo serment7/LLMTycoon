@@ -233,14 +233,21 @@ export const defaultSummarizer: Summarizer = async ({ subQuery, evidences, rawRe
   const top = rawResults.slice(0, 3);
   const lines: string[] = [];
   lines.push(`${subQuery.question} 에 대한 주요 근거는 다음과 같다.`);
-  top.forEach((r, i) => {
-    const num = evidences.find((c) => c.url === r.url)?.n;
+  const findCitationNumber = (rawUrl: string): number | undefined => {
+    const key = normalizeUrl(rawUrl);
+    return evidences.find((c) => normalizeUrl(c.url) === key)?.n;
+  };
+  top.forEach((r) => {
+    const num = findCitationNumber(r.url);
     const marker = num ? `[${num}]` : '';
     lines.push(`- ${r.snippet || r.title}${marker}`);
   });
+  const uniqueNumbers = Array.from(new Set(
+    top.map((r) => findCitationNumber(r.url)).filter((n): n is number => typeof n === 'number'),
+  ));
   return {
     body: lines.join('\n'),
-    citationNumbers: top.map((r) => evidences.find((c) => c.url === r.url)?.n).filter((n): n is number => typeof n === 'number'),
+    citationNumbers: uniqueNumbers,
   };
 };
 
@@ -248,7 +255,12 @@ export const defaultSummarizer: Summarizer = async ({ subQuery, evidences, rawRe
 // 내부 헬퍼 — 정규화 · 중복 제거 · 진행률 · 중단
 // ────────────────────────────────────────────────────────────────────────────
 
-function normalizeUrl(url: string): string {
+/**
+ * URL 정규화 — hash 제거, 대표적 추적 파라미터(utm_*, fbclid, gclid, ref, ref_src) 제거,
+ * 끝 슬래시 제거. 정규화 실패 시 trim 된 원문을 돌려준다. 중복 제거·증거 매칭 양쪽이
+ * 같은 기준을 공유하도록 export.
+ */
+export function normalizeUrl(url: string): string {
   try {
     const u = new URL(url);
     u.hash = '';
@@ -471,7 +483,13 @@ export async function research(
   for (let i = 0; i < perQueryRaw.length; i += 1) {
     ensureNotAborted(options.signal);
     const { sub, raw } = perQueryRaw[i];
-    const localEvidence = citations.filter((c) => raw.some((r) => r.url === c.url));
+    // dedup 은 normalizeUrl 기준이므로 citation 에는 첫 번째로 본 원본 URL 이 남는다.
+    // 두 번째 서브쿼리가 같은 자원을 다른 추적 파라미터로 가져왔다면 원본 URL 이
+    // 서로 달라 잘못 매칭 누락이 생길 수 있으므로, 증거 매칭도 같은 정규화 기준을 쓴다.
+    const localEvidence = citations.filter((c) => {
+      const key = normalizeUrl(c.url);
+      return raw.some((r) => normalizeUrl(r.url) === key);
+    });
     if (options.requireCitations && localEvidence.length === 0) {
       limitations.push(`"${sub.question}" 에 대한 근거가 부족해 섹션을 생략했습니다.`);
       continue;
