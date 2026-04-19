@@ -25,6 +25,7 @@ import {
   parsePrUrlFromStdout,
   push,
   renderBranchName,
+  renderBranchPattern,
   shouldAutoCommit,
   shouldAutoOpenPR,
   shouldAutoPush,
@@ -86,6 +87,47 @@ test('renderBranchName: 토큰 치환과 이중 슬래시/말미 점 정리', ()
 test('renderBranchName: 기본 date 토큰은 YYYY-MM-DD 형식으로 채워진다', () => {
   const name = renderBranchName('{date}/{slug}', { type: 'fix', summary: 'bug' });
   assert.match(name, /^\d{4}-\d{2}-\d{2}\/bug$/);
+});
+
+// 지시 #df45c87e — slice 경계가 하이픈 바로 뒤에 떨어지면 기존 `replace(/^-+|-+$/g, '')`
+// 가 slice 이전에만 돌아 trailing '-' 이 남는 회귀가 있었다. 이후 renderBranchName
+// 에서 `feature/foo-/bar` 같은 이상 세그먼트를 만들어 이후 정리 체인을 늘린다.
+// slugify 가 잘라낸 뒤 한 번 더 trailing 하이픈을 털도록 고정한다.
+test('slugify: slice 경계에서 남는 trailing 하이픈을 정리한다', () => {
+  // 47자 + '-' + 3자 = 51자. slice(48) 결과가 47자 + '-' 로 끝남.
+  const input = 'a'.repeat(47) + '-bbb';
+  const out = slugify(input);
+  assert.ok(!out.endsWith('-'), `trailing '-' 가 남아 있음: ${out}`);
+  assert.equal(out, 'a'.repeat(47));
+});
+
+test('renderBranchName: 연속 하이픈 축약과 말미 하이픈/슬래시 제거', () => {
+  // 템플릿이 토큰 끝에 '-' 를 붙여 두면 정리 없이는 brach 이름 끝에 '-' 이 남는다.
+  const dashy = renderBranchName('{slug}-', { type: '', summary: 'Hello World' });
+  assert.equal(dashy, 'hello-world');
+  // 템플릿이 세그먼트 끝에 '/' 를 붙이는 경우도 같은 계약으로 마감한다.
+  const slashy = renderBranchName('feature/{type}/', { type: 'fix', summary: '' });
+  assert.equal(slashy, 'feature/fix');
+  // '{slug}--{agent}' 처럼 템플릿이 이중 하이픈을 강요해도 최종은 단일 하이픈.
+  const doubleDash = renderBranchName('{slug}--{agent}', { type: '', summary: 'foo', agent: 'bar' });
+  assert.equal(doubleDash, 'foo-bar');
+});
+
+test('renderBranchPattern: {shortId} 토큰 치환 + 공용 정리 규칙 적용', () => {
+  const out = renderBranchPattern('auto/{date}-{shortId}', {
+    type: 'fix', summary: 'ignored', date: '2026-04-19', shortId: 'abc12345',
+  });
+  assert.equal(out, 'auto/2026-04-19-abc12345');
+
+  // shortId 가 비면 'anon' 으로 폴백.
+  const anon = renderBranchPattern('auto/{shortId}', { type: 'fix', summary: 'x', date: '2026-04-19' });
+  assert.equal(anon, 'auto/anon');
+
+  // 말미 '/' · '-' · '.' 정리가 renderBranchName 과 동일하게 적용된다.
+  const trailing = renderBranchPattern('auto/{shortId}/-.', {
+    type: 'fix', summary: 'x', date: '2026-04-19', shortId: 'sid',
+  });
+  assert.equal(trailing, 'auto/sid');
 });
 
 test('formatCommitMessage: conventional + scope 유무 분기', () => {

@@ -25,6 +25,7 @@ import {
   type MultimediaAdapterConfig,
 } from './types';
 import { createPdfAdapter } from './PdfAdapter';
+import { createRealPdfAdapter } from './adapters/PdfAdapter';
 import { createPptAdapter } from './PptAdapter';
 import { createVideoAdapter } from './VideoAdapter';
 import { createWebSearchAdapter } from './WebSearchAdapter';
@@ -138,12 +139,16 @@ export class MultimediaRegistry {
   }
 }
 
-/** 6종 기본 어댑터를 모두 등록한 레지스트리를 돌려준다. */
+/** 6종 기본 어댑터를 모두 등록한 레지스트리를 돌려준다.
+ *   · PDF: 지시 #aeabbd49 의 실구현(createRealPdfAdapter) 을 기본으로 사용.
+ *     구 스켈레톤(createPdfAdapter) 은 하위 호환을 위해 export 만 유지한다.
+ */
 export function createDefaultRegistry(
   options: MultimediaRegistryOptions = {},
 ): MultimediaRegistry {
   const reg = new MultimediaRegistry(options);
-  reg.register(createPdfAdapter, createPdfAdapter(reg.getConfig()).descriptor);
+  void createPdfAdapter; // 구 스켈레톤 재수출 경로 유지(직접 테스트 용)
+  reg.register(createRealPdfAdapter, createRealPdfAdapter(reg.getConfig()).descriptor);
   reg.register(createPptAdapter, createPptAdapter(reg.getConfig()).descriptor);
   reg.register(createVideoAdapter, createVideoAdapter(reg.getConfig()).descriptor);
   reg.register(createWebSearchAdapter, createWebSearchAdapter(reg.getConfig()).descriptor);

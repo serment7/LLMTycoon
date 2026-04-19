@@ -3,7 +3,27 @@
 // 타입·어댑터 팩토리·레지스트리를 모두 재수출한다.
 
 export * from './types';
-export { createPdfAdapter, PDF_ADAPTER_ID } from './PdfAdapter';
+export { createPdfAdapter } from './PdfAdapter';
+export {
+  PdfAdapter,
+  createRealPdfAdapter,
+  parsePdf,
+  generatePdf,
+  PDF_ADAPTER_ID,
+  type ParsedPdf,
+  type PdfPage,
+  type PdfImageRef,
+  type PdfMetadata,
+  type DocumentTree,
+  type DocumentSection,
+  type DocumentNode,
+  type PdfParseDriver,
+  type PdfGenerateDriver,
+  type PdfAdapterErrorCode,
+  type ParsePdfOptions,
+  type GeneratePdfOptions,
+  type RealPdfAdapterOptions,
+} from './adapters/PdfAdapter';
 export { createPptAdapter, PPT_ADAPTER_ID } from './PptAdapter';
 export { createVideoAdapter, VIDEO_ADAPTER_ID } from './VideoAdapter';
 export { createWebSearchAdapter, WEB_SEARCH_ADAPTER_ID } from './WebSearchAdapter';

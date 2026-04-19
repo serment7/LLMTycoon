@@ -69,14 +69,22 @@ export interface TemplateContext {
 
 // 템플릿 토큰을 채우기 전에 파일·브랜치명으로 안전한 형태로 깎는다.
 // 한글/공백/특수문자를 그대로 두면 git ref 규칙(RFC 3986 부분집합)에 걸린다.
+//
+// slice 후 trailing '-' 정리: `replace(/^-+|-+$/g, '')` 는 slice(48) 이전에만
+// 적용되므로, 48자 경계가 하이픈 직후(`aaa...aaa-bbb` 형태)로 떨어지면 잘린
+// 결과가 `aaa...aaa-` 로 끝난다. git 은 허용하지만 브랜치/파일 이름 조합 시
+// "feature/foo-/bar" 같은 비정상 세그먼트가 남아 이후 renderBranchName 의 정리
+// 체인을 늘린다. 잘라낸 뒤 한 번 더 trailing 하이픈을 제거해 단일 출처로 고정.
 export function slugify(value: string): string {
-  return value
+  const sliced = value
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 48) || 'change';
+    .slice(0, 48)
+    .replace(/-+$/g, '');
+  return sliced || 'change';
 }
 
 function replaceTokens(template: string, ctx: Record<string, string>): string {
@@ -86,6 +94,25 @@ function replaceTokens(template: string, ctx: Record<string, string>): string {
   });
 }
 
+// git ref 규칙 정리를 renderBranchName 과 renderBranchPattern 이 공유하도록
+// 단일 헬퍼로 추출. 템플릿 오타/빈 토큰 전개 결과로 남을 수 있는 연속 하이픈·
+// 슬래시, 말미의 `.` `-` `/` 를 한 번에 걸러낸다.
+//
+// 정리 규칙(순서 의존):
+//   1) 공백 → `-` (git ref 는 공백 금지)
+//   2) `//` → `/` (이중 슬래시 금지)
+//   3) `--` → `-` (빈 토큰이 주변 하이픈과 합쳐져 `--` 를 만들 수 있다)
+//   4) 말미의 `.` · `-` · `/` 제거 (git check-ref-format 이 거절하는 패턴)
+//   5) `/-` → `/` (세그먼트 선두의 고립 하이픈 정리)
+function normalizeBranchRef(rendered: string): string {
+  return rendered
+    .replace(/\s+/g, '-')
+    .replace(/\/{2,}/g, '/')
+    .replace(/-{2,}/g, '-')
+    .replace(/[-./]+$/g, '')
+    .replace(/\/-+/g, '/');
+}
+
 export function renderBranchName(template: string, ctx: TemplateContext): string {
   const tokens: Record<string, string> = {
     type: slugify(ctx.type || 'change'),
@@ -93,10 +120,7 @@ export function renderBranchName(template: string, ctx: TemplateContext): string
     agent: slugify(ctx.agent || ''),
     date: ctx.date || new Date().toISOString().slice(0, 10),
   };
-  const rendered = replaceTokens(template, tokens);
-  // git은 `//`, 끝의 `.`, 공백을 허용하지 않는다. 템플릿 오타로 생기는 사고를
-  // 여기서 한 번 더 정리한다.
-  return rendered.replace(/\/{2,}/g, '/').replace(/\.+$/, '').replace(/\s+/g, '-');
+  return normalizeBranchRef(replaceTokens(template, tokens));
 }
 
 // branchNamePattern 전용 렌더러. renderBranchName 의 슬러그 토큰을 그대로
@@ -113,8 +137,7 @@ export function renderBranchPattern(
     date: ctx.date || new Date().toISOString().slice(0, 10),
     shortId: (ctx.shortId || '').trim() || 'anon',
   };
-  const rendered = replaceTokens(pattern, tokens);
-  return rendered.replace(/\/{2,}/g, '/').replace(/\.+$/, '').replace(/\s+/g, '-');
+  return normalizeBranchRef(replaceTokens(pattern, tokens));
 }
 
 // ensureBranch 컨텍스트. 런타임 의존성(실제 git 명령)을 가두기 위해 존재 여부
