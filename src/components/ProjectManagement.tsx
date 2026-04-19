@@ -11,6 +11,7 @@ import { GitAutomationPanel, DEFAULT_AUTOMATION, type GitAutomationSettings, typ
 import { GitCredentialsSection } from './GitCredentialsSection';
 import { SharedGoalForm } from './SharedGoalForm';
 import { EmptyState } from './EmptyState';
+import { ProjectEditingHeader } from './EmptyProjectPlaceholder';
 import { startGitAutomationScheduler } from '../utils/gitAutomation';
 
 // UX: PR 대상 라디오 선택은 "매번 다시 고르기"보다 "한 번 정해두면 그대로"가 실수를
@@ -1095,22 +1096,22 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
 
   return (
     <div className="p-8 space-y-8">
-      <header
-        className="flex items-center justify-between gap-3 p-3 border-2 border-dashed border-[var(--pixel-border)] bg-black/20"
-        aria-label="현재 편집 중인 프로젝트"
-      >
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 border-2 border-black flex items-center justify-center shrink-0 bg-black/40 text-white/50">
-            <FolderGit2 size={16} />
-          </div>
-          <div className="min-w-0">
-            <p className="text-[10px] uppercase tracking-[0.2em] text-white/60">편집 중</p>
-            <h1 className="text-base font-bold truncate text-white/60 italic">
-              선택된 프로젝트 없음
-            </h1>
-          </div>
-        </div>
-      </header>
+      {/* 디자이너 v2 시안(EmptyProjectPlaceholder.tsx ProjectEditingHeader) 으로 교체.
+          기존 인라인 헤더는 editingLabel 을 무시하고 항상 placeholder 만 보여주는
+          버그가 있었다(선택해도 "선택된 프로젝트 없음" 고정 표기). 시안 컴포넌트는
+          data-state 분기 + 좌측 스트라이프 + branch meta 칩까지 한 번에 처리한다. */}
+      <ProjectEditingHeader
+        projectName={editingLabel.hasProject ? editingLabel.fullName ?? editingLabel.title : null}
+        meta={editingLabel.hasProject && editingLabel.branch ? (
+          <span
+            className="pm-editing-header__meta inline-flex items-center gap-1 px-2 py-1 border-2 border-[var(--pixel-border)] bg-black/30 text-[10px] uppercase tracking-wider text-white/80"
+            title={`PR base 브랜치: ${editingLabel.branch}`}
+            aria-label={`PR base 브랜치 ${editingLabel.branch}`}
+          >
+            <GitBranch size={10} aria-hidden /> {editingLabel.branch}
+          </span>
+        ) : undefined}
+      />
       {loadError && (
         <div
           role="alert"
@@ -1173,7 +1174,7 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
             <EmptyState
               icon={<Link2Off size={28} />}
               title="연동된 소스가 없습니다"
-              hint="GitHub 또는 GitLab 액세스 토큰으로 저장소를 연결하세요."
+              description="GitHub 또는 GitLab 액세스 토큰으로 저장소를 연결하세요."
             />
           )}
           {integrations.map(i => (
@@ -1458,21 +1459,21 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
             <EmptyState
               icon={<FolderGit2 size={28} />}
               title="가져온 프로젝트가 없습니다"
-              hint="연동된 소스의 다운로드 버튼으로 저장소를 가져오세요."
+              description="연동된 소스의 다운로드 버튼으로 저장소를 가져오세요."
             />
           )}
           {managed.length > 0 && prTargetManaged.length === 0 && (
             <EmptyState
               icon={<GitPullRequest size={28} />}
               title="PR 대상으로 지정된 프로젝트가 없습니다"
-              hint={'"PR 대상 선택" 버튼으로 가져온 저장소 중 작업 대상을 골라 추가하세요.'}
+              description={'"PR 대상 선택" 버튼으로 가져온 저장소 중 작업 대상을 골라 추가하세요.'}
             />
           )}
           {prTargetManaged.length > 0 && visibleManaged.length === 0 && (
             <EmptyState
               icon={<Search size={28} />}
               title="검색 결과가 없습니다"
-              hint={`"${query}"에 해당하는 PR 대상 프로젝트가 없습니다.`}
+              description={`"${query}"에 해당하는 PR 대상 프로젝트가 없습니다.`}
             />
           )}
           {visibleManaged.map(p => {
