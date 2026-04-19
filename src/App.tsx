@@ -34,6 +34,16 @@ import { deleteAllProjectFiles } from './store/projectFiles';
 import { createShortcutRegistry, DEFAULT_MEDIA_SHORTCUTS, type MediaShortcutId, type ShortcutRegistry } from './utils/keyboardShortcuts';
 import { createPendingRequestQueue, type PendingRequestQueue } from './utils/pendingRequestQueue';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
+import { useFlushPendingInstructions } from './hooks/useFlushPendingInstructions';
+import {
+  submitUserInstruction,
+  setAutoModeProvider,
+  setWorkingAgentsProvider,
+  setInstructionDispatcher,
+  applyAutoDevOffPolicy,
+  type AutoDevOffPolicy,
+} from './services/agentDispatcher';
+import { PendingInstructionsBadge } from './components/PendingInstructionsBadge';
 import { toastBus } from './components/ToastProvider';
 import { CurrentProjectBadge } from './components/CurrentProjectBadge';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -253,6 +263,19 @@ function App() {
   // 유지). 초기엔 false 로 두고 mount 시점에 GET /api/auto-dev 로 동기화하며,
   // 'auto-dev:updated' 소켓 이벤트로 푸시 갱신을 받는다.
   const [autoDevEnabled, setAutoDevEnabled] = useState<boolean>(false);
+  // 지시 #367441f0 — 자동 개발 OFF 전환 시 큐 처리 정책. 새로고침 후에도 취향을
+  // 유지하기 위해 localStorage 에 저장.
+  const AUTO_DEV_OFF_POLICY_KEY = 'llm-tycoon:auto-dev-off-policy';
+  const [autoDevOffPolicy, setAutoDevOffPolicy] = useState<AutoDevOffPolicy>(() => {
+    if (typeof window === 'undefined') return 'keep';
+    const raw = window.localStorage.getItem(AUTO_DEV_OFF_POLICY_KEY);
+    return raw === 'flush-now' || raw === 'discard' ? raw : 'keep';
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try { window.localStorage.setItem(AUTO_DEV_OFF_POLICY_KEY, autoDevOffPolicy); }
+    catch { /* 쿼터 초과 등은 무시 */ }
+  }, [autoDevOffPolicy]);
   // 자동 개발 ON 직전에 GET /api/projects/:id/shared-goal 이 null 을 돌려주면(공동 목표
   // 미설정) 토글을 켜지 않고 이 플래그를 올려 전면 모달로 사용자에게 공동 목표 입력을
   // 요청한다. Thanos 가 추후 도입할 SharedGoalModal(공동 목표 작성 폼) 과 충돌하지
@@ -351,6 +374,47 @@ function App() {
     }
     prevLogsLengthRef.current = logs.length;
   }, [logs.length, logPanelTab]);
+
+  // 지시 #367441f0 — agentDispatcher 에 런타임 상태 provider 와 실제 디스패처를 연결.
+  // autoMode/working 수는 최신 gameState 를 ref 로 읽어 클로저 캡처 이슈를 피한다.
+  const autoDevRef = useRef<boolean>(autoDevEnabled);
+  useEffect(() => { autoDevRef.current = autoDevEnabled; }, [autoDevEnabled]);
+  useEffect(() => {
+    setAutoModeProvider(() => autoDevRef.current);
+    setWorkingAgentsProvider(() => gameStateRef.current.agents.filter(a => a.status === 'working').length);
+    setInstructionDispatcher(async (input) => {
+      const targetProject = gameStateRef.current.projects.find(p => p.id === input.projectId)
+        ?? gameStateRef.current.projects.find(p => p.id === selectedProjectId)
+        ?? null;
+      if (!targetProject) throw new Error('디스패치 대상 프로젝트를 찾을 수 없습니다.');
+      const leader =
+        gameStateRef.current.agents.find(a => a.role === 'Leader' && targetProject.agents.includes(a.id)) ||
+        gameStateRef.current.agents.find(a => a.role === 'Leader');
+      if (!leader) throw new Error('리더 에이전트가 없습니다.');
+      const res = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: targetProject.id,
+          assignedTo: leader.id,
+          description: input.text,
+          source: 'user',
+          attachments: input.attachments && input.attachments.length > 0 ? input.attachments : undefined,
+        }),
+      });
+      if (!res.ok) throw new Error(`디스패치 실패(${res.status})`);
+    });
+    return () => {
+      setAutoModeProvider(null);
+      setWorkingAgentsProvider(null);
+      setInstructionDispatcher(null);
+    };
+  }, [selectedProjectId]);
+
+  // 지시 #367441f0 — 팀 전원 idle 전이 시 큐에서 한 건 꺼내 디스패치.
+  useFlushPendingInstructions(gameState.agents, {
+    onFlushed: (text) => addLog(`대기 지시 자동 디스패치: ${text.slice(0, 60)}${text.length > 60 ? '…' : ''}`),
+  });
 
   // 선택 프로젝트 지속성. hydrated 이전의 null 은 '복원 대기' 상태이므로 저장하지 않는다.
   // 하이드레이션이 끝난 뒤 사용자가 명시적으로 null 로 비운 경우에만 키를 제거한다.
@@ -1153,6 +1217,26 @@ function App() {
     if (!leader) {
       addLog('리더 에이전트가 없습니다.');
       return;
+    }
+    // 지시 #367441f0 — 자동 개발 ON + working 에이전트 있음 → 즉시 디스패치 대신 큐 적재.
+    // submitUserInstruction 이 autoModeProvider/workingAgentsProvider 를 보고 분기한다.
+    const workingNow = gameState.agents.filter(a => a.status === 'working').length;
+    if (autoDevEnabled && workingNow > 0) {
+      const serverAttachmentsForQueue = pendingAttachments
+        .filter(a => a.status === 'done' && a.fileId)
+        .map(a => ({ fileId: a.fileId!, name: a.name, type: a.mime }));
+      const outcome = await submitUserInstruction({
+        text: instruction,
+        projectId: project.id,
+        attachments: serverAttachmentsForQueue.length > 0 ? serverAttachmentsForQueue : undefined,
+      });
+      if (outcome.kind === 'queued') {
+        addLog(`자동 개발 중: 지시가 대기 큐에 적재되었습니다(총 ${workingNow}명 작업 중)`, '사용자');
+        setCommandInput('');
+        setPendingAttachments([]);
+        draftStoreRef.current?.remove(project.id).catch(() => { /* noop */ });
+        return;
+      }
     }
     addLog(instruction, '사용자', leader.name);
     setCommandInput('');
@@ -2262,7 +2346,14 @@ function App() {
               </span>
             )}
           </button>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            {/* 지시 #367441f0 — 대기 큐 배지. 자동 개발 토글 바로 왼쪽에 붙여
+                "지시를 보냈는데 왜 실행이 안 되지?" 라는 혼란이 생길 때 사용자가
+                큐 상태와 OFF 정책을 같은 자리에서 바로 볼 수 있게 한다. */}
+            <PendingInstructionsBadge
+              autoDevOffPolicy={autoDevOffPolicy}
+              onPolicyChange={setAutoDevOffPolicy}
+            />
             <button
               type="button"
               role="switch"
@@ -2291,6 +2382,11 @@ function App() {
                 // auto-dev:updated 소켓 이벤트로도 최종값이 동기화된다.
                 setAutoDevEnabled(next);
                 addLog(next ? '자동 개발 모드 ON' : '자동 개발 모드 OFF');
+                // 지시 #367441f0 — OFF 전환 시 사용자 선택 정책을 큐에 적용.
+                if (!next) {
+                  try { await applyAutoDevOffPolicy(autoDevOffPolicy); }
+                  catch (err) { addLog(`OFF 정책 적용 실패: ${(err as Error).message}`); }
+                }
                 // PATCH 응답은 safeFetch 를 거치지 않고 직접 읽는다 — 400 응답의
                 // `code: SHARED_GOAL_REQUIRED` 플래그를 살려야 pre-check 가 건너뛴
                 // 경로(프로젝트 미선택 + 서버 저장 projectId 에 목표 없음, 혹은 선택

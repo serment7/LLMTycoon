@@ -25,6 +25,12 @@ import {
   listProjectMcpServers as defaultListProjectMcpServers,
   type McpServerRecord,
 } from '../stores/projectMcpServersStore';
+import {
+  getPendingUserInstructionsStore,
+  type EnqueueInput,
+  type PendingInstruction,
+  type PendingUserInstructionsStore,
+} from '../stores/pendingUserInstructionsStore';
 
 export interface AgentSkillContext {
   id: string;
@@ -155,4 +161,167 @@ export function formatDispatchContextForPrompt(ctx: AgentDispatchContext): strin
 export function resetAgentDispatcherForTests(): void {
   skillsProvider = null;
   mcpServersProvider = null;
+  autoModeProvider = null;
+  workingAgentsProvider = null;
+  instructionDispatcher = null;
+  overrideQueueStore = null;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 지시 #367441f0 — 사용자 지시 큐 게이팅 + flush
+//
+// 자동 개발 ON 이고 working 에이전트가 하나라도 있으면, 즉시 디스패치 대신 큐에
+// 적재한다. flushPendingInstructions 는 "팀 전원 idle" 순간에 호출되어 맨 앞
+// pending 한 건을 꺼내 실제 디스패치로 연결한다. 큐 상태 전이는 store 한 곳에
+// 모여 있어 동시 요청이 들어와도 직렬화된다.
+// ────────────────────────────────────────────────────────────────────────────
+
+export type AutoModeProvider = () => boolean;
+export type WorkingAgentsProvider = () => number;
+
+export interface InstructionDispatchInput {
+  text: string;
+  projectId?: string;
+  attachments?: Array<{ fileId: string; name: string; type?: string }>;
+}
+
+/**
+ * 실제 리더 태스크 생성을 담당하는 함수. 큐에서 꺼낸 지시를 디스패치할 때 본 함수가
+ * 호출된다. 테스트는 spy 로 주입하고, App 은 POST /api/tasks 를 실행하는 함수를 등록한다.
+ */
+export type InstructionDispatcher = (input: InstructionDispatchInput) => Promise<void>;
+
+let autoModeProvider: AutoModeProvider | null = null;
+let workingAgentsProvider: WorkingAgentsProvider | null = null;
+let instructionDispatcher: InstructionDispatcher | null = null;
+let overrideQueueStore: PendingUserInstructionsStore | null = null;
+
+export function setAutoModeProvider(provider: AutoModeProvider | null): void {
+  autoModeProvider = provider;
+}
+
+export function setWorkingAgentsProvider(provider: WorkingAgentsProvider | null): void {
+  workingAgentsProvider = provider;
+}
+
+export function setInstructionDispatcher(dispatcher: InstructionDispatcher | null): void {
+  instructionDispatcher = dispatcher;
+}
+
+/** 테스트 전용 — 큐 스토어 주입. */
+export function setPendingInstructionsStoreForTests(store: PendingUserInstructionsStore | null): void {
+  overrideQueueStore = store;
+}
+
+function resolveStore(): PendingUserInstructionsStore {
+  return overrideQueueStore ?? getPendingUserInstructionsStore();
+}
+
+export type InstructionDispatchOutcome =
+  | { kind: 'dispatched' }
+  | { kind: 'queued'; item: PendingInstruction }
+  | { kind: 'rejected'; reason: 'no-dispatcher' };
+
+/**
+ * 사용자 지시 제출 진입점. 자동 개발 ON + working 에이전트 있음 → 큐에 적재,
+ * 아니면 즉시 디스패치. 호출자(App.sendLeaderCommand) 는 반환값으로 UI 피드백을
+ * 선택한다(큐 적재 토스트 / 즉시 디스패치 로그).
+ */
+export async function submitUserInstruction(
+  input: InstructionDispatchInput,
+): Promise<InstructionDispatchOutcome> {
+  const store = resolveStore();
+  const autoOn = autoModeProvider ? autoModeProvider() : false;
+  const workingCount = workingAgentsProvider ? workingAgentsProvider() : 0;
+
+  if (autoOn && workingCount > 0) {
+    const enqueue: EnqueueInput = {
+      text: input.text,
+      projectId: input.projectId,
+      attachments: input.attachments,
+    };
+    const item = store.enqueue(enqueue);
+    return { kind: 'queued', item };
+  }
+
+  if (!instructionDispatcher) {
+    // 디스패처가 붙기 전이면 안전하게 큐에 적재해 둔다 — 나중에 flush 가 처리.
+    const item = store.enqueue({
+      text: input.text,
+      projectId: input.projectId,
+      attachments: input.attachments,
+    });
+    return { kind: 'queued', item };
+  }
+
+  try {
+    await instructionDispatcher(input);
+    return { kind: 'dispatched' };
+  } catch (err) {
+    // 네트워크 실패는 큐에 적재해 다음 flush 기회에 재시도할 수 있게 한다.
+    const item = store.enqueue({
+      text: input.text,
+      projectId: input.projectId,
+      attachments: input.attachments,
+    });
+    store.markFailed(item.id, (err as Error).message);
+    return { kind: 'queued', item };
+  }
+}
+
+export type FlushResult =
+  | { kind: 'idle' }
+  | { kind: 'skipped'; reason: 'busy' | 'no-dispatcher' }
+  | { kind: 'flushed'; item: PendingInstruction };
+
+/**
+ * 팀 전원 idle 순간에 호출. 큐의 맨 앞 pending 을 processing 으로 승격하고
+ * 디스패처에 넘긴다. 성공하면 markDone, 실패하면 markFailed 로 되돌린다.
+ * 경쟁 상태 방지: 여러 곳에서 동시에 호출해도 store.beginNextPending 이 원자적
+ * 으로 단일 승자만 뽑아 주기 때문에 중복 디스패치가 일어나지 않는다.
+ */
+export async function flushPendingInstructions(): Promise<FlushResult> {
+  const store = resolveStore();
+  // 이미 processing 중인 건이 있으면 flush 가 이중으로 진행되지 않도록 차단.
+  if (store.snapshot().processingCount > 0) {
+    return { kind: 'skipped', reason: 'busy' };
+  }
+  if (!instructionDispatcher) {
+    return { kind: 'skipped', reason: 'no-dispatcher' };
+  }
+  const item = store.beginNextPending();
+  if (!item) return { kind: 'idle' };
+  try {
+    await instructionDispatcher({
+      text: item.text,
+      projectId: item.projectId,
+      attachments: item.attachments?.map((a) => ({ fileId: a.fileId, name: a.name, type: a.type })),
+    });
+    store.markDone(item.id);
+    return { kind: 'flushed', item };
+  } catch (err) {
+    store.markFailed(item.id, (err as Error).message);
+    return { kind: 'skipped', reason: 'busy' };
+  }
+}
+
+export type AutoDevOffPolicy = 'keep' | 'flush-now' | 'discard';
+
+/**
+ * 자동 개발 OFF 전환 시 정책 적용.
+ *   · keep       : 큐를 그대로 둔다(다음 ON 전환 때 이어서 처리).
+ *   · flush-now  : working 상태와 무관하게 즉시 전부 디스패치(한 건씩 순차).
+ *   · discard    : pending 전부 cancelled 로 전이.
+ */
+export async function applyAutoDevOffPolicy(policy: AutoDevOffPolicy): Promise<void> {
+  const store = resolveStore();
+  if (policy === 'keep') return;
+  if (policy === 'discard') { store.cancelAllPending(); return; }
+  // flush-now — processing 이 하나씩만 있도록 순차 flush.
+  while (true) {
+    const snap = store.snapshot();
+    if (snap.pendingCount === 0) break;
+    const res = await flushPendingInstructions();
+    if (res.kind === 'skipped' || res.kind === 'idle') break;
+  }
 }
