@@ -19,7 +19,10 @@ import {
 import {
   EXPORT_BUTTONS,
   deriveExportButtonState,
+  exportShortcutLabel,
+  resolveExportShortcut,
 } from '../src/components/ExportButtons.tsx';
+import { pickFocusIndexOnKey } from '../src/components/AttachmentPreviewPanel.tsx';
 import type { MediaPreview } from '../src/utils/mediaLoaders.ts';
 
 // 파일 스텁 — Node 의 `File` 을 흉내내는 최소 객체. 필드 3개만 있으면 gateFile 이 동작.
@@ -131,4 +134,144 @@ test('취소/진행 중 경로 · busyKind 에 해당하는 버튼만 스피너+
   assert.equal(formatBytes(512), '512 B');
   assert.equal(formatBytes(2048), '2.0 KB');
   assert.equal(formatBytes(5 * 1024 * 1024), '5.0 MB');
+});
+
+// ---------------------------------------------------------------------------
+// 내보내기 단축키 — Alt+P/S/V 매핑과 라벨
+// ---------------------------------------------------------------------------
+
+test('resolveExportShortcut · Alt + p/s/v 만 각각 pdf/pptx/video 로 매핑', () => {
+  assert.equal(resolveExportShortcut({ key: 'p', altKey: true }), 'pdf');
+  assert.equal(resolveExportShortcut({ key: 's', altKey: true }), 'pptx');
+  assert.equal(resolveExportShortcut({ key: 'v', altKey: true }), 'video');
+  // 대소문자를 구분하지 않는다 — 한/영 전환 등에서 Shift 와 함께 눌려도 매핑 유지.
+  assert.equal(resolveExportShortcut({ key: 'P', altKey: true }), 'pdf');
+});
+
+test('resolveExportShortcut · Alt 없는 키는 항상 null', () => {
+  assert.equal(resolveExportShortcut({ key: 'p', altKey: false }), null);
+  assert.equal(resolveExportShortcut({ key: 's', altKey: false }), null);
+});
+
+test('resolveExportShortcut · Alt + Ctrl/Meta 조합은 시스템 충돌 방지로 매핑하지 않는다', () => {
+  assert.equal(resolveExportShortcut({ key: 'p', altKey: true, ctrlKey: true }), null);
+  assert.equal(resolveExportShortcut({ key: 'p', altKey: true, metaKey: true }), null);
+});
+
+test('resolveExportShortcut · 매칭되지 않는 글자는 null', () => {
+  assert.equal(resolveExportShortcut({ key: 'z', altKey: true }), null);
+  assert.equal(resolveExportShortcut({ key: '', altKey: true }), null);
+});
+
+test('exportShortcutLabel · 각 kind 는 Alt+X 문자열을 돌려준다', () => {
+  assert.equal(exportShortcutLabel('pdf'), 'Alt+P');
+  assert.equal(exportShortcutLabel('pptx'), 'Alt+S');
+  assert.equal(exportShortcutLabel('video'), 'Alt+V');
+});
+
+// ---------------------------------------------------------------------------
+// AttachmentPreviewPanel · pickFocusIndexOnKey — 비순환 listbox 계약
+// ---------------------------------------------------------------------------
+
+test('pickFocusIndexOnKey · total=0 이면 -1 로 "포커스 없음" 신호', () => {
+  assert.equal(pickFocusIndexOnKey({ current: 0, total: 0, key: 'ArrowDown' }), -1);
+  assert.equal(pickFocusIndexOnKey({ current: 2, total: 0, key: 'Home' }), -1);
+});
+
+test('pickFocusIndexOnKey · ArrowDown/ArrowRight 는 +1, 마지막에서는 경계 고정', () => {
+  assert.equal(pickFocusIndexOnKey({ current: 0, total: 3, key: 'ArrowDown' }), 1);
+  assert.equal(pickFocusIndexOnKey({ current: 1, total: 3, key: 'ArrowRight' }), 2);
+  // 경계에서 래핑 없음(비순환).
+  assert.equal(pickFocusIndexOnKey({ current: 2, total: 3, key: 'ArrowDown' }), 2);
+});
+
+test('pickFocusIndexOnKey · ArrowUp/ArrowLeft 는 -1, 처음에서는 0 고정', () => {
+  assert.equal(pickFocusIndexOnKey({ current: 2, total: 3, key: 'ArrowUp' }), 1);
+  assert.equal(pickFocusIndexOnKey({ current: 1, total: 3, key: 'ArrowLeft' }), 0);
+  assert.equal(pickFocusIndexOnKey({ current: 0, total: 3, key: 'ArrowUp' }), 0);
+});
+
+test('pickFocusIndexOnKey · Home/End 는 항상 0/last', () => {
+  assert.equal(pickFocusIndexOnKey({ current: 2, total: 5, key: 'Home' }), 0);
+  assert.equal(pickFocusIndexOnKey({ current: 2, total: 5, key: 'End' }), 4);
+});
+
+test('pickFocusIndexOnKey · 알 수 없는 키는 안전한 current 를 유지', () => {
+  assert.equal(pickFocusIndexOnKey({ current: 2, total: 5, key: 'Tab' }), 2);
+  // NaN/음수/범위 밖 current 는 0 으로 폴백된 뒤 그대로 반환.
+  assert.equal(pickFocusIndexOnKey({ current: Number.NaN, total: 5, key: 'Escape' }), 0);
+  assert.equal(pickFocusIndexOnKey({ current: -3, total: 5, key: 'Escape' }), 0);
+  assert.equal(pickFocusIndexOnKey({ current: 99, total: 5, key: 'Escape' }), 0);
+});
+
+// ---------------------------------------------------------------------------
+// formatAttachmentSummary · 모든 kind 분기 + generatedBy 경로
+// ---------------------------------------------------------------------------
+
+test('formatAttachmentSummary · PPTX/이미지/영상 kind 라벨이 각각 매핑된다', () => {
+  const pptx = formatAttachmentSummary({
+    id: 'p', name: 'deck.pptx', status: 'ready',
+    preview: makePreview({ kind: 'pptx', name: 'deck.pptx', pageCount: 12, sizeBytes: 1024 * 1024 }),
+  });
+  assert.match(pptx, /^PPTX · 12페이지/);
+  assert.match(pptx, /1\.0 MB/);
+
+  const image = formatAttachmentSummary({
+    id: 'i', name: 'cover.png', status: 'ready',
+    preview: makePreview({ kind: 'image', name: 'cover.png', pageCount: undefined, sizeBytes: 300 * 1024 }),
+  });
+  assert.match(image, /^이미지 · /);
+  // 페이지 수가 없는 kind 는 "N페이지" 조각을 붙이지 않아야 한다.
+  assert.doesNotMatch(image, /페이지/);
+
+  const video = formatAttachmentSummary({
+    id: 'v', name: 'hero.mp4', status: 'ready',
+    preview: makePreview({ kind: 'video', name: 'hero.mp4', pageCount: undefined, sizeBytes: 5 * 1024 * 1024 }),
+  });
+  assert.match(video, /^영상 · /);
+  assert.match(video, /5\.0 MB/);
+});
+
+test('formatAttachmentSummary · generatedBy.prompt 가 있으면 "생성: …" 조각이 삽입된다', () => {
+  const generated = formatAttachmentSummary({
+    id: 'g', name: 'hero.mp4', status: 'ready',
+    preview: makePreview({
+      kind: 'video',
+      name: 'hero.mp4',
+      pageCount: undefined,
+      sizeBytes: 2 * 1024 * 1024,
+      generatedBy: { prompt: 'hero shot', adapter: 'stub' },
+    }),
+  });
+  assert.match(generated, /생성: hero shot/);
+  // 용량은 항상 마지막 조각.
+  assert.ok(generated.trim().endsWith('2.0 MB'));
+});
+
+test('formatAttachmentSummary · pageCount 가 0 이면 페이지 조각을 생략한다', () => {
+  const zeroPages = formatAttachmentSummary({
+    id: 'z', name: 'empty.pdf', status: 'ready',
+    preview: makePreview({ pageCount: 0, sizeBytes: 2048 }),
+  });
+  assert.doesNotMatch(zeroPages, /페이지/);
+  assert.match(zeroPages, /^PDF · /);
+});
+
+// ---------------------------------------------------------------------------
+// classifyDragState · 경계 케이스 (application/x-file · 빈 types · null)
+// ---------------------------------------------------------------------------
+
+test('classifyDragState · types 가 비어 있거나 null 이면 idle', () => {
+  assert.equal(classifyDragState({ types: [] }), 'idle');
+  assert.equal(classifyDragState({ types: null }), 'idle');
+  assert.equal(classifyDragState({ types: undefined }), 'idle');
+});
+
+test('classifyDragState · application/x-file 도 파일 드래그로 간주해 dragover', () => {
+  assert.equal(classifyDragState({ types: ['application/x-file'] }), 'dragover');
+});
+
+test('classifyDragState · disabled 가 true 면 types 와 무관하게 disabled', () => {
+  assert.equal(classifyDragState({ types: ['Files'], disabled: true }), 'disabled');
+  assert.equal(classifyDragState({ types: [], disabled: true }), 'disabled');
 });
