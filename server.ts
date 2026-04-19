@@ -1535,6 +1535,15 @@ async function startServer() {
     if (typeof body.fixedBranchName === 'string') {
       extra.fixedBranchName = body.fixedBranchName;
     }
+    // 2모드 시안(A안) UI round-trip 필드. 'new'|'continue' 외 값은 무시해 검증을
+    // 최소화한다(스키마 승격 전 시안 블록이라, 잘못된 값이 박혀도 fromServerSettings
+    // 가 DEFAULT 로 폴백한다).
+    if (body.branchModeSketch === 'new' || body.branchModeSketch === 'continue') {
+      extra.branchModeSketch = body.branchModeSketch;
+    }
+    if (typeof body.branchModeNewName === 'string') {
+      extra.branchModeNewName = body.branchModeNewName;
+    }
     await gitAutomationSettingsCol.updateOne(
       { projectId: id },
       { $set: { ...settings, ...extra } },

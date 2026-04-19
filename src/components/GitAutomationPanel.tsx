@@ -60,6 +60,14 @@ export interface GitAutomationSettings {
   commitStrategy: CommitStrategy;
   // 자동 생성 커밋 제목 앞에 항상 붙는 접두어(예: 'auto: '). 빈 문자열이면 원문.
   commitMessagePrefix: string;
+  // 브랜치 전략 2모드 시안 (A안) — "새 브랜치를 팔지 / 현재 브랜치에 이어서 팔지".
+  // 승격 전까지는 4전략(branchStrategy) 과 병존하며, 서버 라운드트립에서 별도
+  // 필드로 보존된다. tests/branch-mode-mockup.md 섹션 5 의 마이그레이션 경로에 맞춰
+  // A안 블록이 실제 저장 대상이 되는 지점이다.
+  branchMode: BranchMode;
+  // A안 'new' 모드에서 사용할 브랜치명. 'continue' 모드여도 마지막 입력을 그대로
+  // 보존해 모드 전환 왕복에서 사용자가 입력값을 잃지 않게 한다.
+  branchModeNewName: string;
 }
 
 export const DEFAULT_AUTOMATION: GitAutomationSettings = {
@@ -72,6 +80,8 @@ export const DEFAULT_AUTOMATION: GitAutomationSettings = {
   newBranchName: '',
   commitStrategy: DEFAULT_TASK_BOUNDARY_COMMIT_CONFIG.commitStrategy,
   commitMessagePrefix: DEFAULT_COMMIT_MESSAGE_PREFIX,
+  branchMode: 'new',
+  branchModeNewName: 'feature/',
 };
 
 // QA: 'fixed-branch' 전략에서 사용자가 입력한 브랜치명을 git ref 규칙과 팀 관례에
@@ -423,11 +433,11 @@ export function GitAutomationPanel({
   // 전에 로드가 한 번 덮는" 케이스도 깨지지 않는다.
   const [commitStrategy, setCommitStrategy] = useState<CommitStrategy>(baseline.commitStrategy);
   const [commitMessagePrefix, setCommitMessagePrefix] = useState<string>(baseline.commitMessagePrefix);
-  // 디자이너: 2모드 라디오 시안(A안) 전용 local 상태. onSave 페이로드와 분리해 사용 —
-  // 본 블록은 아직 "시안" 단계이므로 서버 스키마를 건드리지 않고 UI 만 먼저 검증한다.
-  // 후속 단계에서 Joker 가 4전략 라디오와 통합 결정을 내리면 해당 블록 중 하나를 철거.
-  const [branchModeSketch, setBranchModeSketch] = useState<BranchMode>('new');
-  const [branchNameSketch, setBranchNameSketch] = useState<string>('feature/');
+  // 브랜치 전략 2모드 (A안) — baseline 에서 복원해 서버 저장값이 UI 에 그대로 뜨도록 한다.
+  // 4전략(branchStrategy) 라디오와 아직 병존하지만, 본 블록도 저장/로드 왕복 대상이다.
+  // 승격 경로: tests/branch-mode-mockup.md 섹션 5 참조.
+  const [branchModeSketch, setBranchModeSketch] = useState<BranchMode>(baseline.branchMode);
+  const [branchNameSketch, setBranchNameSketch] = useState<string>(baseline.branchModeNewName);
   // 디자이너: "어디에 값이 들어가 있는지" 모를 때 변수 칩을 클릭하면 해당 필드 끝에
   // 삽입되도록, 현재 포커스된 필드 키를 추적한다. 포커스 잃어도 마지막 값을 유지해
   // 칩 클릭 시 의도한 곳에 확실히 삽입되게 한다.
@@ -453,6 +463,14 @@ export function GitAutomationPanel({
     setNewBranchName(baseline.newBranchName);
   }, [baseline.branchStrategy, baseline.newBranchName]);
 
+  // 2모드(A안) 하이드레이션 — `initial` 비동기 로드 완료 시 baseline 이 재계산되면
+  // 서버에서 돌아온 branchMode / branchModeNewName 값을 로컬 라디오·입력 상태에
+  // 반영한다. 위 4전략 훅과 동일 리듬(1587ea9 패턴).
+  useEffect(() => {
+    setBranchModeSketch(baseline.branchMode);
+    setBranchNameSketch(baseline.branchModeNewName);
+  }, [baseline.branchMode, baseline.branchModeNewName]);
+
   const sampleVars = { ...SAMPLE_DEFAULT, ...(sample ?? {}) };
   const selected = FLOW_OPTIONS.find(o => o.key === flow) ?? FLOW_OPTIONS[0];
   const risk = RISK_STYLE[selected.risk];
@@ -471,7 +489,9 @@ export function GitAutomationPanel({
     || branchStrategyChoice !== baseline.branchStrategy
     || newBranchName !== baseline.newBranchName
     || commitStrategy !== baseline.commitStrategy
-    || commitMessagePrefix !== baseline.commitMessagePrefix;
+    || commitMessagePrefix !== baseline.commitMessagePrefix
+    || branchModeSketch !== baseline.branchMode
+    || branchNameSketch !== baseline.branchModeNewName;
 
   // 'fixed-branch' 전략일 때만 사용자가 입력한 브랜치명이 저장·실행 페이로드에 실린다.
   // 다른 전략에서는 검증을 돌리지 않고 입력값도 저장 시 빈 문자열로 비운다.
@@ -491,6 +511,8 @@ export function GitAutomationPanel({
     setNewBranchName(baseline.newBranchName);
     setCommitStrategy(baseline.commitStrategy);
     setCommitMessagePrefix(baseline.commitMessagePrefix);
+    setBranchModeSketch(baseline.branchMode);
+    setBranchNameSketch(baseline.branchModeNewName);
     onLog?.('Git 자동화 설정 초기화');
   };
 
@@ -513,6 +535,10 @@ export function GitAutomationPanel({
       // 반복 누적되므로 양끝만 trim. 사이 공백(예: 'auto: ') 은 사용자가 의도한
       // 표식이므로 보존한다.
       commitMessagePrefix: commitMessagePrefix.replace(/^\s+|\s+$/g, ''),
+      branchMode: branchModeSketch,
+      // 'continue' 모드에서도 마지막 입력값을 그대로 보존해, 사용자가 'new'↔'continue'
+      // 를 왕복할 때 브랜치명을 재입력하지 않아도 되게 한다.
+      branchModeNewName: branchNameSketch,
     };
     onSave?.(next);
     const strategyLabel = BRANCH_STRATEGY_LABEL[branchStrategyChoice]?.label ?? branchStrategyChoice;

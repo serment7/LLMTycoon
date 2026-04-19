@@ -129,6 +129,20 @@ export interface ProjectOptionsView {
   currentAutoBranch?: string;
 }
 
+// 저장 row 에 이미 들어있는 branchStrategy 가 "열거값인지" 런타임에서 방어한다.
+// DB 수동 편집/구 스키마 잔존/다른 서비스 이식 등으로 유효하지 않은 문자열·비문자
+// 값이 들어와 있으면, 그 값을 UI 까지 그대로 흘려보낼 경우 라디오가 "선택 없음"
+// 으로 깨져 사용자가 재저장도 할 수 없게 된다. 로드 경계에서 한 번 더 깎아 항상
+// 합법적인 BranchStrategy 값만 내보낸다. (쓰기 경로는 updateProjectOptionsSchema
+// 가 이미 검증하므로 본 가드는 "과거에 들어온 잘못된 값" 전용 폴백이다.)
+function coerceBranchStrategy(value: unknown): BranchStrategy {
+  if (typeof value === 'string'
+    && (BRANCH_STRATEGY_VALUES as readonly string[]).includes(value.trim())) {
+    return value.trim() as BranchStrategy;
+  }
+  return PROJECT_OPTION_DEFAULTS.branchStrategy;
+}
+
 export function projectOptionsView(
   source: Partial<ProjectOptionsUpdate> & {
     autoDevEnabled?: boolean;
@@ -153,7 +167,7 @@ export function projectOptionsView(
     gitRemoteUrl: source.gitRemoteUrl || undefined,
     sharedGoalId: source.sharedGoalId || undefined,
     settingsJson: source.settingsJson ?? { ...PROJECT_OPTION_DEFAULTS.settingsJson },
-    branchStrategy: source.branchStrategy ?? PROJECT_OPTION_DEFAULTS.branchStrategy,
+    branchStrategy: coerceBranchStrategy(source.branchStrategy),
     fixedBranchName: source.fixedBranchName ?? PROJECT_OPTION_DEFAULTS.fixedBranchName,
     branchNamePattern: source.branchNamePattern ?? PROJECT_OPTION_DEFAULTS.branchNamePattern,
     autoMergeToMain: source.autoMergeToMain ?? PROJECT_OPTION_DEFAULTS.autoMergeToMain,

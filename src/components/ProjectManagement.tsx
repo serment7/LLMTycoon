@@ -7,7 +7,7 @@ import {
   COMMIT_STRATEGY_VALUES,
   DEFAULT_TASK_BOUNDARY_COMMIT_CONFIG,
 } from '../types';
-import { GitAutomationPanel, DEFAULT_AUTOMATION, type GitAutomationSettings, type GitFlowLevel } from './GitAutomationPanel';
+import { GitAutomationPanel, DEFAULT_AUTOMATION, type GitAutomationSettings, type GitFlowLevel, type BranchMode } from './GitAutomationPanel';
 import { GitCredentialsSection } from './GitCredentialsSection';
 import { SharedGoalForm } from './SharedGoalForm';
 import { EmptyState } from './EmptyState';
@@ -151,6 +151,10 @@ function toServerSettings(ui: GitAutomationSettings): Record<string, unknown> {
     payload.newBranchName = ui.newBranchName.trim();
     payload.branchName = ui.newBranchName.trim();
   }
+  // 2모드 시안(A안) — 서버 스키마의 `branchName` 필드와 충돌하지 않도록 별도 키로
+  // 저장한다. UI round-trip 전용이며, 실제 자동화 파이프라인은 4전략 축을 소비한다.
+  payload.branchModeSketch = ui.branchMode;
+  payload.branchModeNewName = ui.branchModeNewName;
   return payload;
 }
 
@@ -185,6 +189,15 @@ function fromServerSettings(server: Record<string, unknown>): GitAutomationSetti
   const commitMessagePrefix = typeof server.commitMessagePrefix === 'string'
     ? server.commitMessagePrefix
     : DEFAULT_AUTOMATION.commitMessagePrefix;
+  // 2모드 시안(A안) 복원. 서버 row 가 이 필드를 모르는 레거시 프로젝트는
+  // DEFAULT_AUTOMATION 값으로 폴백해, 라디오가 항상 하나는 선택된 채로 뜨게 한다.
+  const rawBranchMode = server.branchModeSketch;
+  const branchMode: BranchMode = rawBranchMode === 'continue' || rawBranchMode === 'new'
+    ? rawBranchMode
+    : DEFAULT_AUTOMATION.branchMode;
+  const branchModeNewName = typeof server.branchModeNewName === 'string'
+    ? server.branchModeNewName
+    : DEFAULT_AUTOMATION.branchModeNewName;
   return {
     flow,
     branchPattern,
@@ -195,6 +208,8 @@ function fromServerSettings(server: Record<string, unknown>): GitAutomationSetti
     newBranchName,
     commitStrategy,
     commitMessagePrefix,
+    branchMode,
+    branchModeNewName,
   };
 }
 
