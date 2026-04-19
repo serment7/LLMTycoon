@@ -13,6 +13,8 @@ import { SharedGoalForm } from './SharedGoalForm';
 import { EmptyState } from './EmptyState';
 import { ProjectEditingHeader } from './EmptyProjectPlaceholder';
 import { FileHistoryPanel } from './FileHistoryPanel';
+import { ProjectSkillsPanel } from './ProjectSkillsPanel';
+import { ProjectMcpServersPanel } from './ProjectMcpServersPanel';
 import { startGitAutomationScheduler } from '../utils/gitAutomation';
 
 // UX: PR 대상 라디오 선택은 "매번 다시 고르기"보다 "한 번 정해두면 그대로"가 실수를
@@ -1581,6 +1583,17 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
         </section>
       )}
 
+      {/* 지시 #6fd99c90 — 에이전트 컨텍스트 주입용 스킬·MCP 서버 설정. selectedProjectId 가
+          있을 때만 렌더해 "프로젝트 없음" 경로에서 빈 local 스킬 리스트가 뜨는 혼선을 차단.
+          둘은 sibling 섹션으로 내려 두고 상단에 탭 헤더를 얹어 하나만 보이게 한다 — 한 번에
+          한 종류만 편집하도록 유도해 입력 실수(다른 섹션 폼에 값이 남는 회귀)를 피한다. */}
+      {selectedProjectId && (
+        <AgentContextTabs
+          projectId={selectedProjectId}
+          onLog={onLog}
+        />
+      )}
+
       {showPrTargetSelector && (
         <PrTargetSelectorModal
           all={managed}
@@ -2059,5 +2072,48 @@ function IntegrationForm({ onSubmit, onCancel }: {
         </button>
       </div>
     </div>
+  );
+}
+
+// 지시 #6fd99c90 — "스킬 설정" / "MCP 서버 설정" 두 패널을 탭으로 전환. 사용자는 한 번에
+// 하나만 편집하며, 탭 전환 시 상대 패널의 폼 상태는 내부 state 로 보존된다(언마운트하지
+// 않는 대신 hidden 으로 숨기면 필드 초기화 회귀가 남으므로, 단순히 조건부 렌더 + 각 패널이
+// 자체 useEffect 로 목록을 재로딩하는 방식을 택한다).
+type AgentContextTab = 'skills' | 'mcpServers';
+
+function AgentContextTabs({ projectId, onLog }: { projectId: string; onLog: (message: string) => void }) {
+  const [active, setActive] = React.useState<AgentContextTab>('skills');
+  return (
+    <section aria-label="에이전트 컨텍스트 설정" data-testid="agent-context-tabs" className="space-y-4">
+      <div role="tablist" aria-label="에이전트 컨텍스트 탭" className="flex items-center gap-1 bg-black/30 border-2 border-[var(--pixel-border)] p-1 w-fit">
+        <button
+          role="tab"
+          aria-selected={active === 'skills'}
+          onClick={() => setActive('skills')}
+          className={`px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider flex items-center gap-1 transition ${active === 'skills' ? 'bg-[var(--pixel-accent)] text-black' : 'text-white/70 hover:text-white'} ${focusRing}`}
+        >
+          <Sparkles size={12} aria-hidden /> 스킬 설정
+        </button>
+        <button
+          role="tab"
+          aria-selected={active === 'mcpServers'}
+          onClick={() => setActive('mcpServers')}
+          className={`px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider flex items-center gap-1 transition ${active === 'mcpServers' ? 'bg-[var(--pixel-accent)] text-black' : 'text-white/70 hover:text-white'} ${focusRing}`}
+        >
+          <Server size={12} aria-hidden /> MCP 서버 설정
+        </button>
+      </div>
+      <div
+        className="p-4 border-2"
+        style={{
+          background: 'var(--pixel-card, rgba(15, 52, 96, 0.6))',
+          borderColor: 'var(--pixel-border)',
+        }}
+      >
+        {active === 'skills'
+          ? <ProjectSkillsPanel projectId={projectId} onLog={onLog} />
+          : <ProjectMcpServersPanel projectId={projectId} onLog={onLog} />}
+      </div>
+    </section>
   );
 }
