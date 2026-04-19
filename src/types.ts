@@ -132,6 +132,17 @@ export interface Task {
   // 'user' 로 간주한다. (UI 배지·리더 자동 commit 트리거 등에서 활용)
   source?: 'user' | 'auto-dev' | 'leader';
   attachments?: DirectiveAttachment[];
+  // 지시 #75971d83 — 태스크가 생성·참조한 docs/ 하위 임시/사인오프 문서 경로.
+  // 리포지토리 루트 기준 상대경로(예: "docs/design/foo.md"). 태스크가 completed 로
+  // 전이되는 순간 taskDocCleanupService.planTaskDocCleanup 이 이 목록을 순회한다.
+  // 에이전트가 docs/ 경로를 새로 만들거나 참조할 때 recordTaskDocReference 를 통해
+  // 이 배열이 누적되며, 문자열 경로만 보관해 DB 저장과 socket 직렬화가 가볍다.
+  relatedDocs?: string[];
+  // 지시 #75971d83 — 사용자가 '유지' 플래그를 건 문서 경로 집합. relatedDocs 의
+  // 부분집합이며, 완료 시 정리 단계에서 이 목록에 포함된 경로는 보존한다(= 삭제 대상
+  // 아님). UI(태스크 인스펙터) 에서 개별 문서 옆 '유지' 토글로 쌓이고, 사용자가 이후
+  // 태스크에서 언제든 다시 활용할 수 있도록 docs/ 원본은 그대로 남긴다.
+  keepDocs?: string[];
 }
 
 // 사용자가 리더 지시 입력창에서 업로드한 첨부파일 메타. 업로드 엔드포인트가

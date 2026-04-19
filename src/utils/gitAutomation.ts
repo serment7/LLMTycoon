@@ -430,6 +430,65 @@ export function startGitAutomationScheduler(opts: GitAutomationSchedulerOptions)
   };
 }
 
+// commit 단계의 exit 코드가 0이 아닌데도 실제로는 커밋이 생성된 케이스를 재판정한다.
+// 배경: pre-commit/post-commit 훅이 경고·부가 작업 실패로 비정상 종료(exit 1+)하더라도
+// git 은 이미 커밋 객체를 만든 상태에서 hook 실패만 흘려보낸다(git 2.36+ pre-commit
+// 훅이 stderr 로 끝내도 커밋은 생성되는 케이스·husky --allow-empty 경고·로컬 AV 스캐너의
+// 후속 훅이 파일 접근 충돌로 non-zero 반환하는 경우 등). 이때 spawnSync 의 status 만
+// 보고 실패로 보고하면 UI 는 "커밋 실패" 로 토스트를 띄우지만 실제 HEAD 는 이미 전진해
+// 있어 사용자는 "실패라는데 커밋은 찍혀 있다" 는 혼란에 빠진다.
+//
+// 계약: commit 라벨이 아니거나 이미 ok 라면 원본 step 을 그대로 돌려준다. ok=false
+// 이고 headBefore/headAfter 가 둘 다 유효하며 서로 다르면 HEAD 가 실제로 전진한
+// 것이므로 ok=true 로 재판정하고, stderr 에 재판정 근거(이전/현재 7자 단축 SHA 와
+// 원래 exit 코드)를 append 해 관측 가능성을 잃지 않는다. stdout 에 `[branch xxxxxxx] ...`
+// 헤더가 비어 있던 경우를 고려해, reconcile 시에는 headAfter 를 기반으로 최소한의
+// stdout(`[reconciled abc1234] <commit message sha>`)을 합성해 parseCommitShaFromStdout
+// 가 동일 계약으로 SHA 를 회수할 수 있게 한다.
+export interface CommitReconcileInput {
+  step: GitAutomationStepResult;
+  headBefore?: string;
+  headAfter?: string;
+}
+
+function normalizeSha(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  // rev-parse HEAD 가 "HEAD 가 가리키는 커밋이 없음" 상태(최초 커밋 이전 저장소)인
+  // 경우 stderr 로 메시지를 뱉고 stdout 은 비게 된다. 빈 문자열은 undefined 로 승격해
+  // reconcile 경로가 before/after 모두 채워진 경우에만 동작하도록 강제한다.
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function reconcileCommitOutcome(input: CommitReconcileInput): GitAutomationStepResult {
+  const { step } = input;
+  if (step.label !== 'commit') return step;
+  if (step.ok) return step;
+  const before = normalizeSha(input.headBefore);
+  const after = normalizeSha(input.headAfter);
+  if (!before || !after) return step;
+  if (before === after) return step;
+  // 커밋이 실제로 생성됐다. ok=true 로 뒤집고 stderr 에 원래 exit 코드를 남겨
+  // 사용자에게 "훅 경고는 있었지만 커밋은 성립" 맥락을 전달한다.
+  const codeLabel = step.code === null || step.code === undefined ? '?' : String(step.code);
+  const note = `reconciled: commit created (HEAD ${before.slice(0, 7)} → ${after.slice(0, 7)}) despite exit=${codeLabel}`;
+  const nextStderr = (() => {
+    const trimmed = step.stderr?.trim();
+    if (!trimmed) return note;
+    return `${trimmed}\n${note}`.slice(0, 400);
+  })();
+  // parseCommitShaFromStdout 가 회수할 수 있도록 표준 헤더 형식에 맞춘 합성 stdout.
+  // 실제 git 이 남긴 stdout 이 있다면 보존하고, 비어 있을 때만 합성본을 쓴다.
+  const synthesizedStdout = `[reconciled ${after.slice(0, 7)}]`;
+  const nextStdout = step.stdout && step.stdout.trim().length > 0 ? step.stdout : synthesizedStdout;
+  return {
+    ...step,
+    ok: true,
+    stderr: nextStderr,
+    stdout: nextStdout,
+  };
+}
+
 // `git commit` stdout 의 머리글 `[branch abc1234] ...` 에서 단축 SHA 만 떼어낸다.
 // 매치 실패 시 undefined — 사용자에게 "없으면 없는 대로" 보이게 하고 강제 throw 하지
 // 않는다. 7자 이상의 16진 문자만 허용해, 메시지 본문에서 우연히 비슷한 토큰이

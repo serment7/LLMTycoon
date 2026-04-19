@@ -45,6 +45,7 @@ import {
   DEFAULT_GIT_AUTOMATION_CONFIG,
   formatCommitMessage,
   formatPrTitle,
+  reconcileCommitOutcome,
   renderBranchName,
   shouldAutoCommit,
   shouldAutoOpenPR,
@@ -1772,7 +1773,37 @@ async function startServer() {
           if (!runStep('checkout', checkoutCmd)) return finalize(false);
         }
         if (!runStep('add', ['git', '-C', cwd, 'add', '-A'])) return finalize(false);
-        if (!runStep('commit', ['git', '-C', cwd, 'commit', '-m', commitMessage])) return finalize(false);
+        // commit 단계의 exit 코드만 보면 pre/post-commit 훅이 비정상 종료한 경우에도
+        // 실패로 단정해 버린다 — 그러나 커밋 객체는 이미 생성되어 HEAD 는 전진한 상태.
+        // commit 실행 전후로 HEAD SHA 를 조회하고, non-zero 종료여도 HEAD 가 전진했으면
+        // reconcileCommitOutcome 이 ok=true 로 재판정한다(#77704932). results 배열의
+        // 마지막 step 도 동시에 갱신해 UI 로그/소켓 페이로드가 동일 결과를 받게 한다.
+        const probeHead = (): string | undefined => {
+          const p = spawnSync('git', ['-C', cwd, 'rev-parse', 'HEAD'], {
+            encoding: 'utf8', windowsHide: true,
+          });
+          return p.status === 0 ? (p.stdout || '').trim() : undefined;
+        };
+        const headBefore = probeHead();
+        const committed = runStep('commit', ['git', '-C', cwd, 'commit', '-m', commitMessage]);
+        if (!committed) {
+          const headAfter = probeHead();
+          const idx = results.length - 1;
+          const reconciled = reconcileCommitOutcome({
+            step: results[idx],
+            headBefore,
+            headAfter,
+          });
+          if (reconciled !== results[idx]) {
+            results[idx] = reconciled;
+            if (reconciled.ok) {
+              console.warn(
+                `[git-automation] commit step reconciled to ok project=${projectId} branch=${branch} HEAD ${(headBefore || '').slice(0, 7)} → ${(headAfter || '').slice(0, 7)} despite exit=${reconciled.code ?? 'null'}`,
+              );
+            }
+          }
+          if (!reconciled.ok) return finalize(false);
+        }
       }
 
       // autoPush: 원격 원브랜치로 업스트림 연결 후 push.
