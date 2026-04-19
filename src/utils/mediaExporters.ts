@@ -228,6 +228,24 @@ export const httpVideoExporterProvider: VideoExporterProvider = {
   },
 };
 
+/**
+ * 스텁 공급자 — 네트워크를 타지 않고 항상 `ADAPTER_NOT_REGISTERED` 로 수렴한다.
+ * 운영자가 실제 공급자를 붙이기 전(로컬 개발·CI·데모 환경) 에 이걸 등록해 두면
+ * `exportVideo` 호출이 사용자 조치 메시지를 동반한 일관된 실패로 떨어진다.
+ * 에러 코드는 errorMessages.mapMediaExporterError('ADAPTER_NOT_REGISTERED') 와
+ * 정합한다 — UI 는 "변환 엔진이 준비되지 않았어요 + 설정 열기" 배너를 노출한다.
+ */
+export const stubVideoExporterProvider: VideoExporterProvider = {
+  id: 'stub',
+  async generate() {
+    throw new MediaExporterError(
+      'ADAPTER_NOT_REGISTERED',
+      '영상 생성 공급자가 아직 등록되지 않았습니다. 서버 설정에서 어댑터를 활성화해 주세요.',
+      { status: 503 },
+    );
+  },
+};
+
 interface VideoProviderRegistry {
   provider: VideoExporterProvider;
 }

@@ -205,9 +205,25 @@ import {
   toChatAttachment,
   DEFAULT_MAX_BYTES,
   MediaLoaderError,
+  getThumbnail,
+  peekThumbnail,
+  invalidateThumbnailCache,
+  clearThumbnailCache,
+  getThumbnailCacheSize,
   type MediaPreview,
   type MediaLoaderProgress,
 } from '../../src/utils/mediaLoaders.ts';
+import {
+  registerVideoExporterProvider,
+  resetVideoExporterProvider,
+  stubVideoExporterProvider,
+  exportVideo,
+  MediaExporterError,
+} from '../../src/utils/mediaExporters.ts';
+import {
+  mapMediaExporterError,
+  mapUnknownError,
+} from '../../src/utils/errorMessages.ts';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -480,6 +496,104 @@ test('toChatAttachment — PPTX 는 slideIndices, 영상/이미지는 인덱스 
   assert.equal(video.slideIndices, undefined);
   assert.equal(video.textExcerpt, undefined);
   assert.match(video.summary, /영상/);
+});
+
+// ─── 썸네일 지연 생성 + 캐시 (#e5965192 §2) ──────────────────────────────────
+
+function fakePreview(over: Partial<MediaPreview> = {}): MediaPreview {
+  return {
+    id: over.id ?? `asset-${Math.random().toString(36).slice(2, 8)}`,
+    kind: over.kind ?? 'pdf',
+    name: over.name ?? 'report.pdf',
+    mimeType: over.mimeType ?? 'application/pdf',
+    sizeBytes: over.sizeBytes ?? 1024,
+    createdAt: over.createdAt ?? new Date().toISOString(),
+    extractedText: over.extractedText,
+    pageCount: over.pageCount,
+  };
+}
+
+test('getThumbnail — 동일 키 재호출 시 renderer 는 한 번만 실행된다(캐시 히트)', async () => {
+  clearThumbnailCache();
+  const preview = fakePreview({ id: 'thumb-1' });
+  let calls = 0;
+  const renderer = async () => { calls += 1; return `data:image/png;base64,AAA${calls}`; };
+  const first = await getThumbnail(preview, { pageIndex: 1, renderer });
+  const second = await getThumbnail(preview, { pageIndex: 1, renderer });
+  assert.equal(calls, 1, 'renderer 는 단 한 번만 실행돼야 한다');
+  assert.equal(first, second);
+});
+
+test('getThumbnail — renderer 미주입 상태에서 미스는 null, 히트는 캐시 값', async () => {
+  clearThumbnailCache();
+  const preview = fakePreview({ id: 'thumb-2' });
+  assert.equal(await getThumbnail(preview, { pageIndex: 1 }), null);
+  // 렌더러를 주입해 한 번 채워 둔다.
+  await getThumbnail(preview, {
+    pageIndex: 1,
+    renderer: async () => 'data:image/png;base64,CACHED',
+  });
+  assert.equal(await getThumbnail(preview, { pageIndex: 1 }), 'data:image/png;base64,CACHED');
+  assert.equal(peekThumbnail(preview, 1), 'data:image/png;base64,CACHED');
+});
+
+test('getThumbnail — bypassCache=true 이면 renderer 가 다시 호출되어 덮어쓰기', async () => {
+  clearThumbnailCache();
+  const preview = fakePreview({ id: 'thumb-3' });
+  let calls = 0;
+  const renderer = async () => { calls += 1; return `v${calls}`; };
+  const a = await getThumbnail(preview, { pageIndex: 1, renderer });
+  const b = await getThumbnail(preview, { pageIndex: 1, renderer, bypassCache: true });
+  assert.equal(a, 'v1');
+  assert.equal(b, 'v2');
+});
+
+test('invalidateThumbnailCache — 자산 id 기준 prefix 만 제거한다', async () => {
+  clearThumbnailCache();
+  const a = fakePreview({ id: 'keep' });
+  const b = fakePreview({ id: 'drop' });
+  const renderer = async (p: MediaPreview, i?: number) => `${p.id}:${i}`;
+  await getThumbnail(a, { pageIndex: 1, renderer });
+  await getThumbnail(b, { pageIndex: 1, renderer });
+  await getThumbnail(b, { pageIndex: 2, renderer });
+  assert.equal(getThumbnailCacheSize(), 3);
+  invalidateThumbnailCache('drop');
+  assert.equal(getThumbnailCacheSize(), 1);
+  assert.equal(peekThumbnail(a, 1), 'keep:1');
+  assert.equal(peekThumbnail(b, 1), null);
+});
+
+// ─── 영상 Provider 스텁 + 오류 매핑 (#e5965192 §3) ─────────────────────────
+
+test('stubVideoExporterProvider — exportVideo 를 ADAPTER_NOT_REGISTERED 로 수렴시킨다', async () => {
+  registerVideoExporterProvider(stubVideoExporterProvider);
+  try {
+    await assert.rejects(
+      () => exportVideo({ prompt: '샷' }, {
+        projectId: 'proj-1',
+        fetcher: async () => { throw new Error('스텁은 fetch 를 타면 안 된다'); },
+      }),
+      (err: unknown) => err instanceof MediaExporterError
+        && err.code === 'ADAPTER_NOT_REGISTERED'
+        && err.status === 503,
+    );
+  } finally {
+    resetVideoExporterProvider();
+  }
+});
+
+test('errorMessages 매핑 — ADAPTER_NOT_REGISTERED 는 "설정 열기" 조치 버튼을 제공', () => {
+  const msg = mapMediaExporterError('ADAPTER_NOT_REGISTERED');
+  assert.equal(msg.severity, 'error');
+  assert.match(msg.title, /내보내기|엔진/);
+  assert.equal(msg.action?.kind, 'open-settings');
+});
+
+test('mapUnknownError — MediaExporterError 인스턴스를 code 로 분류한다', () => {
+  const err = new MediaExporterError('SESSION_EXHAUSTED', '세션 소진', { status: 503 });
+  const msg = mapUnknownError(err);
+  assert.equal(msg.severity, 'warning');
+  assert.match(msg.title, /세션/);
 });
 
 test('loadMediaFile — fetcher 미주입 + 전역 fetch 없음 → UPLOAD_FAILED', async () => {

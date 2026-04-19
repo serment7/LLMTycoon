@@ -26,6 +26,7 @@ import {
   SUBSCRIPTION_SESSION_WINDOW_MS,
   EMPTY_PENDING_QUEUE,
   buildSessionSyncEnvelope,
+  buildClaudeAttachmentBlocks,
   computeSubscriptionSessionSnapshot,
   dequeuePendingRequest,
   deserializePersistedSession,
@@ -34,6 +35,7 @@ import {
   formatResetClock,
   formatTimeUntilReset,
   parseSessionSyncEnvelope,
+  prefixSystemPromptWithAttachments,
   reconcileRestoredWithServer,
   resolveSessionStateConflict,
   serializePersistedSession,
@@ -45,6 +47,7 @@ import {
   type SessionSyncEnvelope,
   type SubscriptionSessionState,
 } from '../src/utils/claudeSubscriptionSession.ts';
+import type { MediaChatAttachment } from '../src/utils/mediaLoaders.ts';
 
 const WINDOW = SUBSCRIPTION_SESSION_WINDOW_MS;
 
@@ -516,4 +519,79 @@ test('R2 — reconcileRestoredWithServer: 서버 응답이 오면 권위값 치�
   assert.equal(serverOnly.status, 'warning');
   assert.equal(serverOnly.statusReason, '경계');
   assert.equal(serverOnly.state, null);
+});
+
+// ---------------------------------------------------------------------------
+// A1~A5 — 첨부 → Claude Messages API 콘텐츠 블록 변환 (#e5965192 §1)
+// ---------------------------------------------------------------------------
+
+function pdfAttachment(extra: Partial<MediaChatAttachment> = {}): MediaChatAttachment {
+  return {
+    id: 'pdf-1', kind: 'pdf', name: 'quarterly.pdf',
+    mimeType: 'application/pdf', sizeBytes: 2048,
+    summary: 'PDF · 3페이지 · 2KB · quarterly.pdf',
+    textExcerpt: '분기 실적 요약 본문',
+    pageIndices: [1, 2, 3],
+    ...extra,
+  };
+}
+
+test('A1 — 첨부 배열이 비면 블록 0개·요약 빈 문자열', () => {
+  const { summaryText, blocks } = buildClaudeAttachmentBlocks([]);
+  assert.equal(summaryText, '');
+  assert.deepEqual(blocks, []);
+});
+
+test('A2 — sourceResolver 주입 + PDF 첨부 → document 블록', () => {
+  const att = pdfAttachment();
+  const { blocks, summaryText } = buildClaudeAttachmentBlocks([att], {
+    sourceResolver: () => ({ type: 'base64', media_type: 'application/pdf', data: 'AAAA' }),
+  });
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].type, 'document');
+  if (blocks[0].type === 'document') {
+    assert.equal(blocks[0].source.type, 'base64');
+    assert.equal(blocks[0].title, 'quarterly.pdf');
+    assert.match(blocks[0].context ?? '', /분기 실적/);
+  }
+  assert.match(summaryText, /첨부 1건/);
+  assert.match(summaryText, /quarterly\.pdf/);
+});
+
+test('A3 — 이미지 첨부 → image 블록, 영상 첨부는 항상 텍스트 폴백', () => {
+  const image: MediaChatAttachment = {
+    id: 'i1', kind: 'image', name: 'frame.png', mimeType: 'image/png',
+    sizeBytes: 512, summary: '이미지 · 1KB · frame.png',
+  };
+  const video: MediaChatAttachment = {
+    id: 'v1', kind: 'video', name: 'hero.mp4', mimeType: 'video/mp4',
+    sizeBytes: 0, summary: '영상 · 0KB · hero.mp4',
+  };
+  const { blocks } = buildClaudeAttachmentBlocks([image, video], {
+    sourceResolver: (a) => ({ type: 'url', url: `asset:${a.id}` }),
+  });
+  assert.equal(blocks[0].type, 'image');
+  assert.equal(blocks[1].type, 'text'); // 영상은 resolver 가 있어도 텍스트로 수렴
+  if (blocks[1].type === 'text') {
+    assert.match(blocks[1].text, /영상/);
+  }
+});
+
+test('A4 — sourceResolver 미주입이면 PDF 도 텍스트 폴백(요약+발췌)', () => {
+  const { blocks } = buildClaudeAttachmentBlocks([pdfAttachment()]);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0].type, 'text');
+  if (blocks[0].type === 'text') {
+    assert.match(blocks[0].text, /PDF · 3페이지/);
+    assert.match(blocks[0].text, /분기 실적 요약 본문/);
+  }
+});
+
+test('A5 — prefixSystemPromptWithAttachments 는 "## 첨부 요약" 접두를 붙이고 비면 원본 유지', () => {
+  const sys = '역할: 리더';
+  assert.equal(prefixSystemPromptWithAttachments(sys, []), sys);
+  const prefixed = prefixSystemPromptWithAttachments(sys, [pdfAttachment()]);
+  assert.match(prefixed, /^## 첨부 요약/);
+  assert.match(prefixed, /quarterly\.pdf/);
+  assert.ok(prefixed.endsWith(sys), '원본 시스템 프롬프트가 접두 뒤에 그대로 유지돼야 한다');
 });

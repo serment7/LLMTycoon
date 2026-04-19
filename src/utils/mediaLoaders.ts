@@ -375,7 +375,7 @@ export async function loadMediaFile(file: File, opts: MediaLoaderOptions): Promi
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// 대화 문맥 정규화 — MediaPreview → MediaChatAttachment
+// 대화 문맥 정규화 도우미(private)
 // ────────────────────────────────────────────────────────────────────────────
 
 const KIND_LABEL_KO: Record<MediaKind, string> = {
@@ -501,7 +501,7 @@ export function getThumbnailCacheSize(): number {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// 대화 문맥 정규화 — MediaPreview → MediaChatAttachment
+// 대화 문맥 정규화 — MediaPreview → MediaChatAttachment (공용 API)
 // ────────────────────────────────────────────────────────────────────────────
 
 export function toChatAttachment(

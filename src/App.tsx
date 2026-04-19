@@ -32,7 +32,10 @@ import { CurrentProjectBadge } from './components/CurrentProjectBadge';
 import { ClaudeTokenUsage } from './components/ClaudeTokenUsage';
 import { TokenUsageIndicator } from './components/TokenUsageIndicator';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { ToastProvider } from './components/ToastProvider';
+import { ToastProvider, useToast } from './components/ToastProvider';
+import { UploadDropzone } from './components/UploadDropzone';
+import { loadMediaFile } from './utils/mediaLoaders';
+import { mapUnknownError, messageToToastInput } from './utils/errorMessages';
 import { claudeTokenUsageStore } from './utils/claudeTokenUsageStore';
 import {
   SUBSCRIPTION_SESSION_STORAGE_KEY,
@@ -159,6 +162,9 @@ const AGENT_PATH_CLEANUP_MS = 500;
 function App() {
   // Agents 탭 라이브 닷·기타 펄스 마이크로 인터랙션을 prefers-reduced-motion 사용자에게 비활성화한다.
   const reducedMotion = useReducedMotion();
+  // 멀티미디어 업로드 토스트(#25c6969c) — UploadDropzone 에서 검증 실패/네트워크 오류를
+  // 사용자 친화 메시지로 고지한다. ToastProvider 는 AppRoot 가 감싸므로 본 훅이 안전.
+  const mediaToast = useToast();
   const [gameState, setGameState] = useState<GameState>({ projects: [], agents: [], files: [], dependencies: [] });
   const [tasks, setTasks] = useState<Task[]>([]);
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -2152,6 +2158,46 @@ function App() {
               <MediaPipelinePanel
                 projectId={selectedProjectId}
                 onAttachmentsChange={setMediaChatAttachments}
+              />
+            </div>
+            {/*
+              멀티미디어 드롭존(#25c6969c) — 드래그&드롭·클릭 선택 두 경로를 모두 지원.
+              프로젝트 미선택 시 disabled 로 잠그고 힌트 문구로 안내. 업로드 성공은
+              MediaPipelinePanel 과 축을 공유하지 않고 토스트로만 고지 — 상위 상태의
+              단일 출처는 MediaPipelinePanel 이 소유한다(이중 기록 회피).
+            */}
+            <div className="mt-3">
+              <UploadDropzone
+                disabled={!selectedProjectId}
+                hint={!selectedProjectId ? '프로젝트를 먼저 선택하세요.' : undefined}
+                onFilesAccepted={async (files: File[]) => {
+                  if (!selectedProjectId) return;
+                  for (const file of files) {
+                    try {
+                      const preview = await loadMediaFile(file, { projectId: selectedProjectId });
+                      mediaToast.push({
+                        variant: 'success',
+                        title: `"${preview.name}" 업로드 완료`,
+                        description: `${preview.kind.toUpperCase()} · ${Math.max(1, Math.round(preview.sizeBytes / 1024))}KB`,
+                      });
+                    } catch (err) {
+                      const msg = mapUnknownError(err);
+                      mediaToast.push(messageToToastInput(msg, {
+                        onRetryNow: () => { void (async () => {
+                          try {
+                            const retryPreview = await loadMediaFile(file, { projectId: selectedProjectId });
+                            mediaToast.push({
+                              variant: 'success',
+                              title: `"${retryPreview.name}" 업로드 완료`,
+                            });
+                          } catch (retryErr) {
+                            mediaToast.push(messageToToastInput(mapUnknownError(retryErr)));
+                          }
+                        })(); },
+                      }));
+                    }
+                  }
+                }}
               />
             </div>
           </div>
