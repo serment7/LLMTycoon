@@ -143,6 +143,26 @@ function coerceBranchStrategy(value: unknown): BranchStrategy {
   return PROJECT_OPTION_DEFAULTS.branchStrategy;
 }
 
+// 같은 이유로 "비어있지 않은 문자열" 을 강제하는 필드도 로드 경계에서 한 번 더
+// 깎는다. 쓰기 경로(updateProjectOptionsSchema) 가 이미 trim·비어있음 거부를
+// 수행하지만, 과거에 다른 경로(직접 DB 수정·임포트)로 들어와 빈 문자열·비문자가
+// 남아 있으면 UI 의 입력란이 "값은 있는데 비어 보이는" 상태로 빠져 사용자가
+// 의도치 않은 기본값을 다시 저장하게 된다. trim 후 비어있으면 fallback 으로 폴백.
+function coerceNonEmptyString(value: unknown, fallback: string): string {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed) return trimmed;
+  }
+  return fallback;
+}
+
+// boolean 도 동일한 이유로 방어한다. 1/0 같은 숫자 또는 "true"/"false" 같은 문자열
+// 이 들어오면 ?? 연산자는 통과시켜 UI 체크박스의 controlled state 가 깨진다.
+// 엄격하게 boolean 만 받고 그 외엔 기본값으로 폴백.
+function coerceBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
 export function projectOptionsView(
   source: Partial<ProjectOptionsUpdate> & {
     autoDevEnabled?: boolean;
@@ -159,19 +179,31 @@ export function projectOptionsView(
     currentAutoBranch?: string;
   },
 ): ProjectOptionsView {
+  const settingsJsonValue = source.settingsJson;
+  const settingsJson = settingsJsonValue
+    && typeof settingsJsonValue === 'object'
+    && !Array.isArray(settingsJsonValue)
+      ? settingsJsonValue
+      : { ...PROJECT_OPTION_DEFAULTS.settingsJson };
   return {
-    autoDevEnabled: source.autoDevEnabled ?? PROJECT_OPTION_DEFAULTS.autoDevEnabled,
-    autoCommitEnabled: source.autoCommitEnabled ?? PROJECT_OPTION_DEFAULTS.autoCommitEnabled,
-    autoPushEnabled: source.autoPushEnabled ?? PROJECT_OPTION_DEFAULTS.autoPushEnabled,
-    defaultBranch: source.defaultBranch ?? PROJECT_OPTION_DEFAULTS.defaultBranch,
-    gitRemoteUrl: source.gitRemoteUrl || undefined,
-    sharedGoalId: source.sharedGoalId || undefined,
-    settingsJson: source.settingsJson ?? { ...PROJECT_OPTION_DEFAULTS.settingsJson },
+    autoDevEnabled: coerceBoolean(source.autoDevEnabled, PROJECT_OPTION_DEFAULTS.autoDevEnabled),
+    autoCommitEnabled: coerceBoolean(source.autoCommitEnabled, PROJECT_OPTION_DEFAULTS.autoCommitEnabled),
+    autoPushEnabled: coerceBoolean(source.autoPushEnabled, PROJECT_OPTION_DEFAULTS.autoPushEnabled),
+    defaultBranch: coerceNonEmptyString(source.defaultBranch, PROJECT_OPTION_DEFAULTS.defaultBranch),
+    gitRemoteUrl: typeof source.gitRemoteUrl === 'string' && source.gitRemoteUrl.trim()
+      ? source.gitRemoteUrl.trim()
+      : undefined,
+    sharedGoalId: typeof source.sharedGoalId === 'string' && source.sharedGoalId.trim()
+      ? source.sharedGoalId.trim()
+      : undefined,
+    settingsJson,
     branchStrategy: coerceBranchStrategy(source.branchStrategy),
-    fixedBranchName: source.fixedBranchName ?? PROJECT_OPTION_DEFAULTS.fixedBranchName,
-    branchNamePattern: source.branchNamePattern ?? PROJECT_OPTION_DEFAULTS.branchNamePattern,
-    autoMergeToMain: source.autoMergeToMain ?? PROJECT_OPTION_DEFAULTS.autoMergeToMain,
-    currentAutoBranch: source.currentAutoBranch || undefined,
+    fixedBranchName: coerceNonEmptyString(source.fixedBranchName, PROJECT_OPTION_DEFAULTS.fixedBranchName),
+    branchNamePattern: coerceNonEmptyString(source.branchNamePattern, PROJECT_OPTION_DEFAULTS.branchNamePattern),
+    autoMergeToMain: coerceBoolean(source.autoMergeToMain, PROJECT_OPTION_DEFAULTS.autoMergeToMain),
+    currentAutoBranch: typeof source.currentAutoBranch === 'string' && source.currentAutoBranch.trim()
+      ? source.currentAutoBranch.trim()
+      : undefined,
   };
 }
 

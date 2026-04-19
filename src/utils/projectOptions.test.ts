@@ -134,3 +134,80 @@ test('body 가 객체가 아니면 즉시 거부', () => {
   assert.throws(() => updateProjectOptionsSchema([]), ProjectOptionsValidationError);
   assert.throws(() => updateProjectOptionsSchema('x'), ProjectOptionsValidationError);
 });
+
+// 로드 경로 방어(#설계 #b8defbe0) — DB 직접 편집·구 스키마 잔존·다른 서비스 이식
+// 등으로 잘못된 타입/공백 문자열이 저장돼 있을 때, projectOptionsView 가
+// PROJECT_OPTION_DEFAULTS 로 폴백해 UI 패널이 "값은 있는데 비어 보이는" 상태에
+// 빠지지 않도록 잠근다. 쓰기 경로(updateProjectOptionsSchema) 가 이미 강제하지만
+// 과거 데이터에 대한 안전망이다.
+test('projectOptionsView 는 비-boolean 토글값을 기본값으로 폴백한다', () => {
+  const view = projectOptionsView({
+    autoDevEnabled: 1 as unknown as boolean,
+    autoCommitEnabled: 'true' as unknown as boolean,
+    autoPushEnabled: null as unknown as boolean,
+    autoMergeToMain: 0 as unknown as boolean,
+  });
+  assert.equal(view.autoDevEnabled, false);
+  assert.equal(view.autoCommitEnabled, false);
+  assert.equal(view.autoPushEnabled, false);
+  assert.equal(view.autoMergeToMain, false);
+});
+
+test('projectOptionsView 는 공백 문자열·비문자 defaultBranch 를 기본값으로 폴백한다', () => {
+  const view = projectOptionsView({
+    defaultBranch: '   ' as unknown as string,
+  });
+  assert.equal(view.defaultBranch, 'main');
+  const view2 = projectOptionsView({
+    defaultBranch: 42 as unknown as string,
+  });
+  assert.equal(view2.defaultBranch, 'main');
+});
+
+test('projectOptionsView 는 공백 fixedBranchName/branchNamePattern 을 기본값으로 폴백한다', () => {
+  const view = projectOptionsView({
+    fixedBranchName: '' as unknown as string,
+    branchNamePattern: '   ' as unknown as string,
+  });
+  assert.equal(view.fixedBranchName, 'auto/dev');
+  assert.equal(view.branchNamePattern, 'auto/{date}-{shortId}');
+});
+
+test('projectOptionsView 는 비-객체 settingsJson 을 빈 객체로 폴백한다', () => {
+  const view = projectOptionsView({
+    settingsJson: 'corrupt' as unknown as Record<string, unknown>,
+  });
+  assert.deepEqual(view.settingsJson, {});
+  const view2 = projectOptionsView({
+    settingsJson: [1, 2, 3] as unknown as Record<string, unknown>,
+  });
+  assert.deepEqual(view2.settingsJson, {});
+});
+
+test('projectOptionsView 는 공백/비문자 gitRemoteUrl/sharedGoalId/currentAutoBranch 를 undefined 로 만든다', () => {
+  const view = projectOptionsView({
+    gitRemoteUrl: '   ' as unknown as string,
+    sharedGoalId: 7 as unknown as string,
+    currentAutoBranch: '' as unknown as string,
+  });
+  assert.equal(view.gitRemoteUrl, undefined);
+  assert.equal(view.sharedGoalId, undefined);
+  assert.equal(view.currentAutoBranch, undefined);
+});
+
+test('projectOptionsView 는 합법적 문자열 필드를 trim 한 결과로 노출한다', () => {
+  const view = projectOptionsView({
+    defaultBranch: '  release  ' as unknown as string,
+    fixedBranchName: '  auto/main  ' as unknown as string,
+    branchNamePattern: '  auto/{slug}  ' as unknown as string,
+    gitRemoteUrl: '  https://example/repo.git  ' as unknown as string,
+    sharedGoalId: '  goal-1  ' as unknown as string,
+    currentAutoBranch: '  auto/2026-04-19-deadbee  ' as unknown as string,
+  });
+  assert.equal(view.defaultBranch, 'release');
+  assert.equal(view.fixedBranchName, 'auto/main');
+  assert.equal(view.branchNamePattern, 'auto/{slug}');
+  assert.equal(view.gitRemoteUrl, 'https://example/repo.git');
+  assert.equal(view.sharedGoalId, 'goal-1');
+  assert.equal(view.currentAutoBranch, 'auto/2026-04-19-deadbee');
+});

@@ -16,26 +16,18 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ProjectOptionsUpdate } from '../types';
+import type { ProjectOptionsView } from './projectOptions';
 
-export interface ProjectOptions {
-  autoDevEnabled: boolean;
-  autoCommitEnabled: boolean;
-  autoPushEnabled: boolean;
-  defaultBranch: string;
-  gitRemoteUrl?: string;
-  sharedGoalId?: string;
-  settingsJson: Record<string, unknown>;
-}
+// 훅이 다루는 "현재 옵션" 의 형태는 서버 GET /api/projects/:id/options 의 응답 ==
+// projectOptionsView 가 만들어 내는 모양과 1:1 이다. 두 곳에서 따로 선언하면
+// branchStrategy 같은 신규 필드를 한쪽만 추가했을 때 UI 가 타입으로 접근하지
+// 못하는 회귀가 발생한다. (#설계 #b8defbe0) 단일 정의를 재내보내 정합성을 잠근다.
+export type ProjectOptions = ProjectOptionsView;
 
-export interface ProjectOptionsUpdateInput {
-  autoDevEnabled?: boolean;
-  autoCommitEnabled?: boolean;
-  autoPushEnabled?: boolean;
-  defaultBranch?: string;
-  gitRemoteUrl?: string | null;
-  sharedGoalId?: string | null;
-  settingsJson?: Record<string, unknown>;
-}
+// PATCH 입력도 동일한 이유로 types.ts 의 카노니컬 정의를 재내보낸다. null 을 통한
+// "해제" 시맨틱을 그대로 살리기 위해 ProjectOptionsUpdate 를 그대로 노출한다.
+export type ProjectOptionsUpdateInput = ProjectOptionsUpdate;
 
 export interface UseProjectOptionsState {
   data: ProjectOptions | null;

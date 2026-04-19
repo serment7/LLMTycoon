@@ -381,3 +381,148 @@ test('라운드트립 — PATCH 응답과 동일 시점 GET 응답이 완전히 
   const got = simulateGet(db);
   assert.deepEqual(patched.body, got, 'PATCH 응답과 GET 응답이 어긋나면 UI 가 두 값 사이에서 깜빡인다');
 });
+
+// ---------------------------------------------------------------------------
+// S5 — 원자성 역방향. 혼합 페이로드(유효 필드 + 잘못된 보조필드) 가 400 으로
+// 튕길 때, 앞서 통과한 유효 필드(예: branchStrategy) 가 조용히 DB 에 새지
+// 않아야 한다. updateProjectOptionsSchema 는 순차적으로 $set 을 쌓다가 중간에
+// throw 하므로, 호출부가 $set 을 부분 적용하면 "에러를 돌려줬는데 저장은 됐다"
+// 는 UI 부조화 회귀가 발생한다.
+// ---------------------------------------------------------------------------
+
+test('S5 — 혼합 페이로드(유효 branchStrategy + 빈 fixedBranchName) 는 전체 400, DB 는 오염되지 않는다', () => {
+  const db = createDb();
+  const res = simulatePatch(db, { branchStrategy: PLAN_A, fixedBranchName: '' });
+  assert.equal(res.status, 400, '보조필드가 잘못됐을 때 요청 전체가 거부되어야 한다');
+
+  const row = db.projects.get('P');
+  assert.ok(row, 'row 자체가 사라지면 안 된다');
+  assert.ok(!('branchStrategy' in (row ?? {})),
+    'branchStrategy 가 새서 저장되면 "에러인데 값이 바뀌었다" 는 회귀(원자성 위반) 발생');
+  assert.ok(!('fixedBranchName' in (row ?? {})),
+    'fixedBranchName 도 남지 않아야 한다');
+});
+
+test('S5 — 역순(잘못된 필드가 먼저, 유효 필드가 뒤) 페이로드도 동일하게 전체 400 으로 잠근다', () => {
+  // 객체 키 순회 순서는 보통 삽입 순서이므로, 순서가 뒤집힌 경우에도 동일
+  // 거부가 되는지 한 번 더 방어한다. 스키마 검증기가 키 순서에 의존하지
+  // 않음을 계약으로 잠근다.
+  const db = createDb();
+  const res = simulatePatch(db, { fixedBranchName: '', branchStrategy: PLAN_A });
+  assert.equal(res.status, 400);
+  const row = db.projects.get('P');
+  assert.ok(row && !('branchStrategy' in row),
+    '키 순서가 다른 페이로드에서도 branchStrategy 가 새면 안 된다');
+});
+
+// ---------------------------------------------------------------------------
+// S6 — 다중 환승 연쇄. 네 전략을 돌아가며 순회했을 때 최종 값이 마지막
+// PATCH 와 일치해야 한다. 한 번 환승(S2) 은 잘 되어도 중간 전략에 잔존하는
+// 보조 필드가 다음 환승에서 재활성화되는 회귀를 종종 낳는다.
+// ---------------------------------------------------------------------------
+
+test('S6 — per-commit → per-task → per-session → fixed-branch → per-commit 연쇄 후 최종값이 per-commit 으로 수렴한다', () => {
+  const db = createDb();
+  const chain: BranchStrategy[] = ['per-commit', 'per-task', 'per-session', 'fixed-branch', 'per-commit'];
+  for (const next of chain) {
+    const patch: Record<string, unknown> = { branchStrategy: next };
+    // fixed-branch 는 보조 필드가 함께 있어야 의미가 있어 같이 보낸다.
+    if (next === 'fixed-branch') patch.fixedBranchName = 'release/stage';
+    const res = simulatePatch(db, patch);
+    assert.equal(res.status, 200, `${next} 로의 환승이 실패했다`);
+    assert.equal(simulateGet(db).branchStrategy, next,
+      `${next} 로의 환승이 즉시 로드에 반영되지 않음`);
+  }
+  // 최종: per-commit 이어야 한다.
+  assert.equal(simulateGet(db).branchStrategy, 'per-commit',
+    '연쇄 환승 최종값이 마지막 PATCH 값(per-commit)과 다르면 중간 전략이 상태를 오염시키는 회귀');
+  // fixed-branch 경유의 fixedBranchName 은 마지막 PATCH 가 건드리지 않았으므로
+  // 여전히 보존되어 있어야 한다(부분 $set 계약). 사용자가 다시 fixed-branch 로
+  // 돌아갈 때 이전에 입력한 이름을 복구할 수 있어야 한다.
+  assert.equal(simulateGet(db).fixedBranchName, 'release/stage',
+    '연쇄 환승 중 거쳐간 보조 필드가 삭제되면 사용자가 이전 입력을 복구할 수 없다');
+});
+
+// ---------------------------------------------------------------------------
+// 라운드트립 — autoMergeToMain 의 falsy 명시값(false) 이 저장/로드 왕복에서
+// 보존된다. projectOptionsView 는 `source.autoMergeToMain ??` 로 폴백하는데,
+// `??` 는 false 를 기본값으로 덮지 않지만, 과거에 `||` 로 바뀌거나 다른 필드와
+// 묶여 리팩터링될 때 이 차이가 조용히 사라지는 회귀를 사전에 차단한다.
+// ---------------------------------------------------------------------------
+
+test('라운드트립 — autoMergeToMain=false 를 명시 저장해도 왕복에서 false 로 유지된다', () => {
+  const db = createDb();
+  const saved = simulatePatch(db, { autoMergeToMain: false });
+  assert.equal(saved.status, 200);
+  const got = simulateGet(db);
+  assert.equal(got.autoMergeToMain, false,
+    'false 명시값이 `||` 폴백 등으로 기본값으로 덮이면, "자동 병합 해제" 의도가 사용자 모르게 유지됐다고 표시되거나 풀려 버린다');
+});
+
+// ---------------------------------------------------------------------------
+// 라운드트립 — 입력 좌우 공백은 저장 단계에서 trim 되어 GET 에서도 trim 된
+// 값으로 복원된다. 서버 쪽 trim 은 있지만 "저장 후 로드" 까지 한 줄로 잠긴
+// 계약이 없어, 리팩터링 때 trim 이 빠지면 사용자가 입력한 "  release/x  "
+// 같은 값이 현업 브랜치 이름으로 그대로 쓰이는 사고가 난다.
+// ---------------------------------------------------------------------------
+
+test('라운드트립 — fixedBranchName 의 좌우 공백은 저장·로드 왕복에서 제거된 형태로 복원된다', () => {
+  const db = createDb();
+  const saved = simulatePatch(db, {
+    branchStrategy: SINGLE_MODE,
+    fixedBranchName: '  release/trimmed  ',
+  });
+  assert.equal(saved.status, 200);
+  if (saved.status !== 200) throw new Error('unreachable');
+  assert.equal(saved.body.fixedBranchName, 'release/trimmed',
+    '저장 응답에서 공백이 이미 제거돼 있어야 한다 (서버 trim 계약)');
+
+  const got = simulateGet(db);
+  assert.equal(got.fixedBranchName, 'release/trimmed',
+    '새로고침 후에도 trim 된 값이 유지되어야 한다 — DB 에 공백 포함 값이 저장되면 안 된다');
+});
+
+test('라운드트립 — branchNamePattern 의 좌우 공백·탭도 저장·로드 왕복에서 제거되어 복원된다', () => {
+  // fixedBranchName 과 짝을 이루는 보조 필드 — branchNamePattern 도 실제 브랜치
+  // 이름 생성에 그대로 조합되므로, 앞뒤 공백/탭이 DB 에 남으면 refname 오류로
+  // `git checkout -B` 단계에서 자동화 파이프라인이 터진다. trim 계약이 한 필드
+  // 에만 국한되지 않고 "보조 필드 전반" 에 동일하게 적용되는지 잠근다.
+  const db = createDb();
+  const saved = simulatePatch(db, {
+    branchStrategy: PLAN_A,
+    branchNamePattern: '\tauto/{ticket}-{shortId}  ',
+  });
+  assert.equal(saved.status, 200);
+  if (saved.status !== 200) throw new Error('unreachable');
+  assert.equal(saved.body.branchNamePattern, 'auto/{ticket}-{shortId}',
+    '저장 응답에서 branchNamePattern 의 공백이 이미 제거돼 있어야 한다');
+
+  const got = simulateGet(db);
+  assert.equal(got.branchNamePattern, 'auto/{ticket}-{shortId}',
+    'branchNamePattern 에 공백이 남은 채로 GET 되면 git refname 포맷 오류 회귀');
+});
+
+// ---------------------------------------------------------------------------
+// S4 보강 — 저장 경로의 "엄격 매칭" 을 명시적으로 잠근다.
+//
+// S4-b 는 로드 경로가 관대하게 trim · 이상값 폴백 하는 계약을 잠갔고, S4-a 는
+// 완전히 낯선 문자열('legacy-v0') 과 비문자형을 잠갔다. 그러나 "유효 열거값에
+// 공백/개행/대소문자 오염이 묻은" 근사 케이스는 양 테스트 사이에 빠져 있었다.
+// 저장 경로가 이런 입력도 트림·정규화해 통과시키면, 클라이언트 버그로 전송되는
+// "per-task\n" 이 DB 에 정상 저장돼 조용히 퍼진다. 엄격 매칭이 유지되는지 잠금.
+// ---------------------------------------------------------------------------
+
+test('S4-a — 저장 경로는 branchStrategy 를 trim/대소문자 무시 없이 엄격 매칭한다(근사 변형은 모두 400)', () => {
+  // 로드 경로(coerceBranchStrategy)는 trim 후 매칭해 과거에 잘못 저장된 값을
+  // 구제한다. 반면 저장 경로는 클라 측 버그(개행·탭·케이스 오타)를 통과시키면
+  // 안 된다 — 즉시 400 으로 돌려줘야 사용자가 재시도 시 원인을 알 수 있다.
+  for (const fuzzy of ['per-task ', ' per-task', 'per-task\n', 'PER-TASK', 'Per-Task', 'per_task']) {
+    const db = createDb();
+    const res = simulatePatch(db, { branchStrategy: fuzzy });
+    assert.equal(res.status, 400,
+      `"${fuzzy.replace(/\s/g, '·')}" 는 엄격 매칭에서 400 이어야 한다 (저장 경로는 관대하지 않다)`);
+    const row = db.projects.get('P');
+    assert.ok(row && !('branchStrategy' in row),
+      `"${fuzzy.replace(/\s/g, '·')}" 거부 시 DB 에 어떤 근사값도 새지 않아야 한다`);
+  }
+});
