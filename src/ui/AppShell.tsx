@@ -26,6 +26,8 @@ import {
   readOnboardingCompleted,
   type OnboardingStorage,
 } from './onboarding/onboardingPrefs';
+import { I18nProvider, type Locale } from '../i18n';
+import { LanguageToggle } from './LanguageToggle';
 
 export interface AppShellProps {
   readonly children?: React.ReactNode;
@@ -35,6 +37,10 @@ export interface AppShellProps {
   readonly forceOnboarding?: boolean;
   /** 인디케이터 데이터 소스. 미주입 시 인디케이터는 정적 0 스냅샷으로 렌더. */
   readonly usageSource?: UsageSource;
+  /** 부팅 시 서버 세션에서 받아온 언어 설정. I18nProvider 가 마운트 직후 반영. */
+  readonly initialLocale?: Locale;
+  /** 언어 선택 → 서버 세션 동기화 훅. */
+  readonly onLocalePersist?: (locale: Locale) => void;
 }
 
 export function AppShell(props: AppShellProps): React.ReactElement {
@@ -53,26 +59,32 @@ export function AppShell(props: AppShellProps): React.ReactElement {
   }, []);
 
   return (
-    <ToastProvider>
-      <div className="app-shell">
-        <header className="app-shell-header" style={{ position: 'relative', zIndex: 30 }}>
-          <TokenUsageIndicator usageSource={props.usageSource} />
-        </header>
-        <main className="app-shell-main" aria-hidden={showTour || undefined}>
-          {props.children}
-        </main>
-        {showTour && (
-          <div
-            className="onboarding-overlay"
-            style={{ position: 'fixed', inset: 0, zIndex: 60 }}
+    <I18nProvider initialLocale={props.initialLocale}>
+      <ToastProvider>
+        <div className="app-shell">
+          <header
+            className="app-shell-header"
+            style={{ position: 'relative', zIndex: 30, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
           >
-            <OnboardingTour
-              onFinished={onFinished}
-              storage={props.storage}
-            />
-          </div>
-        )}
-      </div>
-    </ToastProvider>
+            <TokenUsageIndicator usageSource={props.usageSource} />
+            <LanguageToggle onPersist={props.onLocalePersist} />
+          </header>
+          <main className="app-shell-main" aria-hidden={showTour || undefined}>
+            {props.children}
+          </main>
+          {showTour && (
+            <div
+              className="onboarding-overlay"
+              style={{ position: 'fixed', inset: 0, zIndex: 60 }}
+            >
+              <OnboardingTour
+                onFinished={onFinished}
+                storage={props.storage}
+              />
+            </div>
+          )}
+        </div>
+      </ToastProvider>
+    </I18nProvider>
   );
 }

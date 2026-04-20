@@ -66,7 +66,7 @@ export interface SessionSnapshot {
 // ────────────────────────────────────────────────────────────────────────────
 
 export type SessionDiffKey =
-  | 'history' | 'compactedSummary' | 'budget' | 'mcp' | 'compactions' | 'updatedAt';
+  | 'history' | 'compactedSummary' | 'budget' | 'mcp' | 'compactions' | 'languagePreference' | 'updatedAt';
 
 /** 얕은 diff 결과 — 내부 가변 객체로 선언해 원본 readonly 제약 없이 조립할 수 있다. */
 export interface SessionPatch {
@@ -75,6 +75,7 @@ export interface SessionPatch {
   budget?: SessionBudgetSnapshot;
   mcp?: SessionMcpSnapshot | null;
   compactions?: number;
+  languagePreference?: SessionLanguagePreference | null;
   updatedAt?: string;
 }
 
@@ -104,6 +105,7 @@ export function shallowDiffSnapshot(
         budget: next.budget,
         mcp: next.mcp,
         compactions: next.compactions,
+        languagePreference: next.languagePreference,
         updatedAt: next.updatedAt,
       },
     };
@@ -115,6 +117,7 @@ export function shallowDiffSnapshot(
   if (changed('budget')) patch.budget = next.budget;
   if (changed('mcp')) patch.mcp = next.mcp;
   if (changed('compactions')) patch.compactions = next.compactions;
+  if (changed('languagePreference')) patch.languagePreference = next.languagePreference;
   if (Object.keys(patch).length > 0) patch.updatedAt = next.updatedAt;
   return { sessionId: next.sessionId, userId: next.userId, patch };
 }
@@ -134,6 +137,7 @@ export interface BuildSnapshotInput {
   readonly budget: BudgetSession;
   readonly mcp?: SessionMcpSnapshot | null;
   readonly compactions?: number;
+  readonly languagePreference?: SessionLanguagePreference | null;
   readonly now?: () => string;
 }
 
@@ -146,6 +150,7 @@ export function buildSessionSnapshot(input: BuildSnapshotInput): SessionSnapshot
     updatedAt: nowIso,
     history: input.budget.history,
     compactedSummary: input.budget.compactedSummary,
+    languagePreference: input.languagePreference ?? null,
     budget: {
       inputTokens: t.inputTokens,
       outputTokens: t.outputTokens,
@@ -190,6 +195,9 @@ export function createInMemorySessionStore(): SessionStoreAdapter {
             mcp: 'mcp' in payload.patch ? payload.patch.mcp ?? null : existing.mcp,
             compactedSummary: payload.patch.compactedSummary ?? existing.compactedSummary,
             compactions: payload.patch.compactions ?? existing.compactions,
+            languagePreference: 'languagePreference' in payload.patch
+              ? payload.patch.languagePreference ?? null
+              : existing.languagePreference,
             updatedAt: payload.patch.updatedAt ?? existing.updatedAt,
             schemaVersion: 1,
           }
@@ -266,6 +274,9 @@ export function createFileSessionStore(
             mcp: 'mcp' in payload.patch ? payload.patch.mcp ?? null : existing.mcp,
             compactedSummary: payload.patch.compactedSummary ?? existing.compactedSummary,
             compactions: payload.patch.compactions ?? existing.compactions,
+            languagePreference: 'languagePreference' in payload.patch
+              ? payload.patch.languagePreference ?? null
+              : existing.languagePreference,
             updatedAt: payload.patch.updatedAt ?? existing.updatedAt,
             schemaVersion: 1,
           }
@@ -294,6 +305,12 @@ export interface SessionPersistor {
   onRecordUsage(budget: BudgetSession, mcp?: SessionMcpSnapshot | null): Promise<boolean>;
   onCompact(budget: BudgetSession, mcp?: SessionMcpSnapshot | null): Promise<boolean>;
   onMcpTransportChanged(budget: BudgetSession, mcp: SessionMcpSnapshot | null): Promise<boolean>;
+  /** 언어 설정 변경 시 저장(서버 동기화). 지시 #8de1a1c8. */
+  onLanguagePreferenceChanged(
+    budget: BudgetSession,
+    lang: SessionLanguagePreference | null,
+    mcp?: SessionMcpSnapshot | null,
+  ): Promise<boolean>;
   /** 마지막으로 저장된 스냅샷(복원 경로에서 사용). */
   peek(): SessionSnapshot | null;
 }
@@ -308,8 +325,13 @@ export interface CreatePersistorInput {
 export function createSessionPersistor(input: CreatePersistorInput): SessionPersistor {
   let previous: SessionSnapshot | null = null;
   let compactions = 0;
+  let languagePreference: SessionLanguagePreference | null = null;
 
-  async function write(reason: 'usage' | 'compact' | 'mcp', budget: BudgetSession, mcp: SessionMcpSnapshot | null): Promise<boolean> {
+  async function write(
+    reason: 'usage' | 'compact' | 'mcp' | 'language',
+    budget: BudgetSession,
+    mcp: SessionMcpSnapshot | null,
+  ): Promise<boolean> {
     if (reason === 'compact') compactions += 1;
     const snapshot = buildSessionSnapshot({
       sessionId: input.sessionId,
@@ -317,6 +339,7 @@ export function createSessionPersistor(input: CreatePersistorInput): SessionPers
       budget,
       mcp,
       compactions,
+      languagePreference,
       now: input.now,
     });
     const payload = shallowDiffSnapshot(previous, snapshot);
@@ -330,6 +353,10 @@ export function createSessionPersistor(input: CreatePersistorInput): SessionPers
     async onRecordUsage(budget, mcp) { return write('usage', budget, mcp ?? null); },
     async onCompact(budget, mcp) { return write('compact', budget, mcp ?? null); },
     async onMcpTransportChanged(budget, mcp) { return write('mcp', budget, mcp); },
+    async onLanguagePreferenceChanged(budget, lang, mcp) {
+      languagePreference = lang;
+      return write('language', budget, mcp ?? null);
+    },
     peek() { return previous; },
   };
 }
@@ -451,6 +478,11 @@ export async function handoffToNewSession(
 
   // (3) 새 세션 스냅샷 — 히스토리 비우고, compactedSummary 에 인계 요약만 남긴다.
   //     budget 총계는 0 으로 초기화(새 세션은 깨끗한 상태에서 시작).
+  // 이전 세션의 languagePreference 를 adapter 에서 읽어 새 세션으로 승계. 사용자가
+  // 세션 전환 시 언어가 리셋되지 않도록 한다(지시 #8de1a1c8 부팅 복원 대칭).
+  const prevSnapshot = await input.adapter.get(input.userId, input.previousSessionId);
+  const inheritedLang = prevSnapshot?.languagePreference ?? null;
+
   const snapshot: SessionSnapshot = {
     sessionId: newSessionId,
     userId: input.userId,
@@ -465,6 +497,7 @@ export async function handoffToNewSession(
     },
     mcp: input.mcp ?? null,
     compactions: 0,
+    languagePreference: inheritedLang,
     schemaVersion: 1,
   };
 
@@ -472,6 +505,7 @@ export async function handoffToNewSession(
     { sessionId: snapshot.sessionId, userId: snapshot.userId, patch: {
       history: snapshot.history, compactedSummary: snapshot.compactedSummary,
       budget: snapshot.budget, mcp: snapshot.mcp, compactions: snapshot.compactions,
+      languagePreference: snapshot.languagePreference,
       updatedAt: snapshot.updatedAt,
     } },
     snapshot,
