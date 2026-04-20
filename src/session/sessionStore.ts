@@ -330,7 +330,11 @@ export function createSessionPersistor(input: CreatePersistorInput): SessionPers
 // 호출자(에이전트 워커) 가 이 결과로 새 세션을 시작하면 끊김 없이 이어서 진행된다.
 // ────────────────────────────────────────────────────────────────────────────
 
-import { createBudgetSession } from '../llm/tokenBudget';
+import {
+  createBudgetSession,
+  applySoftDegrade,
+  type ConversationTurn as _ConversationTurn,
+} from '../llm/tokenBudget';
 
 export function restoreBudgetSessionFromSnapshot(snapshot: SessionSnapshot): BudgetSession {
   const base = createBudgetSession(snapshot.sessionId);
@@ -349,5 +353,127 @@ export function restoreBudgetSessionFromSnapshot(snapshot: SessionSnapshot): Bud
       updatedAt: snapshot.budget.updatedAt,
     },
     lastUsageAt: snapshot.budget.updatedAt,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 지시 #29d56176 — hard 단계 핸드오프
+//
+// 토큰 한도를 넘은 세션은 더 호출해도 경제적이지 않다. 그렇다고 사용자에게 "세션을
+// 끝내세요" 라고 문을 닫아 버리는 것도 "끊김 없는 개발" 메타 목표와 어긋난다.
+// 본 함수는 (a) 현재 세션의 요약을 한 덩어리로 만들고, (b) 새 세션 ID 로 스냅샷을
+// 저장한 뒤, (c) 새 세션의 initialPrompt 를 돌려준다. 상위 UI 는 이 결과를 그대로
+// "세션 이어서 새로 시작" 토스트에 연결하면 된다.
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface HandoffInput {
+  readonly previousSessionId: string;
+  readonly userId: string;
+  readonly budget: BudgetSession;
+  readonly adapter: SessionStoreAdapter;
+  /** 새 세션 ID. 미지정 시 `${prev}-next-<timestamp>`. */
+  readonly newSessionId?: string;
+  readonly mcp?: SessionMcpSnapshot | null;
+  readonly now?: () => string;
+  /** 추가 축약을 한 번 더 거칠지 여부. 기본 true. */
+  readonly applyDegrade?: boolean;
+}
+
+export interface HandoffResult {
+  readonly previousSessionId: string;
+  readonly newSessionId: string;
+  /** 새 세션의 system 영역에 붙일 인계(hand-off) 요약 블록. */
+  readonly initialPrompt: string;
+  /** 요약에 사용된 원본 기준 추정 토큰 수. */
+  readonly sourceTokensEstimated: number;
+  /** 새 세션에 적재된 추정 토큰 수(요약). */
+  readonly carriedTokensEstimated: number;
+  /** 저장된 새 세션 스냅샷. */
+  readonly savedSnapshot: SessionSnapshot;
+}
+
+function estimateTokensFromText(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function composeHandoffPrompt(
+  previousSessionId: string,
+  budget: BudgetSession,
+): string {
+  const lines: string[] = [];
+  lines.push(`[이전 세션 인계 — ${previousSessionId}]`);
+  lines.push(`· 누적 호출 ${budget.totals.callCount}회 · input ${budget.totals.inputTokens.toLocaleString()} · output ${budget.totals.outputTokens.toLocaleString()} · cacheRead ${budget.totals.cacheReadTokens.toLocaleString()}`);
+  if (budget.compactedSummary && budget.compactedSummary.trim()) {
+    lines.push('· 과거 요약:');
+    lines.push(budget.compactedSummary);
+  }
+  if (budget.history.length > 0) {
+    const lastUser = [...budget.history].reverse().find((t) => t.role === 'user');
+    const lastAssistant = [...budget.history].reverse().find((t) => t.role === 'assistant');
+    if (lastUser) lines.push(`· 마지막 질문: ${lastUser.content.slice(0, 200)}`);
+    if (lastAssistant) lines.push(`· 마지막 답변 요지: ${lastAssistant.content.slice(0, 200)}`);
+  }
+  lines.push('[인계 끝 — 본 프롬프트 이후부터 새 세션이 시작됩니다.]');
+  return lines.join('\n');
+}
+
+export async function handoffToNewSession(
+  input: HandoffInput,
+): Promise<HandoffResult> {
+  const now = input.now ?? (() => new Date().toISOString());
+  const newSessionId = input.newSessionId ?? `${input.previousSessionId}-next-${Date.now().toString(36)}`;
+
+  // (1) 원본 추정 토큰 — 압축 요약 + 히스토리 전량 문자수 기준.
+  const sourceText = [
+    input.budget.compactedSummary,
+    ...input.budget.history.map((t) => t.content),
+  ].filter(Boolean).join('\n');
+  const sourceTokens = estimateTokensFromText(sourceText);
+
+  // (2) 인계 프롬프트 조립 — 압축 + applySoftDegrade 로 한 번 더 줄이기.
+  let initialPrompt = composeHandoffPrompt(input.previousSessionId, input.budget);
+  if (input.applyDegrade !== false) {
+    const shrunk = applySoftDegrade({ systemPrompt: initialPrompt });
+    if (shrunk.systemPrompt && shrunk.systemPrompt.length < initialPrompt.length) {
+      initialPrompt = shrunk.systemPrompt;
+    }
+  }
+  const carriedTokens = estimateTokensFromText(initialPrompt);
+
+  // (3) 새 세션 스냅샷 — 히스토리 비우고, compactedSummary 에 인계 요약만 남긴다.
+  //     budget 총계는 0 으로 초기화(새 세션은 깨끗한 상태에서 시작).
+  const snapshot: SessionSnapshot = {
+    sessionId: newSessionId,
+    userId: input.userId,
+    updatedAt: now(),
+    history: [],
+    compactedSummary: initialPrompt,
+    budget: {
+      inputTokens: 0, outputTokens: 0,
+      cacheReadTokens: 0, cacheCreationTokens: 0,
+      callCount: 0, estimatedCostUsd: 0,
+      updatedAt: now(),
+    },
+    mcp: input.mcp ?? null,
+    compactions: 0,
+    schemaVersion: 1,
+  };
+
+  await input.adapter.upsert(
+    { sessionId: snapshot.sessionId, userId: snapshot.userId, patch: {
+      history: snapshot.history, compactedSummary: snapshot.compactedSummary,
+      budget: snapshot.budget, mcp: snapshot.mcp, compactions: snapshot.compactions,
+      updatedAt: snapshot.updatedAt,
+    } },
+    snapshot,
+  );
+
+  return {
+    previousSessionId: input.previousSessionId,
+    newSessionId,
+    initialPrompt,
+    sourceTokensEstimated: sourceTokens,
+    carriedTokensEstimated: carriedTokens,
+    savedSnapshot: snapshot,
   };
 }

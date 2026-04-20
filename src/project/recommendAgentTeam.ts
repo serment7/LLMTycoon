@@ -39,6 +39,8 @@ export interface AgentRecommendation {
   readonly role: AgentRole;
   readonly name: string;
   readonly rationale: string;
+  /** 역할별 핵심 스킬 태그(≤5개). UI 카드에 칩으로 노출 + 서버 persona 에 합쳐 저장. */
+  readonly skills?: readonly string[];
 }
 
 /** 추천 결과 봉투. UI 는 `items` 만 쓰고, `source`/`locale` 은 디버깅/재번역 판정용. */
@@ -214,7 +216,18 @@ export function validateRecommendations(raw: unknown): AgentRecommendation[] {
       if (seenLeader.flag) continue;
       seenLeader.flag = true;
     }
-    out.push({ role: row.role, name: row.name.trim(), rationale: row.rationale.trim() });
+    const skills = Array.isArray(row.skills)
+      ? row.skills
+          .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+          .map((s) => s.trim())
+          .slice(0, 5)
+      : undefined;
+    out.push({
+      role: row.role,
+      name: row.name.trim(),
+      rationale: row.rationale.trim(),
+      ...(skills && skills.length > 0 ? { skills } : {}),
+    });
     if (out.length >= 5) break;
   }
   return out;
@@ -259,6 +272,15 @@ const HEURISTIC_COPY: Record<
   },
 };
 
+/** 역할별 기본 skill 세트 — 휴리스틱 폴백과 서버 응답의 default 를 제공한다. */
+export const DEFAULT_ROLE_SKILLS: Record<AgentRole, readonly string[]> = {
+  Leader: ['planning', 'coordination', 'prioritization'],
+  Developer: ['typescript', 'node', 'react'],
+  Designer: ['ux', 'wireframes', 'design-system'],
+  QA: ['regression', 'accessibility', 'security-testing'],
+  Researcher: ['desk-research', 'benchmarking', 'synthesis'],
+};
+
 /**
  * 휴리스틱 폴백 — description 에 등장하는 키워드로 Developer/QA/Designer/Researcher
  * 를 조건부로 추가한다. Leader 는 고정 1인. 최소 Leader + Developer 2인 구성을 보장.
@@ -271,18 +293,18 @@ export function heuristicTeam(
   const lower = description.toLowerCase();
   const copy = HEURISTIC_COPY[locale];
   const items: AgentRecommendation[] = [
-    { role: 'Leader', name: 'Kai', rationale: copy.Leader },
-    { role: 'Developer', name: 'Dev', rationale: copy.Developer },
+    { role: 'Leader', name: 'Kai', rationale: copy.Leader, skills: DEFAULT_ROLE_SKILLS.Leader },
+    { role: 'Developer', name: 'Dev', rationale: copy.Developer, skills: DEFAULT_ROLE_SKILLS.Developer },
   ];
   const has = (...kws: string[]) => kws.some((k) => lower.includes(k));
   if (has('ui', 'ux', '디자인', '화면', 'screen', 'design')) {
-    items.push({ role: 'Designer', name: 'Dex', rationale: copy.Designer });
+    items.push({ role: 'Designer', name: 'Dex', rationale: copy.Designer, skills: DEFAULT_ROLE_SKILLS.Designer });
   }
   if (has('보안', '테스트', 'qa', '회귀', '검증', 'security', 'test')) {
-    items.push({ role: 'QA', name: 'QA', rationale: copy.QA });
+    items.push({ role: 'QA', name: 'QA', rationale: copy.QA, skills: DEFAULT_ROLE_SKILLS.QA });
   }
   if (has('연구', '조사', 'research', '분석', 'analysis', '시장')) {
-    items.push({ role: 'Researcher', name: 'Riz', rationale: copy.Researcher });
+    items.push({ role: 'Researcher', name: 'Riz', rationale: copy.Researcher, skills: DEFAULT_ROLE_SKILLS.Researcher });
   }
   return items.slice(0, 5);
 }

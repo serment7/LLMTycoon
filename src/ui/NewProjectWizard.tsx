@@ -267,6 +267,14 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
         <small id="npw-describe-hint">
           {t('project.newProjectWizard.describe.hint')}
         </small>
+        <button
+          type="button"
+          className="npw-describe-request"
+          onClick={() => triggerRecommendation(state.description)}
+          disabled={state.description.trim().length === 0 || state.status === 'loading'}
+        >
+          {t('project.newProjectWizard.describe.requestButton')}
+        </button>
       </label>
 
       {state.status === 'loading' && (
@@ -322,6 +330,15 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
                           s.strong ? <strong key={si}>{s.text}</strong> : <span key={si}>{s.text}</span>,
                         )}
                       </p>
+                      {rec.skills && rec.skills.length > 0 && (
+                        <ul className="npw-skills" aria-label="skills">
+                          {rec.skills.map((skill) => (
+                            <li key={skill} className="npw-skill-chip">
+                              {skill}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   </label>
                 </li>

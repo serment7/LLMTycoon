@@ -29,7 +29,8 @@
       "describe": {
         "label": "Project description",
         "placeholder": "e.g., Payment module hardening — PCI audit + token encryption",
-        "hint": "Describe scope and goals. Recommendations update as you type."
+        "hint": "Describe scope and goals. Recommendations update as you type.",
+        "requestButton": "Request recommendation"
       },
       "review": {
         "title": "Recommended team",
