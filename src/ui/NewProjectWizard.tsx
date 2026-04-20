@@ -20,8 +20,11 @@ import {
 } from '../project/api';
 import {
   recommendAgentTeam,
+  translateRecommendations,
   type AgentRecommendation,
   type AgentTeamRecommendation,
+  type RecommendationLocale,
+  type TranslateRecommendationsOptions,
 } from '../project/recommendAgentTeam';
 import {
   createDebouncedRecommender,
@@ -44,11 +47,11 @@ function interpolate(template: string, params: Record<string, string | number>):
   );
 }
 
-function fallbackFetcher(): RecommenderFetcher {
-  // 기본 fetcher — invoker 없이 recommendAgentTeam 호출(휴리스틱 폴백).
+function fallbackFetcher(locale: RecommendationLocale): RecommenderFetcher {
+  // 기본 fetcher — invoker 없이 recommendAgentTeam 호출(휴리스틱 폴백). locale 은 UI 에서 전달.
   return async ({ description, signal }) => {
     if (signal?.aborted) throw new Error('aborted');
-    return recommendAgentTeam(description);
+    return recommendAgentTeam(description, { locale });
   };
 }
 
@@ -68,6 +71,8 @@ export interface NewProjectWizardProps {
   readonly applyOptions?: ApplyRecommendedTeamOptions;
   /** 테스트 결정성 위해 locale 강제. 미주입 시 useLocale. */
   readonly forceLocale?: Locale;
+  /** 언어 전환 시 재번역을 위임할 translator. 미주입 시 heuristic 번역표로 폴백. */
+  readonly translator?: TranslateRecommendationsOptions['invoker'];
 }
 
 interface WizardState {
@@ -102,8 +107,8 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
     [props.cache],
   );
   const fetcher = useMemo<RecommenderFetcher>(
-    () => props.fetcher ?? fallbackFetcher(),
-    [props.fetcher],
+    () => props.fetcher ?? fallbackFetcher(locale as RecommendationLocale),
+    [props.fetcher, locale],
   );
   const recommenderRef = useRef<DebouncedRecommender | null>(null);
   if (recommenderRef.current === null) {
@@ -119,6 +124,30 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
       recommenderRef.current?.cancel();
     };
   }, []);
+
+  // 언어 전환 → 기존 추천을 버리지 않고 translateRecommendations 로 경량 재번역.
+  // description 자체가 바뀌지 않았는데 locale 만 바뀐 경우에만 발동하며, 결과는
+  // 같은 state.team 슬롯에 덮어쓴다(선택 상태 유지).
+  useEffect(() => {
+    const current = state.team;
+    if (!current) return;
+    if (current.locale === locale) return;
+    let cancelled = false;
+    translateRecommendations(current, locale as RecommendationLocale, {
+      invoker: props.translator,
+    })
+      .then((next) => {
+        if (cancelled) return;
+        setState((prev) => ({ ...prev, team: next }));
+      })
+      .catch(() => {
+        // translateRecommendations 는 fallbackOnError 기본 true 라 실제 도달 어렵지만
+        // 혹시의 경우 원본 유지하고 에러 상태로 가지 않음 — UX 우선.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [locale, props.translator, state.team]);
 
   const triggerRecommendation = useCallback(
     (description: string) => {

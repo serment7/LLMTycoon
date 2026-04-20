@@ -19,6 +19,12 @@
 import { buildCacheableMessages, type CacheableClaudeMessages } from '../server/claudeClient';
 import type { AgentRole } from '../types';
 
+/** i18n 모듈과 동일 Locale 유니언. 순환 의존을 피하려고 로컬로 선언. */
+export type RecommendationLocale = 'en' | 'ko';
+
+/** 기본 locale — 사용자가 명시적으로 선택하지 않은 상태. i18n DEFAULT_LOCALE 과 일치. */
+export const DEFAULT_RECOMMENDATION_LOCALE: RecommendationLocale = 'en';
+
 // ────────────────────────────────────────────────────────────────────────────
 // 공개 스키마 — UI 와 공유. 이후 변경은 디자이너·QA 합의 필요.
 // ────────────────────────────────────────────────────────────────────────────
@@ -27,7 +33,7 @@ import type { AgentRole } from '../types';
  * 단일 추천 카드에 그려질 최소 단위.
  *   · role: 고용 시 `POST /api/agents/hire` 로 그대로 전달할 AgentRole.
  *   · name: 디폴트 카드 제목. 사용자가 수정 가능(시안 §2 카드 편집 영역).
- *   · rationale: "이 역할이 왜 필요한가" 한국어 설명 1문장(시안 §2.2 힌트 박스).
+ *   · rationale: "이 역할이 왜 필요한가" 현재 locale 로 된 한 문장(시안 §2.2 힌트 박스).
  */
 export interface AgentRecommendation {
   readonly role: AgentRole;
@@ -35,11 +41,13 @@ export interface AgentRecommendation {
   readonly rationale: string;
 }
 
-/** 추천 결과 봉투. UI 는 `items` 만 쓰고, `source` 는 디버깅/텔레메트리용. */
+/** 추천 결과 봉투. UI 는 `items` 만 쓰고, `source`/`locale` 은 디버깅/재번역 판정용. */
 export interface AgentTeamRecommendation {
   readonly items: readonly AgentRecommendation[];
-  /** 'heuristic' — 폴백 경로, 'claude' — invoker 성공, 'cache' — 캐시 히트. */
-  readonly source: 'heuristic' | 'claude' | 'cache';
+  /** 'heuristic' — 폴백 경로, 'claude' — invoker 성공, 'cache' — 캐시 히트, 'translated' — translateOnly 경로. */
+  readonly source: 'heuristic' | 'claude' | 'cache' | 'translated';
+  /** 본 items 가 어떤 locale 로 생성되었는지. UI 가 현재 locale 과 비교해 재번역을 판단한다. */
+  readonly locale: RecommendationLocale;
   /** invoker 호출 시 전달된 프롬프트 캐싱 메시지 봉투(디버그 전용). */
   readonly messages?: CacheableClaudeMessages;
 }
@@ -54,6 +62,8 @@ export interface RecommendAgentTeamOptions {
   readonly invoker?: (messages: CacheableClaudeMessages) => Promise<string | object>;
   /** invoker 실패 시에도 예외를 전파하지 않고 휴리스틱으로 폴백할지. 기본 true. */
   readonly fallbackOnError?: boolean;
+  /** 추천 근거/이름 생성 언어. 기본 DEFAULT_RECOMMENDATION_LOCALE. */
+  readonly locale?: RecommendationLocale;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -70,44 +80,111 @@ export const ROLE_CATALOG: readonly AgentRole[] = [
 ];
 
 /**
- * 시스템 프롬프트의 "역할 정책" 프리픽스 — 추천 갯수·역할 우선순위를 고정한다.
- * 본 문자열은 description 변화와 독립적이므로 캐시 프리픽스에 올린다.
+ * locale 별 시스템 프롬프트. policy + fewShot 두 블록 구성은 유지하면서, 언어만
+ * 교체한다. description 자체는 그대로(어느 언어로 들어오든 모델이 locale 을 따른다).
+ * 본 객체 내용은 description 변화와 독립이므로 캐시 프리픽스에 올린다.
  */
-export const SYSTEM_ROLE_POLICY = [
-  '당신은 소규모 소프트웨어 스튜디오의 HR/편성 담당입니다.',
-  '사용자가 입력한 프로젝트 설명을 읽고, 최소 2명·최대 5명의 핵심 팀원을 추천하세요.',
-  '반드시 JSON 오브젝트 하나를 응답하고 그 외 텍스트·마크다운·설명을 붙이지 마세요.',
-  '허용된 role 값은 다음 5 가지뿐입니다: Leader, Developer, QA, Designer, Researcher.',
-  '첫 번째 추천은 항상 role="Leader" 여야 하며, Leader 는 단 1명입니다.',
-  '응답 스키마:',
-  '{"items":[{"role":"<AgentRole>","name":"<짧은 한국어 이름>","rationale":"<한 문장 한국어 설명>"}]}',
-  'rationale 은 1문장(80자 이하) 한국어, name 은 8자 이하 별칭을 권장합니다.',
-].join('\n');
+export const SYSTEM_PROMPTS: Record<
+  RecommendationLocale,
+  { readonly policy: string; readonly fewShot: string; readonly userPrefix: string }
+> = {
+  en: {
+    policy: [
+      'You are the HR/staffing lead of a small software studio.',
+      'Read the user project description and recommend a core team of 2 to 5 members.',
+      'Respond with a single JSON object and nothing else (no prose, no markdown).',
+      'Allowed role values are exactly: Leader, Developer, QA, Designer, Researcher.',
+      'The first item must be role="Leader"; there is exactly one Leader.',
+      'Response schema:',
+      '{"items":[{"role":"<AgentRole>","name":"<short English alias>","rationale":"<one sentence in English>"}]}',
+      'rationale: one sentence (<=80 chars) in English. name: <=8 chars alias.',
+    ].join('\n'),
+    fewShot: [
+      'Example input: "Payment module hardening — PCI audit + token encryption"',
+      'Example output:',
+      '{"items":[',
+      '  {"role":"Leader","name":"Kai","rationale":"Breaks the scope down and distributes in parallel."},',
+      '  {"role":"Developer","name":"Dev","rationale":"Handles PCI token and encryption work."},',
+      '  {"role":"QA","name":"QA","rationale":"Locks regression and security tests on the payment path."}',
+      ']}',
+    ].join('\n'),
+    userPrefix: 'Project description:',
+  },
+  ko: {
+    policy: [
+      '당신은 소규모 소프트웨어 스튜디오의 HR/편성 담당입니다.',
+      '사용자가 입력한 프로젝트 설명을 읽고, 최소 2명·최대 5명의 핵심 팀원을 추천하세요.',
+      '반드시 JSON 오브젝트 하나를 응답하고 그 외 텍스트·마크다운·설명을 붙이지 마세요.',
+      '허용된 role 값은 다음 5 가지뿐입니다: Leader, Developer, QA, Designer, Researcher.',
+      '첫 번째 추천은 항상 role="Leader" 여야 하며, Leader 는 단 1명입니다.',
+      '응답 스키마:',
+      '{"items":[{"role":"<AgentRole>","name":"<짧은 한국어 이름>","rationale":"<한 문장 한국어 설명>"}]}',
+      'rationale 은 1문장(80자 이하) 한국어, name 은 8자 이하 별칭을 권장합니다.',
+    ].join('\n'),
+    fewShot: [
+      '예시 입력: "결제 모듈 보안 강화 — PCI 감사·토큰 암호화"',
+      '예시 출력:',
+      '{"items":[',
+      '  {"role":"Leader","name":"Kai","rationale":"범위를 쪼개고 병렬로 분배합니다."},',
+      '  {"role":"Developer","name":"Dev","rationale":"PCI 토큰·암호화 구현을 맡습니다."},',
+      '  {"role":"QA","name":"QA","rationale":"결제 경로 회귀·보안 테스트를 잠급니다."}',
+      ']}',
+    ].join('\n'),
+    userPrefix: '프로젝트 설명:',
+  },
+};
 
 /**
- * 예시 프리픽스 — 모델이 JSON-only 출력 포맷을 지키도록 한 번 보여 준다. description 과
- * 독립이므로 동일하게 캐시 프리픽스로 같이 묶인다.
+ * 하위 호환 재노출 — 기존 테스트·소비자가 가리키던 상수. 'ko' 프롬프트를 유지.
+ * @deprecated — 신규 코드는 SYSTEM_PROMPTS[locale] 을 사용한다.
  */
-export const SYSTEM_FEW_SHOT = [
-  '예시 입력: "결제 모듈 보안 강화 — PCI 감사·토큰 암호화"',
-  '예시 출력:',
-  '{"items":[',
-  '  {"role":"Leader","name":"Kai","rationale":"범위를 쪼개고 병렬로 분배합니다."},',
-  '  {"role":"Developer","name":"Dev","rationale":"PCI 토큰·암호화 구현을 맡습니다."},',
-  '  {"role":"QA","name":"QA","rationale":"결제 경로 회귀·보안 테스트를 잠급니다."}',
-  ']}',
-].join('\n');
+export const SYSTEM_ROLE_POLICY = SYSTEM_PROMPTS.ko.policy;
+/** @deprecated — SYSTEM_PROMPTS 사용. */
+export const SYSTEM_FEW_SHOT = SYSTEM_PROMPTS.ko.fewShot;
 
 // ────────────────────────────────────────────────────────────────────────────
 // 메시지 빌더
 // ────────────────────────────────────────────────────────────────────────────
 
-export function buildRecommendationMessages(description: string): CacheableClaudeMessages {
+export function buildRecommendationMessages(
+  description: string,
+  locale: RecommendationLocale = DEFAULT_RECOMMENDATION_LOCALE,
+): CacheableClaudeMessages {
   // 시스템 프리픽스는 정책 + 예시 두 블록. buildCacheableMessages 가 마지막 블록에만
   // cache_control: ephemeral 을 붙여 앞 블록까지 모두 하나의 캐시 프리픽스로 묶는다.
+  const p = SYSTEM_PROMPTS[locale];
   return buildCacheableMessages(
-    [SYSTEM_ROLE_POLICY, SYSTEM_FEW_SHOT],
-    `프로젝트 설명:\n${description.trim()}`,
+    [p.policy, p.fewShot],
+    `${p.userPrefix}\n${description.trim()}`,
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// translateOnly — 기존 추천 items 의 name/rationale 만 대상 locale 로 바꾼다.
+// role 은 AgentRole 유니언이므로 언어 독립. 본 경로는 description 을 넘기지 않아
+// 프리픽스만 재사용 + 훨씬 짧은 user 블록으로 돌아온다.
+// ────────────────────────────────────────────────────────────────────────────
+
+export const TRANSLATE_SYSTEM_PROMPT = [
+  'You translate short role/name/rationale cards between English and Korean.',
+  'Respond with a single JSON object: {"items":[{"role":"<unchanged>","name":"<translated>","rationale":"<translated one sentence>"}]}.',
+  'Do not invent new items; preserve the same length and order as the input.',
+  'Keep role values untouched. Do not add prose outside of JSON.',
+].join('\n');
+
+export function buildTranslationMessages(
+  existing: AgentTeamRecommendation,
+  targetLocale: RecommendationLocale,
+): CacheableClaudeMessages {
+  // 캐시 프리픽스(시스템) 가 locale 과 무관하므로 재번역 구간은 대부분 히트.
+  return buildCacheableMessages(
+    [TRANSLATE_SYSTEM_PROMPT],
+    [
+      `Target locale: ${targetLocale}`,
+      `Source locale: ${existing.locale}`,
+      'Items to translate (preserve order, role unchanged):',
+      JSON.stringify({ items: existing.items }),
+    ].join('\n'),
   );
 }
 
@@ -161,25 +238,51 @@ function safeJsonParse(text: string): unknown {
   }
 }
 
+/** locale 별 휴리스틱 카피 — 추가 언어가 들어오면 본 테이블만 확장한다. */
+const HEURISTIC_COPY: Record<
+  RecommendationLocale,
+  Record<AgentRole, string>
+> = {
+  en: {
+    Leader: 'Breaks the scope down and distributes tasks.',
+    Developer: 'Owns the core feature implementation.',
+    Designer: 'Designs screens and interactions.',
+    QA: 'Owns regression tests and quality gates.',
+    Researcher: 'Gathers references and case studies.',
+  },
+  ko: {
+    Leader: '범위를 쪼개고 분배합니다.',
+    Developer: '핵심 기능 구현을 맡습니다.',
+    Designer: '화면 시안과 상호작용을 설계합니다.',
+    QA: '회귀 테스트와 품질 게이트를 담당합니다.',
+    Researcher: '레퍼런스·사례 조사를 맡습니다.',
+  },
+};
+
 /**
  * 휴리스틱 폴백 — description 에 등장하는 키워드로 Developer/QA/Designer/Researcher
  * 를 조건부로 추가한다. Leader 는 고정 1인. 최소 Leader + Developer 2인 구성을 보장.
+ * rationale 은 locale 에 따라 다른 카피를 고른다(role·name 은 언어 독립).
  */
-export function heuristicTeam(description: string): AgentRecommendation[] {
+export function heuristicTeam(
+  description: string,
+  locale: RecommendationLocale = DEFAULT_RECOMMENDATION_LOCALE,
+): AgentRecommendation[] {
   const lower = description.toLowerCase();
+  const copy = HEURISTIC_COPY[locale];
   const items: AgentRecommendation[] = [
-    { role: 'Leader', name: 'Kai', rationale: '범위를 쪼개고 분배합니다.' },
-    { role: 'Developer', name: 'Dev', rationale: '핵심 기능 구현을 맡습니다.' },
+    { role: 'Leader', name: 'Kai', rationale: copy.Leader },
+    { role: 'Developer', name: 'Dev', rationale: copy.Developer },
   ];
   const has = (...kws: string[]) => kws.some((k) => lower.includes(k));
   if (has('ui', 'ux', '디자인', '화면', 'screen', 'design')) {
-    items.push({ role: 'Designer', name: 'Dex', rationale: '화면 시안과 상호작용을 설계합니다.' });
+    items.push({ role: 'Designer', name: 'Dex', rationale: copy.Designer });
   }
   if (has('보안', '테스트', 'qa', '회귀', '검증', 'security', 'test')) {
-    items.push({ role: 'QA', name: 'QA', rationale: '회귀 테스트와 품질 게이트를 담당합니다.' });
+    items.push({ role: 'QA', name: 'QA', rationale: copy.QA });
   }
   if (has('연구', '조사', 'research', '분석', 'analysis', '시장')) {
-    items.push({ role: 'Researcher', name: 'Riz', rationale: '레퍼런스·사례 조사를 맡습니다.' });
+    items.push({ role: 'Researcher', name: 'Riz', rationale: copy.Researcher });
   }
   return items.slice(0, 5);
 }
@@ -201,19 +304,75 @@ export async function recommendAgentTeam(
   if (typeof description !== 'string' || description.trim().length === 0) {
     throw new Error('description 은 비어 있지 않은 문자열이어야 합니다.');
   }
-  const messages = buildRecommendationMessages(description);
+  const locale = options.locale ?? DEFAULT_RECOMMENDATION_LOCALE;
+  const messages = buildRecommendationMessages(description, locale);
   if (!options.invoker) {
-    return { items: heuristicTeam(description), source: 'heuristic', messages };
+    return { items: heuristicTeam(description, locale), source: 'heuristic', locale, messages };
   }
   try {
     const raw = await options.invoker(messages);
     const items = validateRecommendations(raw);
     if (items.length === 0) {
-      return { items: heuristicTeam(description), source: 'heuristic', messages };
+      return { items: heuristicTeam(description, locale), source: 'heuristic', locale, messages };
     }
-    return { items, source: 'claude', messages };
+    return { items, source: 'claude', locale, messages };
   } catch (err) {
     if (options.fallbackOnError === false) throw err;
-    return { items: heuristicTeam(description), source: 'heuristic', messages };
+    return { items: heuristicTeam(description, locale), source: 'heuristic', locale, messages };
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// translateOnly — 언어 전환 시 기존 추천을 폐기하지 않고 번역만 요청하는 경량 경로.
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface TranslateRecommendationsOptions {
+  readonly invoker?: (messages: CacheableClaudeMessages) => Promise<string | object>;
+  readonly fallbackOnError?: boolean;
+}
+
+/**
+ * 기존 추천을 targetLocale 로 번역. invoker 가 스키마를 유지하지 못하면 heuristic
+ * 번역표로 폴백. 이미 targetLocale 인 경우 그대로 반환(네트워크 호출 없음).
+ */
+export async function translateRecommendations(
+  existing: AgentTeamRecommendation,
+  targetLocale: RecommendationLocale,
+  options: TranslateRecommendationsOptions = {},
+): Promise<AgentTeamRecommendation> {
+  if (existing.locale === targetLocale) return existing;
+
+  const heuristic = (): AgentTeamRecommendation => {
+    const copy = HEURISTIC_COPY[targetLocale];
+    const items: AgentRecommendation[] = existing.items.map((it) => ({
+      role: it.role,
+      name: it.name,
+      rationale: copy[it.role] ?? it.rationale,
+    }));
+    return { items, source: 'heuristic', locale: targetLocale };
+  };
+
+  if (!options.invoker) {
+    return heuristic();
+  }
+
+  const messages = buildTranslationMessages(existing, targetLocale);
+  try {
+    const raw = await options.invoker(messages);
+    const translated = validateRecommendations(raw);
+    // 번역은 "같은 items 의 동수·동순" 계약이므로 개수가 변했으면 휴리스틱으로 폴백.
+    if (translated.length !== existing.items.length) {
+      return heuristic();
+    }
+    // role 보존 체크 — 바뀐 항목은 원본 role 로 되돌려 유저가 혼동하지 않도록 한다.
+    const items: AgentRecommendation[] = translated.map((t, i) => ({
+      role: existing.items[i].role,
+      name: t.name,
+      rationale: t.rationale,
+    }));
+    return { items, source: 'translated', locale: targetLocale, messages };
+  } catch (err) {
+    if (options.fallbackOnError === false) throw err;
+    return heuristic();
   }
 }

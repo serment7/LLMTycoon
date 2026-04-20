@@ -44,21 +44,33 @@ test('R1. ROLE_CATALOG 은 AgentRole 5종(Leader 포함)', () => {
 
 // ─── R2 ─────────────────────────────────────────────────────────────────────
 
-test('R2-a. buildRecommendationMessages — 시스템 블록 2개 + 마지막만 cache_control=ephemeral', () => {
-  const msg = buildRecommendationMessages('결제 모듈 보안 강화');
+test('R2-a. buildRecommendationMessages — ko 프롬프트는 정책·예시 2블록 + 마지막만 cache_control=ephemeral', () => {
+  const msg = buildRecommendationMessages('결제 모듈 보안 강화', 'ko');
   assert.equal(msg.system.length, 2, '정책·예시 두 블록이 유지돼야 한다');
   assert.equal(msg.system[0].cache_control, undefined, '첫 블록에는 캐시 마커 X');
   assert.deepEqual(msg.system[1].cache_control, { type: 'ephemeral' });
   assert.equal(msg.system[0].text, SYSTEM_ROLE_POLICY);
-  assert.equal(msg.system[1].text.replace(/cache_control.*/s, '').includes(SYSTEM_FEW_SHOT.slice(0, 20)), true);
+  assert.ok(msg.system[1].text.includes(SYSTEM_FEW_SHOT.slice(0, 20)));
 });
 
 test('R2-b. buildRecommendationMessages — user 턴은 휘발성(캐시 마커 없음)', () => {
-  const msg = buildRecommendationMessages('설명');
+  const msg = buildRecommendationMessages('설명', 'ko');
   assert.equal(msg.messages.length, 1);
   assert.equal(msg.messages[0].role, 'user');
   assert.equal(msg.messages[0].content[0].cache_control, undefined);
   assert.ok(msg.messages[0].content[0].text.includes('설명'));
+});
+
+test('R2-c. buildRecommendationMessages — locale=en 이면 영어 시스템 프롬프트', () => {
+  const msg = buildRecommendationMessages('Payment hardening', 'en');
+  assert.ok(msg.system[0].text.includes('HR/staffing lead'));
+  assert.ok(msg.system[1].text.includes('Example input'));
+  assert.ok(msg.messages[0].content[0].text.includes('Project description:'));
+});
+
+test('R2-d. buildRecommendationMessages — locale 미지정 시 기본 en', () => {
+  const msg = buildRecommendationMessages('anything');
+  assert.ok(msg.system[0].text.includes('HR/staffing lead'));
 });
 
 // ─── R3 ─────────────────────────────────────────────────────────────────────

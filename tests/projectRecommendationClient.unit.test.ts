@@ -80,6 +80,7 @@ function fakeTeam(name: string): AgentTeamRecommendation {
   return {
     items: [{ role: 'Leader', name, rationale: 'r' }],
     source: 'claude',
+    locale: 'en',
   };
 }
 

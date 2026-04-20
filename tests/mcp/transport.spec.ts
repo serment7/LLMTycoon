@@ -13,6 +13,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { AddressInfo } from 'node:net';
 
@@ -21,6 +22,8 @@ import {
   performHandshake,
   McpClientError,
   MCP_PROTOCOL_VERSION,
+  type SpawnLike,
+  type StdioChildProcess,
 } from '../../src/mcp/client.ts';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -68,44 +71,75 @@ async function startLocalServer(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// stdio — 실제 `node -e` 에코 프로세스로 왕복 검증
+// stdio — 모의 자식 프로세스(EventEmitter 기반) 로 왕복 검증
+//
+// `SpawnLike` 주입 훅에 가짜 프로세스를 끼워 넣어 핸드셰이크 요청 문자열이
+// 자식의 stdin 에 도달하고, 우리가 stdout 으로 흘려 보낸 JSON-RPC 응답을 클라이언트
+// 가 파싱해 serverInfo 로 돌려주는 전 구간을 실제로 왕복 시킨다. 프로세스 기동 ·
+// OS 스케줄링 ·Windows/Unix 차이에 영향을 받지 않으면서도 line-parser/요청 직렬화/
+// 응답 파싱 경로가 모두 실행된다.
 // ────────────────────────────────────────────────────────────────────────────
 
-/**
- * stdin 으로 들어오는 줄 단위 JSON 을 파싱하고, initialize 요청이면 간단한 serverInfo
- * 를 ndjson 한 줄로 돌려주는 에코 스크립트. args 에 실어 주입한다.
- */
-const STDIO_ECHO_SCRIPT = [
-  'let buf = "";',
-  'process.stdin.on("data", (d) => {',
-  '  buf += d.toString();',
-  '  let i;',
-  '  while ((i = buf.indexOf("\\n")) !== -1) {',
-  '    const line = buf.slice(0, i); buf = buf.slice(i + 1);',
-  '    if (!line.trim()) continue;',
-  '    try {',
-  '      const req = JSON.parse(line);',
-  '      if (req.method === "initialize") {',
-  '        const res = { jsonrpc: "2.0", id: req.id, result: {',
-  '          protocolVersion: "2025-03-26",',
-  '          serverInfo: { name: "echo-stdio", version: "0.0.1" },',
-  '          capabilities: { tools: {} } } };',
-  '        process.stdout.write(JSON.stringify(res) + "\\n");',
-  '      }',
-  '    } catch (e) { /* 무시 */ }',
-  '  }',
-  '});',
-].join('');
+interface MockChild extends StdioChildProcess {
+  stdinBuffer: string;
+}
 
-test('T1. stdio 클라이언트는 실제 자식 프로세스와 JSON-RPC 왕복 핸드셰이크에 성공한다', async () => {
-  const client = createMcpClient({
-    transport: 'stdio',
-    command: process.execPath,
-    args: ['-e', STDIO_ECHO_SCRIPT],
-    env: {},
+function makeMockChild(onRequest: (line: string) => string | null): MockChild {
+  const stdout = new EventEmitter() as NodeJS.EventEmitter;
+  const stderr = new EventEmitter() as NodeJS.EventEmitter;
+  const base = new EventEmitter();
+  const child: MockChild = {
+    stdinBuffer: '',
+    stdin: {
+      write(data: string) {
+        (child as MockChild).stdinBuffer += data;
+        let i: number;
+        while ((i = (child as MockChild).stdinBuffer.indexOf('\n')) !== -1) {
+          const line = (child as MockChild).stdinBuffer.slice(0, i);
+          (child as MockChild).stdinBuffer = (child as MockChild).stdinBuffer.slice(i + 1);
+          if (!line.trim()) continue;
+          const reply = onRequest(line);
+          if (reply !== null) {
+            // 다음 틱에 응답을 흘려 보내 실 왕복(비동기) 성격을 보존.
+            queueMicrotask(() => stdout.emit('data', `${reply}\n`));
+          }
+        }
+        return true;
+      },
+      end() { /* no-op */ },
+    },
+    stdout,
+    stderr,
+    pid: 42,
+    on(event, listener) { base.on(event, listener); return this; },
+    kill() { base.emit('exit', 0); return true; },
+  };
+  return child;
+}
+
+function makeMockSpawn(onRequest: (line: string) => string | null): SpawnLike {
+  return ((_command, _args, _opts) => makeMockChild(onRequest)) as SpawnLike;
+}
+
+test('T1. stdio 클라이언트는 모의 프로세스와 JSON-RPC 왕복 핸드셰이크에 성공한다', async () => {
+  const spawnMock = makeMockSpawn((line) => {
+    const req = JSON.parse(line);
+    if (req.method !== 'initialize') return null;
+    return JSON.stringify({
+      jsonrpc: '2.0', id: req.id,
+      result: {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        serverInfo: { name: 'echo-stdio', version: '0.0.1' },
+        capabilities: { tools: {} },
+      },
+    });
   });
+  const client = createMcpClient(
+    { transport: 'stdio', command: 'node', args: ['-e', 'ignored'], env: {} },
+    { spawn: spawnMock },
+  );
   try {
-    const res = await client.handshake({ timeoutMs: 5_000 });
+    const res = await client.handshake({ timeoutMs: 2_000 });
     assert.equal(res.transport, 'stdio');
     assert.equal(res.serverInfo.name, 'echo-stdio');
     assert.equal(res.serverInfo.version, '0.0.1');
@@ -114,6 +148,37 @@ test('T1. stdio 클라이언트는 실제 자식 프로세스와 JSON-RPC 왕복
   } finally {
     await client.close();
   }
+});
+
+test('T1b. stdio 모의 — 프로세스가 핸드셰이크 전에 종료하면 NETWORK 오류로 정리된다', async () => {
+  // 즉시 exit(1) 를 흘려 보내는 모의 자식을 만든다 — readFirstJsonLine 이 exit 신호를 잡아야.
+  const spawnMock: SpawnLike = ((_cmd, _args, _opts) => {
+    const stdout = new EventEmitter() as NodeJS.EventEmitter;
+    const stderr = new EventEmitter() as NodeJS.EventEmitter;
+    const base = new EventEmitter();
+    queueMicrotask(() => base.emit('exit', 1));
+    return {
+      stdinBuffer: '',
+      stdin: { write() { return true; }, end() {} },
+      stdout,
+      stderr,
+      pid: 1,
+      on(event, listener) { base.on(event, listener); return this; },
+      kill() { return true; },
+    } as unknown as StdioChildProcess;
+  }) as SpawnLike;
+  const client = createMcpClient(
+    { transport: 'stdio', command: 'node', args: [], env: {} },
+    { spawn: spawnMock },
+  );
+  await assert.rejects(
+    () => client.handshake({ timeoutMs: 1_000 }),
+    (err: unknown) => {
+      assert.ok(err instanceof McpClientError);
+      assert.equal((err as McpClientError).code, 'MCP_CLIENT_NETWORK');
+      return true;
+    },
+  );
 });
 
 test('T2. stdio 전송에서 command 가 비어 있으면 CONFIG_INVALID 로 거부된다', () => {

@@ -192,9 +192,16 @@ export function createStdioClient(
       const spawnFn = options.spawn ?? (await loadDefaultSpawn());
       const started = Date.now();
       const timeoutMs = hopts.timeoutMs ?? 10_000;
+      // Windows 에서 자식 Node 프로세스는 SystemRoot·TEMP 등이 누락되면 시작에
+      // 실패하므로, 레코드 env 가 비어 있지 않을 때만 부모 env 를 병합해 넘긴다.
+      // 빈 경우에는 undefined 로 두어 플랫폼 기본 상속 동작을 따른다.
+      const recordEnv = record.env ?? {};
+      const envArg = Object.keys(recordEnv).length > 0
+        ? { ...(process.env as Record<string, string>), ...recordEnv }
+        : undefined;
       try {
         child = spawnFn(record.command, record.args ?? [], {
-          env: { ...(record.env ?? {}) },
+          env: envArg,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
       } catch (err) {
@@ -202,14 +209,12 @@ export function createStdioClient(
           { transport: 'stdio', cause: err });
       }
 
-      const line = await readFirstJsonLine(child, { signal: hopts.signal, timeoutMs });
+      // Promise 생성만 먼저 해서 stdout 리스너를 등록한 뒤, 요청을 쓴 다음 await.
+      // await 를 Promise 생성과 동시에 묶으면 write 가 영원히 실행되지 않아 데드락.
+      const linePromise = readFirstJsonLine(child, { signal: hopts.signal, timeoutMs });
       const request = buildInitializeRequest(1);
       child.stdin.write(`${JSON.stringify(request)}\n`);
-      // 첫 줄은 핸드셰이크 이전에 "banner" 로 흘릴 수도 있다 — 따라서 우리는 핸드셰이크
-      // 요청을 먼저 쓰고, 응답을 기다린다. 위 readFirstJsonLine 은 선행 호출로 경쟁을
-      // 만들 수 있으므로, 여기서는 요청을 보낸 뒤 대기 중 Promise 를 resolve 할 줄이
-      // 도착할 때까지 이어 받는다. 아래는 요청-응답 짝을 기다리는 본 경로.
-      const response = await line;
+      const response = await linePromise;
       let parsed: JsonRpcResponse;
       try { parsed = parseJsonLine(response); } catch (err) {
         throw new McpClientError('MCP_CLIENT_PROTOCOL', `응답 파싱 실패: ${describeError(err)}`,
@@ -341,8 +346,11 @@ export function createHttpClient(
       const started = Date.now();
       const timeoutMs = hopts.timeoutMs ?? 10_000;
       const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(new Error('timeout')), timeoutMs);
-      const onAbort = () => ac.abort(hopts.signal!.reason);
+      // undici fetch 는 abort reason 을 그대로 re-throw 하므로, 타임아웃 여부를 별도
+      // 플래그로 추적한다(에러 name/type 기반 분기는 플랫폼별로 불안정).
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; ac.abort(); }, timeoutMs);
+      const onAbort = () => ac.abort();
       hopts.signal?.addEventListener('abort', onAbort, { once: true });
 
       let res: Response;
@@ -359,8 +367,7 @@ export function createHttpClient(
           throw new McpClientError('MCP_CLIENT_ABORTED', 'MCP 핸드셰이크가 취소되었습니다.',
             { transport: 'http', cause: err });
         }
-        const name = (err as { name?: string }).name;
-        if (name === 'AbortError') {
+        if (timedOut) {
           throw new McpClientError('MCP_CLIENT_TIMEOUT',
             `HTTP 핸드셰이크가 ${timeoutMs}ms 안에 완료되지 않았습니다.`,
             { transport: 'http', cause: err });
@@ -418,8 +425,9 @@ export function createStreamableHttpClient(
       const started = Date.now();
       const timeoutMs = hopts.timeoutMs ?? 10_000;
       const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(new Error('timeout')), timeoutMs);
-      const onAbort = () => ac.abort(hopts.signal!.reason);
+      let timedOut = false;
+      const timer = setTimeout(() => { timedOut = true; ac.abort(); }, timeoutMs);
+      const onAbort = () => ac.abort();
       hopts.signal?.addEventListener('abort', onAbort, { once: true });
 
       let res: Response;
@@ -439,8 +447,7 @@ export function createStreamableHttpClient(
           throw new McpClientError('MCP_CLIENT_ABORTED', 'MCP 핸드셰이크가 취소되었습니다.',
             { transport: 'streamable-http', cause: err });
         }
-        const name = (err as { name?: string }).name;
-        if (name === 'AbortError') {
+        if (timedOut) {
           throw new McpClientError('MCP_CLIENT_TIMEOUT',
             `streamable-http 핸드셰이크가 ${timeoutMs}ms 안에 완료되지 않았습니다.`,
             { transport: 'streamable-http', cause: err });
