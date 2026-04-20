@@ -46,6 +46,12 @@ import {
 import { createInMemoryUsageLog, formatUsageLogLine } from '../src/llm/usageLog.ts';
 import { cacheHitRate } from '../src/utils/claudeTokenUsageStore.ts';
 import type { ClaudeTokenUsage } from '../src/types.ts';
+import {
+  createInMemorySessionStore,
+  createSessionPersistor,
+  restoreBudgetSessionFromSnapshot,
+  type SessionStoreAdapter,
+} from '../src/session/sessionStore.ts';
 
 interface ProbeOptions {
   readonly cycles: number;
@@ -188,17 +194,34 @@ interface Sample {
   readonly compactTriggered: boolean;
 }
 
+interface ReconnectCheck {
+  readonly cycle: number;
+  readonly cacheReadBefore: number;
+  readonly cacheReadAfter: number;
+  readonly historyBefore: number;
+  readonly historyAfter: number;
+  readonly passed: boolean;
+}
+
 async function runProbe(opts: ProbeOptions): Promise<{
   samples: Sample[];
   logLines: readonly string[];
   finalSession: BudgetSession;
   mode: 'real' | 'simulated';
   invalidations: number;
+  reconnect: ReconnectCheck | null;
 }> {
   const call = opts.real ? await createRealClaudeCall() : createSimulatedCall();
   const mode: 'real' | 'simulated' = opts.real ? 'real' : 'simulated';
   const sink = createInMemoryUsageLog();
   const samples: Sample[] = [];
+  // 세션 저장소와 영속기 — 재접속 시뮬에서 복원용.
+  const sessionAdapter: SessionStoreAdapter = createInMemorySessionStore();
+  const persistor = createSessionPersistor({
+    adapter: sessionAdapter,
+    sessionId: 'probe-session',
+    userId: 'probe-user',
+  });
 
   const systemPrompt = '당신은 LLMTycoon 팀의 장기 이용 프로브입니다. 짧고 결정적으로 답합니다.';
   let agentDefinition = '[Agents] Leader · Developer · QA · Designer';
@@ -207,6 +230,9 @@ async function runProbe(opts: ProbeOptions): Promise<{
   let invalidations = 0;
 
   let session = createBudgetSession('probe-session');
+  let reconnect: ReconnectCheck | null = null;
+  // 30분 중간 지점 재접속 모사 — cycles 의 절반 지점에서 한 번만 발동.
+  const reconnectAt = Math.floor(opts.cycles / 2);
 
   for (let i = 0; i < opts.cycles; i += 1) {
     // 50 번째 사이클에 도구 하나 추가, 100 번째에 에이전트 1명 추가 — 캐시 무효화 이벤트.
@@ -232,12 +258,17 @@ async function runProbe(opts: ProbeOptions): Promise<{
     session = appendTurn(session, { role: 'user', content: userText, tokens: 150 });
     session = appendTurn(session, { role: 'assistant', content: res.assistantText, tokens: 300 });
 
+    // 저장 트리거 #1 — recordUsage 직후.
+    await persistor.onRecordUsage(session, { transport: 'stdio', name: 'probe-mcp' });
+
     const triggered = shouldCompact(session.history, opts.thresholdTokens);
     if (triggered) {
       session = maybeCompact(session, {
         compactThresholdTokens: opts.thresholdTokens,
         keepLatestTurns: 6,
       });
+      // 저장 트리거 #2 — 압축 직후.
+      await persistor.onCompact(session, { transport: 'stdio', name: 'probe-mcp' });
     }
 
     await sink.append(res.usage, `probe-${i}`);
@@ -250,9 +281,41 @@ async function runProbe(opts: ProbeOptions): Promise<{
       cacheHit: cacheHitRate(session.totals),
       compactTriggered: triggered,
     });
+
+    // 중간 지점에서 강제 재접속: (a) 저장소에서 로드, (b) 세션 객체를 버리고 (c) 복원,
+    // (d) cache_read·히스토리 길이가 손실되지 않았는지 확인한다.
+    if (i === reconnectAt) {
+      const cacheReadBefore = session.totals.cacheReadTokens;
+      const historyBefore = session.history.length;
+      const snapshot = await sessionAdapter.get('probe-user', 'probe-session');
+      if (!snapshot) {
+        reconnect = {
+          cycle: i, cacheReadBefore, cacheReadAfter: 0,
+          historyBefore, historyAfter: 0, passed: false,
+        };
+      } else {
+        session = restoreBudgetSessionFromSnapshot(snapshot);
+        reconnect = {
+          cycle: i,
+          cacheReadBefore,
+          cacheReadAfter: session.totals.cacheReadTokens,
+          historyBefore,
+          historyAfter: session.history.length,
+          passed: session.totals.cacheReadTokens === cacheReadBefore
+            && session.history.length === historyBefore,
+        };
+      }
+    }
   }
 
-  return { samples, logLines: sink.snapshot(), finalSession: session, mode, invalidations };
+  return {
+    samples,
+    logLines: sink.snapshot(),
+    finalSession: session,
+    mode,
+    invalidations,
+    reconnect,
+  };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -306,6 +369,17 @@ function renderReport(opts: ProbeOptions, result: Awaited<ReturnType<typeof runP
   lines.push(renderAsciiTrend(result.samples, 'input_tokens 누적 추세', (s) => s.inputTokens));
   lines.push('');
   lines.push(renderAsciiTrend(result.samples, 'cacheHitRate 추세(×1000)', (s) => Math.round(s.cacheHit * 1_000)));
+  lines.push('');
+  lines.push('## 재접속(세션 지속성) 검증');
+  if (result.reconnect) {
+    const rc = result.reconnect;
+    lines.push(`- 재접속 지점: cycle ${rc.cycle}`);
+    lines.push(`- cache_read 전/후: ${rc.cacheReadBefore.toLocaleString()} → ${rc.cacheReadAfter.toLocaleString()}`);
+    lines.push(`- 히스토리 길이 전/후: ${rc.historyBefore} → ${rc.historyAfter}`);
+    lines.push(`- 판정: ${rc.passed ? '✅ 유지됨(끊김 없는 개발 목표 충족)' : '⚠︎ 손실 감지 — 회귀 의심'}`);
+  } else {
+    lines.push('- (재접속 시뮬이 실행되지 않았습니다. 기본 cycles 값이 2 미만일 때 생략.)');
+  }
   lines.push('');
   lines.push('## usage 로그 샘플(앞 3줄)');
   lines.push('```');
