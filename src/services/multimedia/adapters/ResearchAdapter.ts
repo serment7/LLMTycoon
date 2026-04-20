@@ -468,7 +468,13 @@ export async function research(
     throw researchError(
       'RESEARCH_INSUFFICIENT_SOURCES',
       `필요한 최소 근거 수(${minEvidence}) 를 충족하지 못했습니다. 확보된 근거 ${filtered.length}건.`,
-      { partial: buildPartial(normalizedTopic, depth, breadth, modelId, startedAtMs, subQueries, filtered, limitations) },
+      {
+        partial: buildPartial(
+          normalizedTopic, depth, breadth, modelId, startedAtMs,
+          subQueries, filtered, limitations, [], [],
+          { language: options.language, deadline: options.deadline },
+        ),
+      },
     );
   }
 
@@ -542,6 +548,7 @@ export async function research(
           partial: buildPartial(
             normalizedTopic, depth, breadth, modelId, startedAtMs,
             subQueries, filtered, limitations, sections, citations,
+            { language: options.language, deadline: options.deadline },
           ),
         },
       );
@@ -572,7 +579,13 @@ export async function research(
     throw researchError(
       'RESEARCH_INSUFFICIENT_SOURCES',
       '요약할 섹션이 없습니다. 근거가 모든 하위 질문에서 부족했을 가능성이 있습니다.',
-      { partial: buildPartial(normalizedTopic, depth, breadth, modelId, startedAtMs, subQueries, filtered, limitations) },
+      {
+        partial: buildPartial(
+          normalizedTopic, depth, breadth, modelId, startedAtMs,
+          subQueries, filtered, limitations, [], [],
+          { language: options.language, deadline: options.deadline },
+        ),
+      },
     );
   }
 

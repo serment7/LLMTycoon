@@ -275,6 +275,20 @@ test('E8. getConfig — 주입 설정이 동결되어 어댑터 팩토리에 그
   assert.ok(Object.isFrozen(cfg));
 });
 
+test('E9. 배럴 + createDefaultRegistry — 6종 kind 모두 resolveByKind 로 해석된다', () => {
+  // 지시 #041437b9 — 배럴(index.ts) 하나만 import 해도 6종이 끝-끝 해석 가능해야 한다.
+  // E1 은 descriptor 등록만, E2 는 'pdf' 하나만 확인하므로 나머지 5종 해석 경로가
+  // 회귀로 빠지는 것을 막는 망.
+  const reg = createDefaultRegistry();
+  const kinds = ['pdf', 'pptx', 'video', 'web-search', 'research', 'input-automation'] as const;
+  for (const kind of kinds) {
+    const adapter = reg.resolveByKind(kind);
+    assert.equal(adapter.descriptor.kind, kind, `${kind} 해석 결과의 kind 가 일치해야 한다`);
+    // 같은 kind 재요청은 인스턴스 캐시가 유지돼야 한다.
+    assert.equal(reg.resolveByKind(kind), adapter, `${kind} 인스턴스는 캐시되어야 한다`);
+  }
+});
+
 // ────────────────────────────────────────────────────────────────────────────
 // 유틸
 // ────────────────────────────────────────────────────────────────────────────
