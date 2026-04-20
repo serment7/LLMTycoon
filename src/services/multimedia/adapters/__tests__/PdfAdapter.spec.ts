@@ -13,6 +13,7 @@
 //   D. generatePdf — 섹션/표/이미지/페이지 번호 요청이 driver 로 그대로 흘러간다
 //   E. PdfAdapter.invoke — MediaAdapter 계약 대로 MediaAdapterOutcome 반환 + 진행률 bridge
 //   F. MultimediaRegistry — createDefaultRegistry 가 실구현(priority=-10) 을 우선 선택
+//   G. 기본 driver 동적 import smoke — pdf-parse · pdf-lib 이 DEPENDENCY_MISSING 없이 로드된다
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -318,4 +319,51 @@ test('F2. createRealPdfAdapter 팩토리 — DEFAULT_ADAPTER_CONFIG 주입 시 d
   assert.ok(a.descriptor.supportedInputMimes.includes('application/pdf'));
   assert.equal(a.descriptor.capabilities.canParse, true);
   assert.equal(a.descriptor.capabilities.canGenerate, true);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// G. 기본 driver 동적 import smoke — pdf-parse · pdf-lib
+//
+// 헤더 설계 의도(“실제 라이브러리 경로는 smoke 수준으로 1건만 확인”) 를 잠근다.
+// 라이브러리가 누락되면 MediaAdapterError.code === 'DEPENDENCY_MISSING' 으로 번역
+// 되므로, 본 축은 “그 코드가 절대 튀지 않는다” 를 최소 기준으로 검증한다.
+// ────────────────────────────────────────────────────────────────────────────
+
+test('G1. parsePdf — 기본 driver(pdf-parse) 가 DEPENDENCY_MISSING 없이 로드된다', async () => {
+  // 매직 바이트만 맞춘 가짜 PDF 를 실제 pdf-parse 로 흘려본다. 라이브러리가 로드되면
+  // 내부 파싱 실패는 PDF_PARSE_ERROR 로 번역돼야 하고, 로드 자체가 실패한 경우에만
+  // DEPENDENCY_MISSING 이 튄다. 두 경로를 명시적으로 구분해 잠근다.
+  const magic = Buffer.from('%PDF-1.7\n');
+  const body = Buffer.from('page 1\fpage 2', 'utf8');
+  const buf = Buffer.concat([magic, body]);
+  let caught: unknown;
+  try {
+    await parsePdf(buf);
+  } catch (err) {
+    caught = err;
+  }
+  // 가짜 바이트이므로 성공하면 예상 밖(실제 pdf-parse 는 구조 오류로 throw).
+  assert.ok(caught instanceof MediaAdapterError, `MediaAdapterError 기대: ${String(caught)}`);
+  const e = caught as MediaAdapterError;
+  assert.notEqual(
+    e.code,
+    'DEPENDENCY_MISSING',
+    `pdf-parse 동적 import 에 실패 — node_modules/pdf-parse 설치 상태 확인 필요 (${e.message})`,
+  );
+  // 실제 파싱 예외는 INTERNAL + pdfCode=PDF_PARSE_ERROR 로 내려온다.
+  assert.equal(e.code, 'INTERNAL');
+  const details = e.details as { pdfCode?: string } | undefined;
+  assert.equal(details?.pdfCode, 'PDF_PARSE_ERROR');
+});
+
+test('G2. generatePdf — 기본 driver(pdf-lib) 가 실제 PDF 매직을 가진 바이트를 돌려준다', async () => {
+  const out = await generatePdf({
+    title: 'smoke',
+    sections: [{ nodes: [{ kind: 'paragraph', text: '스모크' }] }],
+  });
+  assert.ok(out instanceof Uint8Array);
+  assert.ok(out.byteLength > 0, 'pdf-lib 이 0-byte 결과를 돌려줌 — 기본 driver 로드 실패 의심');
+  // 헤더 5바이트가 정확히 '%PDF-' 이어야 한다(pdf-lib 고정 출력).
+  const head = new TextDecoder('utf-8').decode(out.subarray(0, 5));
+  assert.equal(head, '%PDF-', `PDF 매직이 아님: ${head}`);
 });

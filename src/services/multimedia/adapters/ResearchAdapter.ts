@@ -309,6 +309,13 @@ function ensureNotAborted(signal?: AbortSignal): void {
   }
 }
 
+/** 외부 주입 훅(summarizer 등) 이 던진 표준 AbortError 를 감지. */
+function isAbortError(err: unknown): boolean {
+  if (!err) return false;
+  const e = err as { name?: string; code?: string };
+  return e.name === 'AbortError' || e.code === 'ABORT_ERR';
+}
+
 function slugifyHeading(text: string, fallback: string): string {
   const slug = text.toLowerCase()
     .replace(/[^a-z0-9가-힣\s-]/g, '')
@@ -490,17 +497,37 @@ export async function research(
       const key = normalizeUrl(c.url);
       return raw.some((r) => normalizeUrl(r.url) === key);
     });
-    if (options.requireCitations && localEvidence.length === 0) {
-      limitations.push(`"${sub.question}" 에 대한 근거가 부족해 섹션을 생략했습니다.`);
-      continue;
+    if (localEvidence.length === 0) {
+      // 근거 0 인 서브쿼리는 requireCitations 와 무관하게 한계점으로 사용자에게
+      // 고지한다. 섹션 생략은 requireCitations=true 일 때만 수행 — 기존 계약 유지.
+      if (options.requireCitations) {
+        limitations.push(`"${sub.question}" 에 대한 근거가 부족해 섹션을 생략했습니다.`);
+        continue;
+      }
+      limitations.push(`"${sub.question}" 에 대한 근거가 부족합니다. 요약은 제한적 신뢰도입니다.`);
     }
-    const { body, citationNumbers } = await summarizer({
-      subQuery: sub,
-      evidences: localEvidence,
-      rawResults: raw,
-      language: options.language,
-      signal: options.signal,
-    });
+    let body: string;
+    let citationNumbers: readonly number[];
+    try {
+      const summary = await summarizer({
+        subQuery: sub,
+        evidences: localEvidence,
+        rawResults: raw,
+        language: options.language,
+        signal: options.signal,
+      });
+      body = summary.body;
+      citationNumbers = summary.citationNumbers;
+    } catch (err) {
+      if (err instanceof MediaAdapterError && err.code === 'ABORTED') throw err;
+      if (isAbortError(err) || options.signal?.aborted) {
+        throw new MediaAdapterError('ABORTED', '심층 조사가 취소되었습니다.', {
+          adapterId: RESEARCH_REAL_ADAPTER_ID,
+          cause: err,
+        });
+      }
+      throw err;
+    }
     // 예산 초과 시 이미 완성된 섹션들(sections) 은 partial 로 돌려주되, 현재 섹션은
     // 반영하지 않는다 — 본문이 통째로 잘렸음을 한계점으로 기록한다.
     const tokensAfter = tokensUsed + estimateTokensFromText(body);
@@ -594,7 +621,12 @@ function buildPartial(
   limitations: readonly string[],
   sections: readonly ResearchSection[] = [],
   citations: readonly ResearchCitation[] = [],
+  extra: { language?: string; deadline?: string } = {},
 ): Partial<ResearchReport> {
+  // finishedAtMs 와 durationMs 는 같은 Date.now() 스냅샷에서 파생되어야 meta 내
+  // 시간값이 1ms 이상 어긋나지 않는다. 이전에는 Date.now() 두 번 호출로 미세
+  // 드리프트가 있어 회귀 추적을 방해했다.
+  const finishedAtMs = Date.now();
   return {
     topic,
     sections,
@@ -610,9 +642,11 @@ function buildPartial(
     limitations: [...limitations, `보고서가 중도 중단됐습니다. 하위 질문 ${subQueries.length}개 중 ${sections.length}개만 합성됨.`],
     meta: {
       topic, depth, breadth, model: modelId,
-      startedAtMs, finishedAtMs: Date.now(),
-      durationMs: Date.now() - startedAtMs,
+      startedAtMs, finishedAtMs,
+      durationMs: finishedAtMs - startedAtMs,
       tokensEstimated: sections.reduce((acc, s) => acc + estimateTokensFromText(s.body), 0),
+      language: extra.language,
+      deadline: extra.deadline,
     },
   };
 }
