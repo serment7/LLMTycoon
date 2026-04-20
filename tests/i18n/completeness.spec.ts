@@ -166,7 +166,22 @@ test('S2-3. 동일한 leaf 수 — 구조 패리티 숫자 검증', () => {
  */
 const NAMESPACE_SNAPSHOTS = {
   onboarding: [
-    // 현재 미도입 — 추가 예정 키는 여기에 열거한다.
+    'onboarding.title',
+    'onboarding.skip',
+    'onboarding.next',
+    'onboarding.prev',
+    'onboarding.finish',
+    'onboarding.restart',
+    'onboarding.stepIndicator',
+    'onboarding.steps.locale.title',
+    'onboarding.steps.locale.body',
+    'onboarding.steps.mcp.title',
+    'onboarding.steps.mcp.body',
+    'onboarding.steps.recommend.title',
+    'onboarding.steps.recommend.body',
+    'onboarding.steps.recommend.demoDescription',
+    'onboarding.steps.tokens.title',
+    'onboarding.steps.tokens.body',
   ] as readonly string[],
   tokenUsage: [
     'tokenUsage.indicator.label',

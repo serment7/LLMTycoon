@@ -63,6 +63,34 @@
       "ABORTED": "The operation was aborted."
     }
   },
+  "onboarding": {
+    "title": "Welcome to LLM Tycoon",
+    "skip": "Skip",
+    "next": "Next",
+    "prev": "Previous",
+    "finish": "Finish",
+    "restart": "Show again",
+    "stepIndicator": "Step {current} of {total}",
+    "steps": {
+      "locale": {
+        "title": "Choose your language",
+        "body": "You can switch anytime from the settings. The interface and Claude recommendations follow your choice."
+      },
+      "mcp": {
+        "title": "Pick an MCP transport",
+        "body": "Use stdio for local tools and streamable HTTP for remote services. You can change it per project later."
+      },
+      "recommend": {
+        "title": "Get a team recommended",
+        "body": "Describe your project — Claude suggests a starter team. Here's a preview:",
+        "demoDescription": "Payment module hardening — PCI audit + token encryption"
+      },
+      "tokens": {
+        "title": "Watch your token budget",
+        "body": "The top indicator shows input, output, and cache-hit tokens. Auto-compaction toasts keep you informed."
+      }
+    }
+  },
   "tokenUsage": {
     "indicator": {
       "label": "Tokens",
