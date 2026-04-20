@@ -16,6 +16,13 @@
     "en": "English",
     "ko": "Korean"
   },
+  "project": {
+    "newProjectWizard": {
+      "loading": "Preparing recommendations…",
+      "error": "Couldn't fetch recommendations. Try again.",
+      "empty": "No recommendations yet. Add a project description above."
+    }
+  },
   "multimedia": {
     "hub": {
       "title": "Multimedia Hub",
