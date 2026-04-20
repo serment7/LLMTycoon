@@ -26,6 +26,7 @@ import {
   type MediaAdapterInvocation,
   type MediaAdapterOutcome,
   type MediaAdapterOutput,
+  type MediaAdapterPhase,
   type MultimediaAdapterConfig,
   type WebSearchInput,
 } from '../types';
@@ -634,7 +635,7 @@ function createDescriptor(): MediaAdapterDescriptor {
   return {
     kind: 'web-search',
     id: WEB_SEARCH_REAL_ADAPTER_ID,
-    displayName: '웹 검색 어댑터(실구현)',
+    displayName: '웹 검색',
     supportedInputMimes: [],
     producedOutputMimes: [],
     capabilities: {
@@ -707,11 +708,31 @@ export class WebSearchAdapter implements MediaAdapter<'web-search'> {
       maxResults: limit,
       signal: call.signal,
       site: includeDomains && includeDomains.length > 0 ? includeDomains[0] : undefined,
-      onProgress: (stage, ratio) => call.onProgress?.({
-        phase: stage === 'done' ? 'finalize' : 'upload',
-        ratio,
-        message: `웹 검색 ${stage}`,
-      }),
+      onProgress: (stage, ratio) => {
+        // 설계 스펙 `docs/design/multimedia-ui-spec.md §2` 의 3단계 phase(precheck·upload·finalize)
+        // 에 맞춰 내부 4단계(dispatch·fetch·normalize·done) 를 번역한다. 원본 stage 영문명이
+        // 그대로 UI 문구로 새어 나가던 결함을 바로잡아 한국어 고정 카피로 고정.
+        let phase: MediaAdapterPhase;
+        let message: string;
+        if (stage === 'dispatch') {
+          phase = 'precheck';
+          message = '웹 검색 요청 준비 중';
+        } else if (stage === 'fetch') {
+          phase = 'upload';
+          message = '검색 공급자에 요청 중';
+        } else if (stage === 'normalize') {
+          phase = 'finalize';
+          message = '검색 결과 정리 중';
+        } else {
+          phase = 'finalize';
+          message = '웹 검색 완료';
+        }
+        call.onProgress?.({
+          phase,
+          ratio: Math.max(0, Math.min(1, ratio)),
+          message,
+        });
+      },
     };
     const items = await this.search(query, options);
     return {

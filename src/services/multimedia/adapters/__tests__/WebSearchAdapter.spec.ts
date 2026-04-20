@@ -343,3 +343,36 @@ test('webSearch() + provider 주입 → 정상 반환', async () => {
   const out = await webSearch('x', { maxResults: 5 }, { provider });
   assert.deepEqual(out, results);
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// D1. Designer 규약 — invoke() progress 가 멀티미디어 허브 3단계 phase 로 번역되는지
+//     `docs/design/multimedia-ui-spec.md §2` 의 precheck·upload·finalize 축을 잠금.
+// ────────────────────────────────────────────────────────────────────────────
+
+test('D1. invoke() progress 는 3단계 phase + 한국어 메시지로 UI 에 전달', async () => {
+  const settings = makeSettings({
+    fetch: jsonFetch(() => ({ status: 200, body: bingBody([{ name: 'ok', url: 'https://e.com/ok', snippet: 'ok' }]) })),
+  });
+  const adapter = new WebSearchAdapter({ maxBytes: 0, timeoutMs: 5_000 }, { settings });
+  const events: Array<{ phase: string; ratio: number | null; message?: string }> = [];
+  await adapter.invoke({
+    input: { query: '디자인 phase 매핑', limit: 1 },
+    onProgress: (p) => events.push({ phase: p.phase, ratio: p.ratio, message: p.message }),
+  });
+  const phases = events.map((e) => e.phase);
+  assert.ok(phases.includes('precheck'), 'dispatch 는 precheck 로 번역되어야 한다');
+  assert.ok(phases.includes('upload'), 'fetch 는 upload 로 번역되어야 한다');
+  assert.ok(phases.includes('finalize'), 'normalize/done 은 finalize 로 번역되어야 한다');
+  // 영어 stage 명이 메시지로 누출되지 않아야 함.
+  for (const ev of events) {
+    assert.ok(!/dispatch|normalize|fetch\b|done/i.test(ev.message ?? ''),
+      `영어 stage 명이 메시지에 누출됨: "${ev.message}"`);
+    assert.ok(/[가-힣]/.test(ev.message ?? ''), `한국어 메시지가 비어 있음: "${ev.message}"`);
+  }
+});
+
+test('D2. displayName 에 개발자 언어("실구현") 가 누출되지 않는다', () => {
+  const adapter = new WebSearchAdapter({ maxBytes: 0, timeoutMs: 0 });
+  assert.ok(!/실구현/.test(adapter.descriptor.displayName),
+    `displayName 에 내부 표식이 노출됨: ${adapter.descriptor.displayName}`);
+});

@@ -793,6 +793,16 @@ export async function generateVideo(
     // 성공 경로가 아닌 모든 종료 — abort/maxAttempts/poll 실패/failed/canceled —
     // 여기서 일괄 환불한다. 이미 환불된 경우는 refundBudget 가 no-op.
     refundBudget();
+    // 호출자 abort 는 공급자 측 렌더에도 전파해 서버가 계속 돌며 비용을 태우는
+    // 누수를 끊는다. 이미 공급자에서 failed/canceled/succeeded 로 떨어진 작업은
+    // 대상 외 — queued/rendering 상태에서만 fire-and-forget 으로 취소 요청한다.
+    if (
+      err instanceof MediaAdapterError &&
+      err.code === 'ABORTED' &&
+      (currentJob.status === 'queued' || currentJob.status === 'rendering')
+    ) {
+      void provider.cancelJob(currentJob.id).catch(() => undefined);
+    }
     throw err;
   } finally {
     release();

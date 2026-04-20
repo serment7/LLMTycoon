@@ -425,6 +425,91 @@ test('V7c-4. 공급자 canceled 응답은 ABORTED 로 표면화되고 예산 환
   assert.equal(budget.getUsed(), 0, 'canceled 응답 시 환불되어 used=0');
 });
 
+test('V7c-5. 호출자 abort 시 공급자 cancelJob 이 전파되어 렌더 비용을 끊는다', async () => {
+  // 과거 구현은 ABORTED 만 던지고 공급자 큐에 남은 렌더를 방치해 서버 측 비용이
+  // 계속 발생했다. 취소 시 공급자에게도 cancelJob 을 쏴 이 누수를 막는 잠금.
+  const ac = new AbortController();
+  const canceledIds: string[] = [];
+  const provider = stubProvider({
+    id: 'pika',
+    costPerSecond: () => 0.05,
+    async createJob(spec) {
+      return {
+        id: 'abort-job', status: 'rendering', progress: 0.1, provider: 'pika',
+        costEstimate: spec.durationSec * 0.05,
+        metadata: {
+          createdAtMs: 0, updatedAtMs: 0, prompt: spec.prompt, durationSec: spec.durationSec,
+          aspectRatio: spec.aspectRatio, fps: spec.fps, shotCount: 1, policyChecked: false,
+        },
+      };
+    },
+    async pollJob(id) {
+      return {
+        id, status: 'rendering', progress: 0.5, provider: 'pika', costEstimate: 0,
+        metadata: {
+          createdAtMs: 0, updatedAtMs: 0, prompt: '', durationSec: 4, aspectRatio: '16:9', fps: 24,
+          shotCount: 1, policyChecked: false,
+        },
+      };
+    },
+    async cancelJob(id) { canceledIds.push(id); },
+  });
+  const p = generateVideo(
+    baseSpec({ durationSec: 4 }),
+    { signal: ac.signal, pollIntervalMs: 5, maxPollAttempts: 100 },
+    { provider, sleep: noSleep },
+  );
+  queueMicrotask(() => ac.abort());
+  await assert.rejects(p, (err: unknown) => {
+    assert.equal((err as MediaAdapterError).code, 'ABORTED');
+    return true;
+  });
+  // fire-and-forget 로 쏜 cancelJob 이 microtask 큐에서 실행될 시간을 준다.
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(canceledIds, ['abort-job'], 'abort 시 공급자 cancelJob 이 한 번 호출되어야 함');
+});
+
+test('V7c-6. 공급자가 먼저 canceled 를 반환하면 cancelJob 을 재호출하지 않는다', async () => {
+  // 이미 공급자 쪽에서 취소 완료된 작업에 대해 cancelJob 을 또 쏘는 것은 불필요한
+  // 왕복이므로, 상태가 canceled/failed/succeeded 일 때는 전파를 건너뛴다.
+  const canceledIds: string[] = [];
+  const provider = stubProvider({
+    id: 'runway',
+    costPerSecond: () => 0.07,
+    async createJob(spec) {
+      return {
+        id: 'already-canceled', status: 'rendering', progress: 0.1, provider: 'runway',
+        costEstimate: spec.durationSec * 0.07,
+        metadata: {
+          createdAtMs: 0, updatedAtMs: 0, prompt: spec.prompt, durationSec: spec.durationSec,
+          aspectRatio: spec.aspectRatio, fps: spec.fps, shotCount: 1, policyChecked: false,
+        },
+      };
+    },
+    async pollJob(id) {
+      return {
+        id, status: 'canceled', progress: 0, provider: 'runway', costEstimate: 0,
+        metadata: {
+          createdAtMs: 0, updatedAtMs: 0, prompt: '', durationSec: 4, aspectRatio: '16:9', fps: 24,
+          shotCount: 1, policyChecked: false,
+        },
+      };
+    },
+    async cancelJob(id) { canceledIds.push(id); },
+  });
+  await assert.rejects(
+    () => generateVideo(baseSpec({ durationSec: 3 }), { pollIntervalMs: 1 }, {
+      provider, sleep: noSleep,
+    }),
+    (err: unknown) => {
+      assert.equal((err as MediaAdapterError).code, 'ABORTED');
+      return true;
+    },
+  );
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(canceledIds, [], '공급자가 canceled 를 반환했으면 cancelJob 을 재호출하지 않음');
+});
+
 // ────────────────────────────────────────────────────────────────────────────
 // V10. 입력 검증 — 빈 프롬프트·과도한 길이·지원하지 않는 해상도/화면 비율은
 //      VIDEO_INVALID_INPUT(INPUT_INVALID) 로 즉시 거절된다. 공급자 호출 전에
