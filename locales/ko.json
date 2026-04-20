@@ -62,5 +62,26 @@
       "PERMISSION_DENIED": "권한이 거절되었습니다.",
       "ABORTED": "작업이 중단되었습니다."
     }
+  },
+  "tokenUsage": {
+    "indicator": {
+      "label": "토큰",
+      "input": "입력",
+      "output": "출력",
+      "cacheHit": "캐시 적중",
+      "remaining": "세션 한도의 {percent} 사용",
+      "noLimit": "세션 한도가 설정되지 않았습니다"
+    },
+    "panel": {
+      "title": "토큰 사용량",
+      "trend": "최근 7세션",
+      "topAgents": "에이전트 상위",
+      "compactions": "자동 압축 이력",
+      "empty": "아직 기록된 사용량이 없습니다.",
+      "savedTokens": "{count} 절감"
+    },
+    "toast": {
+      "compacted": "컨텍스트가 자동 압축되었습니다 — {count} 토큰 절감."
+    }
   }
 }

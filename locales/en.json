@@ -62,5 +62,26 @@
       "PERMISSION_DENIED": "Permission denied.",
       "ABORTED": "The operation was aborted."
     }
+  },
+  "tokenUsage": {
+    "indicator": {
+      "label": "Tokens",
+      "input": "Input",
+      "output": "Output",
+      "cacheHit": "Cache hit",
+      "remaining": "{percent} used of session limit",
+      "noLimit": "No session limit set"
+    },
+    "panel": {
+      "title": "Token usage",
+      "trend": "Last 7 sessions",
+      "topAgents": "Top agents",
+      "compactions": "Auto compactions",
+      "empty": "No usage recorded yet.",
+      "savedTokens": "Saved {count}"
+    },
+    "toast": {
+      "compacted": "Context auto-compacted — saved {count} tokens."
+    }
   }
 }
