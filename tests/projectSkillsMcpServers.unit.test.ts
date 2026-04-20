@@ -23,6 +23,8 @@ import {
   createMemoryMcpServerStorage,
   validateMcpServerInput,
   MCP_NAME_MAX,
+  MCP_TRANSPORTS,
+  type McpServerRecord,
 } from '../src/stores/projectMcpServersStore.ts';
 import {
   buildAgentDispatchContext,
@@ -194,4 +196,129 @@ test('E2. provider 미등록 상태에서는 빈 컨텍스트를 돌려준다', 
   assert.equal(ctx.mcpServers.length, 0);
   const prompt = formatDispatchContextForPrompt(ctx);
   assert.equal(prompt, '');
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// F. 지시 #5cda6ae5 — transport(stdio · http · streamable-http) 분기
+// ────────────────────────────────────────────────────────────────────────────
+
+test('F1. transport 상수는 3종(stdio · http · streamable-http) 을 공개한다', () => {
+  assert.deepEqual([...MCP_TRANSPORTS], ['stdio', 'http', 'streamable-http']);
+});
+
+test('F2. http 전송 — url 누락/비http 스킴은 거부, https 는 통과', () => {
+  const missing = validateMcpServerInput({
+    projectId: 'P', name: 'remote', transport: 'http',
+  });
+  assert.ok(missing.some((e) => e.field === 'url'), 'url 누락 → 에러');
+
+  const badScheme = validateMcpServerInput({
+    projectId: 'P', name: 'remote', transport: 'http',
+    url: 'file:///etc/passwd',
+  });
+  assert.ok(badScheme.some((e) => e.field === 'url'), 'file 스킴 거부');
+
+  const malformed = validateMcpServerInput({
+    projectId: 'P', name: 'remote', transport: 'http',
+    url: 'https://example.com/ path',  // 공백 포함
+  });
+  assert.ok(malformed.some((e) => e.field === 'url'), '공백 포함 URL 거부');
+
+  const ok = validateMcpServerInput({
+    projectId: 'P', name: 'remote', transport: 'http',
+    url: 'https://mcp.example.com/v1',
+    headers: { 'X-Client': 'llm-tycoon' },
+    authToken: 'abc',
+  });
+  assert.equal(ok.length, 0, '정상 http 입력은 에러 없음');
+});
+
+test('F3. streamable-http 전송도 동일한 url/headers 검증을 거친다', () => {
+  const errors = validateMcpServerInput({
+    projectId: 'P', name: 'stream', transport: 'streamable-http',
+    url: 'ws://x/y',   // http/https 가 아님
+  });
+  assert.ok(errors.some((e) => e.field === 'url'));
+});
+
+test('F4. headers — 제어문자(CR/LF) 는 헤더 스머글링 위험으로 차단된다', () => {
+  const sm = validateMcpServerInput({
+    projectId: 'P', name: 'remote', transport: 'http',
+    url: 'https://x.example',
+    headers: { 'X-Evil': 'value\r\nInjected: 1' },
+  });
+  assert.ok(sm.some((e) => e.field === 'headers'), 'CRLF 포함 값 거부');
+
+  const badName = validateMcpServerInput({
+    projectId: 'P', name: 'remote', transport: 'http',
+    url: 'https://x.example',
+    headers: { 'X Client': 'v' },
+  });
+  assert.ok(badName.some((e) => e.field === 'headers'), '공백 헤더명 거부');
+});
+
+test('F5. authToken — 제어문자는 거부, 문자열 타입만 허용된다', () => {
+  const bad = validateMcpServerInput({
+    projectId: 'P', name: 'remote', transport: 'http',
+    url: 'https://x.example',
+    authToken: 'token\nx',
+  });
+  assert.ok(bad.some((e) => e.field === 'authToken'));
+});
+
+test('F6. 레거시(v1) 레코드는 list() 가 transport="stdio" 로 보강해 돌려준다', async () => {
+  const storage = createMemoryMcpServerStorage();
+  // 스키마 v1 레코드를 "백도어" 로 직접 주입 — 과거 저장된 상태 재현.
+  const legacy = {
+    id: 'legacy-1',
+    projectId: 'P1',
+    name: 'legacy',
+    command: 'npx',
+    args: ['-y', 'old-server'],
+    env: { API_URL: 'http://x' },
+    createdAt: 1,
+    schemaVersion: 1,
+  };
+  await storage.put('P1:legacy-1', legacy as unknown as McpServerRecord);
+  const store = createProjectMcpServersStore({ adapter: storage });
+  const list = await store.list('P1');
+  assert.equal(list.length, 1);
+  assert.equal(list[0].transport, 'stdio', '누락된 transport 는 stdio 로 보강');
+});
+
+test('F7. buildAgentDispatchContext — http 서버의 transport/url/headers 가 전달되고 authToken 원문은 프롬프트에 노출되지 않는다', async () => {
+  resetAgentDispatcherForTests();
+  try {
+    const skillsStore = createProjectSkillsStore({ adapter: createMemorySkillStorage() });
+    const mcpStore = createProjectMcpServersStore({ adapter: createMemoryMcpServerStorage() });
+
+    await mcpStore.add({
+      projectId: 'P-http',
+      name: 'remote-rag',
+      transport: 'streamable-http',
+      url: 'https://mcp.example.com/rag',
+      headers: { 'X-Tenant': 'acme' },
+      authToken: 'super-secret-token',
+    });
+
+    setSkillsProvider((pid) => skillsStore.listForAgent(pid));
+    setMcpServersProvider((pid) => mcpStore.list(pid));
+
+    const ctx = await buildAgentDispatchContext('P-http');
+    assert.equal(ctx.mcpServers.length, 1);
+    const m = ctx.mcpServers[0];
+    assert.equal(m.transport, 'streamable-http');
+    assert.equal(m.url, 'https://mcp.example.com/rag');
+    assert.deepEqual(m.headers, { 'X-Tenant': 'acme' });
+    assert.equal(m.authToken, 'super-secret-token', 'AgentContext 에는 런타임 요청용으로 원문을 포함');
+
+    const prompt = formatDispatchContextForPrompt(ctx);
+    assert.match(prompt, /\[streamable-http\]/);
+    assert.match(prompt, /mcp\.example\.com\/rag/);
+    assert.match(prompt, /headers: X-Tenant/);
+    assert.match(prompt, /auth: bearer 설정됨/);
+    assert.ok(!prompt.includes('super-secret-token'), '프롬프트 직렬화는 토큰 값을 노출하면 안 됨');
+  } finally {
+    resetAgentDispatcherForTests();
+  }
 });

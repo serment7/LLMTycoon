@@ -24,6 +24,7 @@ import {
 import {
   listProjectMcpServers as defaultListProjectMcpServers,
   type McpServerRecord,
+  type McpTransport,
 } from '../stores/projectMcpServersStore';
 import {
   loadCodeRulesForAgent as defaultLoadCodeRulesForAgent,
@@ -47,9 +48,20 @@ export interface AgentSkillContext {
 export interface AgentMcpServerContext {
   id: string;
   name: string;
+  transport: McpTransport;
   command: string;
   args: string[];
   env: Record<string, string>;
+  /** http · streamable-http 전송에서만 의미. stdio 서버는 undefined. */
+  url?: string;
+  /** http · streamable-http 전송의 커스텀 헤더. 키/값 구조 유지. */
+  headers?: Record<string, string>;
+  /**
+   * http · streamable-http 전송의 Bearer 토큰. 에이전트 런타임이 실제 요청을
+   * 걸 때 사용하며, 프롬프트 직렬화(formatDispatchContextForPrompt) 에는
+   * 값이 노출되지 않고 "설정됨" 플래그만 보인다.
+   */
+  authToken?: string;
 }
 
 export interface AgentCodeRulesContext {
@@ -153,9 +165,13 @@ export async function buildAgentDispatchContext(
     mcpServers: mcpRecords.map((m) => ({
       id: m.id,
       name: m.name,
+      transport: m.transport ?? 'stdio',
       command: m.command,
       args: [...m.args],
       env: { ...m.env },
+      ...(m.url !== undefined ? { url: m.url } : {}),
+      ...(m.headers !== undefined ? { headers: { ...m.headers } } : {}),
+      ...(m.authToken !== undefined ? { authToken: m.authToken } : {}),
     })),
     codeRules: rulesRecord ? {
       scope: rulesRecord.scope,
@@ -194,10 +210,19 @@ export function formatDispatchContextForPrompt(ctx: AgentDispatchContext): strin
   if (ctx.mcpServers.length > 0) {
     lines.push('', '### MCP 서버');
     for (const m of ctx.mcpServers) {
-      const args = m.args.length > 0 ? ` ${m.args.join(' ')}` : '';
-      const envKeys = Object.keys(m.env);
-      const envSummary = envKeys.length > 0 ? ` (env: ${envKeys.join(', ')})` : '';
-      lines.push(`- ${m.name}: \`${m.command}${args}\`${envSummary}`);
+      if (m.transport === 'stdio') {
+        const args = m.args.length > 0 ? ` ${m.args.join(' ')}` : '';
+        const envKeys = Object.keys(m.env);
+        const envSummary = envKeys.length > 0 ? ` (env: ${envKeys.join(', ')})` : '';
+        lines.push(`- ${m.name} [stdio]: \`${m.command}${args}\`${envSummary}`);
+      } else {
+        const headerKeys = Object.keys(m.headers ?? {});
+        const headerSummary = headerKeys.length > 0 ? ` (headers: ${headerKeys.join(', ')})` : '';
+        // 토큰 값 자체는 프롬프트에 노출하지 않는다 — 설정 유무만 고지한다.
+        const authSummary = m.authToken ? ' · auth: bearer 설정됨' : '';
+        const url = m.url ?? '(url 누락)';
+        lines.push(`- ${m.name} [${m.transport}]: \`${url}\`${headerSummary}${authSummary}`);
+      }
     }
   }
   if (ctx.codeRules) {
