@@ -194,6 +194,20 @@ interface Sample {
   readonly compactTriggered: boolean;
 }
 
+/** 지시 #c50309c3 · 언어 토글·추천 반복 스트레스 스텝 측정 결과. */
+interface StressSummary {
+  readonly atCycle: number;
+  readonly localeToggles: number;
+  readonly recommendCalls: number;
+  readonly toggleDurationMs: number;
+  readonly recommendDurationMs: number;
+  readonly inputDelta: number;
+  readonly cacheReadDelta: number;
+  readonly heapUsedBeforeMb: number;
+  readonly heapUsedAfterMb: number;
+  readonly heapLeakMb: number; // 경험적 누수 경계 — 1MB 초과 시 플래그.
+}
+
 interface ReconnectCheck {
   readonly cycle: number;
   readonly cacheReadBefore: number;
@@ -210,6 +224,7 @@ async function runProbe(opts: ProbeOptions): Promise<{
   mode: 'real' | 'simulated';
   invalidations: number;
   reconnect: ReconnectCheck | null;
+  stress: StressSummary | null;
 }> {
   const call = opts.real ? await createRealClaudeCall() : createSimulatedCall();
   const mode: 'real' | 'simulated' = opts.real ? 'real' : 'simulated';
@@ -233,6 +248,9 @@ async function runProbe(opts: ProbeOptions): Promise<{
   let reconnect: ReconnectCheck | null = null;
   // 30분 중간 지점 재접속 모사 — cycles 의 절반 지점에서 한 번만 발동.
   const reconnectAt = Math.floor(opts.cycles / 2);
+  // 지시 #c50309c3 — 언어 토글 10회 + 추천 요청 5회 스트레스 스텝을 3/4 지점에 주입.
+  const stressAt = Math.floor(opts.cycles * 3 / 4);
+  let stress: StressSummary | null = null;
 
   for (let i = 0; i < opts.cycles; i += 1) {
     // 50 번째 사이클에 도구 하나 추가, 100 번째에 에이전트 1명 추가 — 캐시 무효화 이벤트.
@@ -282,6 +300,57 @@ async function runProbe(opts: ProbeOptions): Promise<{
       compactTriggered: triggered,
     });
 
+    // 지시 #c50309c3 — 3/4 지점에서 "언어 토글 10회 연속 + 추천 5회" 스트레스 스텝.
+    if (i === stressAt && stress === null) {
+      const inputBefore = session.totals.inputTokens;
+      const cacheReadBefore = session.totals.cacheReadTokens;
+      const heapBefore = process.memoryUsage().heapUsed;
+
+      // (1) 언어 토글 10회 — 각 토글을 "비동기 호출 1건 + usageLog 기록" 으로 시뮬.
+      //     실 호출과 달리 프롬프트 본문이 짧아 input_tokens 가 최소, cache_read 가 지배.
+      const toggleStart = Date.now();
+      for (let t = 0; t < 10; t += 1) {
+        const locale = t % 2 === 0 ? 'ko' : 'en';
+        const res = await call(
+          systemPrompt, agentDefinition, toolsSchema, session.history,
+          `[locale-toggle #${t}] 언어를 ${locale} 로 전환합니다.`,
+          i,
+        );
+        session = recordUsage(session, res.usage);
+        await sink.append(res.usage, `probe-${i}-toggle-${t}`);
+      }
+      const toggleDurationMs = Date.now() - toggleStart;
+
+      // (2) 추천 요청 5회 반복 — 동일 설명을 반복 호출해 프롬프트 캐시 재사용 효과를 관찰.
+      const recommendStart = Date.now();
+      const recommendDesc = '장기 세션 스트레스 — 대시보드 + 알림 + 권한 관리 모듈 추가';
+      for (let r = 0; r < 5; r += 1) {
+        const res = await call(
+          systemPrompt, agentDefinition, toolsSchema, session.history,
+          `[recommend #${r}] ${recommendDesc}`,
+          i,
+        );
+        session = recordUsage(session, res.usage);
+        await sink.append(res.usage, `probe-${i}-recommend-${r}`);
+      }
+      const recommendDurationMs = Date.now() - recommendStart;
+
+      const heapAfter = process.memoryUsage().heapUsed;
+      const heapLeakMb = Math.max(0, (heapAfter - heapBefore) / (1024 * 1024));
+      stress = {
+        atCycle: i,
+        localeToggles: 10,
+        recommendCalls: 5,
+        toggleDurationMs,
+        recommendDurationMs,
+        inputDelta: session.totals.inputTokens - inputBefore,
+        cacheReadDelta: session.totals.cacheReadTokens - cacheReadBefore,
+        heapUsedBeforeMb: heapBefore / (1024 * 1024),
+        heapUsedAfterMb: heapAfter / (1024 * 1024),
+        heapLeakMb,
+      };
+    }
+
     // 중간 지점에서 강제 재접속: (a) 저장소에서 로드, (b) 세션 객체를 버리고 (c) 복원,
     // (d) cache_read·히스토리 길이가 손실되지 않았는지 확인한다.
     if (i === reconnectAt) {
@@ -315,6 +384,7 @@ async function runProbe(opts: ProbeOptions): Promise<{
     mode,
     invalidations,
     reconnect,
+    stress,
   };
 }
 
@@ -379,6 +449,19 @@ function renderReport(opts: ProbeOptions, result: Awaited<ReturnType<typeof runP
     lines.push(`- 판정: ${rc.passed ? '✅ 유지됨(끊김 없는 개발 목표 충족)' : '⚠︎ 손실 감지 — 회귀 의심'}`);
   } else {
     lines.push('- (재접속 시뮬이 실행되지 않았습니다. 기본 cycles 값이 2 미만일 때 생략.)');
+  }
+  lines.push('');
+  lines.push('## 스트레스 스텝(언어 토글 10회 + 추천 5회)');
+  if (result.stress) {
+    const s = result.stress;
+    lines.push(`- 주입 지점: cycle ${s.atCycle}`);
+    lines.push(`- 언어 토글 ${s.localeToggles}회 소요: ${s.toggleDurationMs}ms`);
+    lines.push(`- 추천 요청 ${s.recommendCalls}회 소요: ${s.recommendDurationMs}ms`);
+    lines.push(`- input Δ: ${s.inputDelta.toLocaleString()} / cache_read Δ: ${s.cacheReadDelta.toLocaleString()}`);
+    lines.push(`- heapUsed 전/후: ${s.heapUsedBeforeMb.toFixed(1)}MB → ${s.heapUsedAfterMb.toFixed(1)}MB (Δ ${s.heapLeakMb.toFixed(2)}MB)`);
+    lines.push(`- 판정: ${s.heapLeakMb < 1 ? '✅ 힙 누수 없음(<1MB)' : '⚠︎ 힙 증가 감지 — 재현 후 조사 필요'}`);
+  } else {
+    lines.push('- (cycles 가 적어 스트레스 스텝이 발동되지 않았습니다.)');
   }
   lines.push('');
   lines.push('## usage 로그 샘플(앞 3줄)');

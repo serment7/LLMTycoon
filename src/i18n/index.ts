@@ -18,7 +18,7 @@
 
 import en from '../../locales/en.json';
 import ko from '../../locales/ko.json';
-import { useSyncExternalStore } from 'react';
+import React, { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from 'react';
 
 export type Locale = 'en' | 'ko';
 
@@ -168,4 +168,55 @@ export function useLocale(): {
     setLocale: (next: Locale) => setLocale(next),
     t: (key: string) => translate(key, locale),
   };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// React Context — 지시 #8de1a1c8 "토글 시 즉시 전체 UI 재렌더링되도록 Context 로 전파"
+//
+// 내부는 여전히 전역 모듈 상태를 단일 진실원(source of truth) 로 쓰되, Context 는
+// 그 위에 "Provider 범위 안의 모든 자식 컴포넌트가 같은 참조를 재사용" 하도록 돕는
+// 얇은 래퍼다. 기존 `useLocale` 을 직접 쓰는 코드는 Provider 여부와 무관하게 동작.
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface I18nContextValue {
+  readonly locale: Locale;
+  readonly setLocale: (next: Locale) => void;
+  readonly t: (key: string) => string;
+}
+
+const I18nContext = createContext<I18nContextValue | null>(null);
+
+export interface I18nProviderProps {
+  readonly children?: React.ReactNode;
+  /** 부트스트랩 시 특정 로케일로 강제 고정(세션 복원 경로). */
+  readonly initialLocale?: Locale;
+  readonly storage?: LocaleStorage | null;
+}
+
+export function I18nProvider(props: I18nProviderProps): React.ReactElement {
+  // initialLocale 이 주어지면 마운트 시 한 번 동기. 이후에는 useSyncExternalStore 가
+  // 전역 상태 변화를 Context 값에 반영한다.
+  const bootstrapped = React.useRef(false);
+  if (!bootstrapped.current && props.initialLocale && props.initialLocale !== currentLocale) {
+    setLocale(props.initialLocale, props.storage ?? undefined);
+    bootstrapped.current = true;
+  }
+  const locale = useSyncExternalStore(subscribe, getLocale, getLocale);
+  const setLocaleCb = useCallback((next: Locale) => setLocale(next, props.storage ?? undefined), [props.storage]);
+  const tCb = useCallback((key: string) => translate(key, locale), [locale]);
+  const value = useMemo<I18nContextValue>(
+    () => ({ locale, setLocale: setLocaleCb, t: tCb }),
+    [locale, setLocaleCb, tCb],
+  );
+  return React.createElement(I18nContext.Provider, { value }, props.children);
+}
+
+/**
+ * Context 우선. Provider 가 없으면 `useLocale` 로 폴백 — 기존 App.tsx 경로가 영향을
+ * 받지 않도록 설계.
+ */
+export function useI18n(): I18nContextValue {
+  const ctx = useContext(I18nContext);
+  const fallback = useLocale();
+  return ctx ?? fallback;
 }

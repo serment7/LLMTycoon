@@ -234,6 +234,38 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
     [state.selected, state.team, props, t],
   );
 
+  // 부분 실패 재시도 — 실패한 추천 카드 하나만 다시 시도해 applied 결과를 병합.
+  const retryOne = useCallback(
+    async (rec: AgentRecommendation) => {
+      setState((prev) => ({ ...prev, status: 'applying' }));
+      try {
+        const next = await applyRecommendedTeam(props.projectId, [rec], props.applyOptions);
+        setState((prev) => {
+          const base = prev.applied;
+          if (!base) return { ...prev, status: 'ready', applied: next };
+          const merged = base.items.map((it) => {
+            if (it.recommendation.role === rec.role && it.recommendation.name === rec.name) {
+              return next.items[0] ?? it;
+            }
+            return it;
+          });
+          return {
+            ...prev,
+            status: 'ready',
+            applied: {
+              projectId: base.projectId,
+              items: merged,
+              appliedCount: merged.filter((it) => it.ok).length,
+            },
+          };
+        });
+      } catch {
+        setState((prev) => ({ ...prev, status: 'ready' }));
+      }
+    },
+    [props.projectId, props.applyOptions],
+  );
+
   // ── 렌더 ──────────────────────────────────────────────────────────────────
 
   const selectedCount = state.selected.length;
@@ -314,8 +346,16 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
             {state.team.items.map((rec, idx) => {
               const selected = state.selected.includes(idx);
               const segments = sanitizeRationale(rec.rationale);
+              const appliedEntry = state.applied?.items.find(
+                (it) => it.recommendation.role === rec.role && it.recommendation.name === rec.name,
+              );
+              const cardStatus: 'idle' | 'success' | 'failed' = appliedEntry
+                ? appliedEntry.ok
+                  ? 'success'
+                  : 'failed'
+                : 'idle';
               return (
-                <li key={`${rec.role}-${idx}`}>
+                <li key={`${rec.role}-${idx}`} data-card-status={cardStatus}>
                   <label className="npw-card" data-selected={selected} role="option" aria-selected={selected}>
                     <input
                       type="checkbox"
@@ -338,6 +378,24 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
                             </li>
                           ))}
                         </ul>
+                      )}
+                      {cardStatus === 'success' && (
+                        <span className="npw-card-status npw-card-success" aria-label={t('project.newProjectWizard.apply.successBadge')}>
+                          ✓ {t('project.newProjectWizard.apply.successBadge')}
+                        </span>
+                      )}
+                      {cardStatus === 'failed' && (
+                        <div className="npw-card-status npw-card-failed" role="alert">
+                          <span>{appliedEntry?.error ?? t('project.newProjectWizard.apply.failBadge')}</span>
+                          <button
+                            type="button"
+                            className="npw-card-retry"
+                            onClick={() => retryOne(rec)}
+                            disabled={state.status === 'applying'}
+                          >
+                            {t('project.newProjectWizard.apply.retry')}
+                          </button>
+                        </div>
                       )}
                     </div>
                   </label>

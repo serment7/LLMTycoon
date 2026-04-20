@@ -26,6 +26,11 @@ import {
   shouldCompact,
   type ConversationTurn,
 } from '../../llm/tokenBudget';
+import type { RecommendationCacheStore } from '../../llm/recommendationCacheStore';
+import {
+  USAGE_CATEGORY_RECOMMEND_AGENTS,
+  type UsageLogSink,
+} from '../../llm/usageLog';
 
 // ────────────────────────────────────────────────────────────────────────────
 // 요청 스키마
@@ -93,6 +98,10 @@ export interface RecommendAgentsDeps {
   readonly allowAnonymous?: boolean;
   /** 인증 필수일 때 user 를 해석. allowAnonymous=false 인 경우에만 호출된다. */
   readonly resolveUser?: (req: HandlerRequest) => string | null;
+  /** 24h TTL 응답 캐시. 주입되면 동일 설명 해시 재요청은 LLM 왕복을 생략한다. */
+  readonly cacheStore?: RecommendationCacheStore;
+  /** 사용량 로그. 캐시 히트/미스 카테고리 라인을 기록. 미주입 시 로깅 생략. */
+  readonly usageLog?: UsageLogSink;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -117,7 +126,37 @@ export function createRecommendAgentsHandler(deps: RecommendAgentsDeps = {}): Ha
       return;
     }
 
-    const description = maybeShrinkDescription(parsed.data.description);
+    const originalDescription = parsed.data.description;
+    const description = maybeShrinkDescription(originalDescription);
+    const resolvedLocale: RecommendationLocale = parsed.data.locale ?? 'en';
+
+    // 1) 캐시 히트 — LLM 왕복 생략. usageLog 에 category=recommend_agents/zero-tokens 라인 기록.
+    if (deps.cacheStore) {
+      const hit = deps.cacheStore.get(originalDescription, resolvedLocale);
+      if (hit) {
+        await deps.usageLog
+          ?.appendLine(
+            JSON.stringify({
+              ts: new Date().toISOString(),
+              model: 'cache',
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheCreation: 0,
+              category: USAGE_CATEGORY_RECOMMEND_AGENTS,
+              callId: 'hit',
+            }),
+          )
+          .catch(() => undefined);
+        res.status(200).json({
+          ok: true,
+          source: 'cache',
+          locale: hit.locale,
+          items: ensureSkills(hit.items).slice(0, 5),
+        });
+        return;
+      }
+    }
 
     let outcome: AgentTeamRecommendation;
     try {
@@ -132,6 +171,25 @@ export function createRecommendAgentsHandler(deps: RecommendAgentsDeps = {}): Ha
         message: err instanceof Error ? err.message : 'unknown',
       });
       return;
+    }
+
+    // 2) 미스 — 성공한 경우에 한해 원본 description 키로 캐시 저장.
+    if (deps.cacheStore && outcome.items.length > 0) {
+      deps.cacheStore.set(originalDescription, resolvedLocale, outcome);
+      await deps.usageLog
+        ?.appendLine(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            model: outcome.source === 'heuristic' ? 'heuristic' : 'claude',
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheCreation: 0,
+            category: USAGE_CATEGORY_RECOMMEND_AGENTS,
+            callId: 'miss',
+          }),
+        )
+        .catch(() => undefined);
     }
 
     const items = ensureSkills(outcome.items).slice(0, 5);

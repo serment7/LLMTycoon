@@ -16,6 +16,32 @@
     "en": "English",
     "ko": "Korean"
   },
+  "projects": {
+    "create": {
+      "modalTitle": "Create a new project",
+      "name": "Name",
+      "namePlaceholder": "e.g., Checkout hardening",
+      "description": "Description",
+      "descriptionPlaceholder": "What is the project about?",
+      "workspacePath": "Workspace path",
+      "workspacePathHint": "Leave blank to use the default.",
+      "submit": "Create project",
+      "cancel": "Cancel",
+      "errors": {
+        "nameRequired": "Name is required.",
+        "nameTooLong": "Name must be under 80 characters.",
+        "descriptionTooLong": "Description must be under 2000 characters.",
+        "unknown": "Couldn't create the project."
+      },
+      "recommendAgents": {
+        "title": "AI team recommendation",
+        "intro": "Describe the project and we'll suggest a starter team.",
+        "addAll": "Add all",
+        "addOne": "Add",
+        "regenerate": "Regenerate"
+      }
+    }
+  },
   "project": {
     "newProjectWizard": {
       "loading": "Preparing recommendations…",
@@ -48,7 +74,10 @@
         "disabled": "Select at least one recommendation",
         "successToast": "Added {count} teammates.",
         "partialToast": "Added {applied} of {total}. {failed} failed.",
-        "failToast": "Couldn't add teammates."
+        "failToast": "Couldn't add teammates.",
+        "successBadge": "Added",
+        "failBadge": "Couldn't add this teammate.",
+        "retry": "Retry"
       }
     }
   },

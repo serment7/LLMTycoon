@@ -22,6 +22,13 @@
 
 import type { ClaudeTokenUsage } from '../types';
 
+/**
+ * usageLog 카테고리 상수 — 지시 #21a88a06 에서 "recommend_agents" 캐시 히트/미스를
+ * 기록하기 위해 도입. 기존 라인은 카테고리가 없으므로 optional.
+ */
+export const USAGE_CATEGORY_RECOMMEND_AGENTS = 'recommend_agents';
+export type UsageLogCategory = typeof USAGE_CATEGORY_RECOMMEND_AGENTS | string;
+
 export interface UsageLogLine {
   readonly ts: string;
   readonly model: string;
@@ -30,13 +37,19 @@ export interface UsageLogLine {
   readonly cacheRead: number;
   readonly cacheCreation: number;
   readonly callId?: string;
+  /** 선택 필드 — 카테고리별 집계(캐시 히트/미스 분석) 에 사용. */
+  readonly category?: UsageLogCategory;
 }
 
 /**
  * 로그 라인 직렬화. 개행을 포함하지 않는다(JSON lines 계약). callId 가 비어 있으면
  * 출력 키에 포함되지 않아 파서 스키마를 최소화한다.
  */
-export function formatUsageLogLine(usage: ClaudeTokenUsage, callId?: string): string {
+export function formatUsageLogLine(
+  usage: ClaudeTokenUsage,
+  callId?: string,
+  options: { category?: UsageLogCategory } = {},
+): string {
   const safe = (n: number | undefined) =>
     (typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : 0);
   const line: UsageLogLine = {
@@ -47,6 +60,7 @@ export function formatUsageLogLine(usage: ClaudeTokenUsage, callId?: string): st
     cacheRead: safe(usage.cache_read_input_tokens),
     cacheCreation: safe(usage.cache_creation_input_tokens),
     ...(callId ? { callId } : {}),
+    ...(options.category ? { category: options.category } : {}),
   };
   return JSON.stringify(line);
 }
@@ -73,6 +87,7 @@ export function parseUsageLogLine(line: string): UsageLogLine | null {
       cacheRead,
       cacheCreation,
       ...(typeof obj.callId === 'string' ? { callId: obj.callId } : {}),
+      ...(typeof obj.category === 'string' ? { category: obj.category } : {}),
     };
   } catch {
     return null;

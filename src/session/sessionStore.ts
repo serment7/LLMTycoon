@@ -38,6 +38,9 @@ export interface SessionBudgetSnapshot {
   readonly updatedAt: string;
 }
 
+/** 지시 #8de1a1c8 — 사용자별 언어 설정. 미지정 시 서버가 기본('en') 으로 폴백. */
+export type SessionLanguagePreference = 'en' | 'ko';
+
 export interface SessionSnapshot {
   readonly sessionId: string;
   readonly userId: string;
@@ -48,6 +51,12 @@ export interface SessionSnapshot {
   readonly mcp: SessionMcpSnapshot | null;
   /** 세션이 최근 수행한 압축 횟수 — 복원 후 UI 가 "요약 n회 반영됨" 배지를 띄운다. */
   readonly compactions: number;
+  /**
+   * UI 언어 설정. localStorage 뿐 아니라 서버 세션에도 저장해 다른 기기/탭에서 재접속
+   * 해도 일관된 언어 모드가 복원된다. null 이면 "사용자가 아직 선택하지 않음(브라우저
+   * 감지 폴백)".
+   */
+  readonly languagePreference: SessionLanguagePreference | null;
   /** schemaVersion — 구조가 바뀌면 마이그레이션 가이드를 붙일 수 있게. */
   readonly schemaVersion: 1;
 }
