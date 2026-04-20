@@ -411,3 +411,91 @@ test('defaultBreadth — depth 1/2/3 → 3/5/8', () => {
   assert.equal(defaultBreadth(2), 5);
   assert.equal(defaultBreadth(3), 8);
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// R12. requireCitations=false 여도 근거 0 인 서브쿼리는 limitations 에 기록된다
+// (섹션은 남지만 한계점으로 고지)
+// ────────────────────────────────────────────────────────────────────────────
+
+test('R12. requireCitations=false 에서도 근거 없는 서브쿼리는 limitations 에 한계점이 기록된다', async () => {
+  // 두 서브쿼리 중 두 번째만 근거를 갖도록 — 첫 번째는 빈 결과.
+  let callIdx = 0;
+  const runtime: ResearchRuntime = {
+    searchRunner: async () => {
+      callIdx += 1;
+      if (callIdx === 1) return [];
+      return [
+        makeResult({ url: 'https://openai.com/x' }),
+        makeResult({ url: 'https://arxiv.org/abs/x' }),
+      ];
+    },
+  };
+  const report = await research(
+    '근거 편차',
+    { depth: 1, breadth: 2, requireCitations: false },
+    runtime,
+  );
+  // requireCitations=false 이면 섹션 생략은 없다 — 두 섹션 모두 살아야 한다.
+  assert.equal(report.sections.length, 2);
+  // 하지만 근거 0 인 서브쿼리는 limitations 에 한계점으로 남아야 한다.
+  assert.ok(
+    report.limitations.some((l) => /근거가 부족/.test(l)),
+    '근거 없는 서브쿼리는 requireCitations 와 무관하게 limitations 에 고지되어야 함',
+  );
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// R13. INSUFFICIENT_SOURCES partial.meta 에 language · deadline 이 보존된다
+// ────────────────────────────────────────────────────────────────────────────
+
+test('R13. 부분 보고서 meta 에 options.language/deadline 이 보존된다', async () => {
+  const runtime: ResearchRuntime = {
+    searchRunner: stubRunner(() => []),
+  };
+  await assert.rejects(
+    async () => research(
+      '부분 메타',
+      { depth: 1, language: 'ko-KR', deadline: '2024-06-01' },
+      runtime,
+    ),
+    (err: unknown) => {
+      const e = err as MediaAdapterError;
+      assert.equal(e.details?.researchCode, 'RESEARCH_INSUFFICIENT_SOURCES');
+      const partial = e.details?.partial as { meta?: { language?: string; deadline?: string; startedAtMs?: number; finishedAtMs?: number; durationMs?: number } };
+      assert.ok(partial?.meta, 'partial.meta 필요');
+      assert.equal(partial.meta!.language, 'ko-KR', 'language 보존');
+      assert.equal(partial.meta!.deadline, '2024-06-01', 'deadline 보존');
+      // finishedAtMs 와 durationMs 는 같은 스냅샷에서 파생되어야 한다 — startedAtMs + durationMs == finishedAtMs.
+      const { startedAtMs, finishedAtMs, durationMs } = partial.meta!;
+      assert.equal(startedAtMs! + durationMs!, finishedAtMs!, 'meta 시간값은 1ms 드리프트 없이 일관되어야 함');
+      return true;
+    },
+  );
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// R14. summarizer 가 표준 AbortError 를 던지면 ABORTED 로 래핑된다
+// ────────────────────────────────────────────────────────────────────────────
+
+test('R14. summarizer 내부의 AbortError 는 MediaAdapterError(ABORTED) 로 승격된다', async () => {
+  const runtime: ResearchRuntime = {
+    searchRunner: stubRunner((sub) => [
+      makeResult({ url: `https://e.com/${encodeURIComponent(sub.question)}` }),
+      makeResult({ url: `https://arxiv.org/${encodeURIComponent(sub.question)}` }),
+    ]),
+    summarizer: async () => {
+      // 브라우저 fetch 취소와 동일한 DOMException 모양을 흉내낸다.
+      const err = new Error('summarizer aborted');
+      (err as Error & { name: string }).name = 'AbortError';
+      throw err;
+    },
+  };
+  await assert.rejects(
+    async () => research('요약기 취소', { depth: 1 }, runtime),
+    (err: unknown) => {
+      assert.ok(err instanceof MediaAdapterError);
+      assert.equal((err as MediaAdapterError).code, 'ABORTED');
+      return true;
+    },
+  );
+});
