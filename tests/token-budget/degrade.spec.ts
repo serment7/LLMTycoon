@@ -27,6 +27,7 @@ import {
   createInMemorySessionStore,
   handoffToNewSession,
 } from '../../src/session/sessionStore.ts';
+import { emptyErrorCounters } from '../../src/utils/claudeTokenUsageStore.ts';
 import type { ClaudeTokenUsage, ClaudeTokenUsageTotals } from '../../src/types.ts';
 
 function totals(partial: Partial<ClaudeTokenUsageTotals> = {}): ClaudeTokenUsageTotals {
@@ -36,7 +37,8 @@ function totals(partial: Partial<ClaudeTokenUsageTotals> = {}): ClaudeTokenUsage
     callCount: 0, estimatedCostUsd: 0,
     byModel: {},
     updatedAt: new Date(0).toISOString(),
-    errors: { http429: 0, http5xx: 0, sessionReset: 0, providerError: 0, fallback: 0 },
+    // types.ts 의 ClaudeErrorCategory 와 일치하는 카테고리만 `emptyErrorCounters` 로 초기화.
+    errors: emptyErrorCounters(),
     ...partial,
   };
 }
