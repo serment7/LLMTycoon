@@ -1,0 +1,31 @@
+{
+  "app": {
+    "title": "LLM Tycoon",
+    "subtitle": "Staff up your autonomous engineering studio"
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "close": "Close",
+    "confirm": "Confirm",
+    "loading": "Loading…",
+    "retry": "Retry"
+  },
+  "locale": {
+    "label": "Language",
+    "en": "English",
+    "ko": "Korean"
+  },
+  "multimedia": {
+    "hub": {
+      "title": "Multimedia Hub",
+      "empty": "No adapters registered yet."
+    },
+    "errors": {
+      "ADAPTER_NOT_REGISTERED": "Adapter is not registered.",
+      "DEPENDENCY_MISSING": "A required adapter dependency is missing.",
+      "PERMISSION_DENIED": "Permission denied.",
+      "ABORTED": "The operation was aborted."
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "app": {
+    "title": "LLM 타이쿤",
+    "subtitle": "자율 엔지니어링 스튜디오를 꾸려 보세요"
+  },
+  "common": {
+    "save": "저장",
+    "cancel": "취소",
+    "close": "닫기",
+    "confirm": "확인",
+    "loading": "불러오는 중…",
+    "retry": "다시 시도"
+  },
+  "locale": {
+    "label": "언어",
+    "en": "영어",
+    "ko": "한국어"
+  },
+  "multimedia": {
+    "hub": {
+      "title": "멀티미디어 허브",
+      "empty": "등록된 어댑터가 없습니다."
+    },
+    "errors": {
+      "ADAPTER_NOT_REGISTERED": "어댑터가 등록되지 않았습니다.",
+      "DEPENDENCY_MISSING": "어댑터 의존성이 누락되었습니다.",
+      "PERMISSION_DENIED": "권한이 거절되었습니다.",
+      "ABORTED": "작업이 중단되었습니다."
+    }
+  }
+}
