@@ -20,7 +20,35 @@
     "newProjectWizard": {
       "loading": "Preparing recommendations…",
       "error": "Couldn't fetch recommendations. Try again.",
-      "empty": "No recommendations yet. Add a project description above."
+      "empty": "No recommendations yet. Add a project description above.",
+      "steps": {
+        "describe": "1. Describe",
+        "review": "2. Review",
+        "apply": "3. Add"
+      },
+      "describe": {
+        "label": "Project description",
+        "placeholder": "e.g., Payment module hardening — PCI audit + token encryption",
+        "hint": "Describe scope and goals. Recommendations update as you type."
+      },
+      "review": {
+        "title": "Recommended team",
+        "selectAll": "Select all",
+        "clear": "Clear",
+        "source": {
+          "heuristic": "Heuristic fallback",
+          "claude": "Recommended by Claude",
+          "cache": "Cached"
+        }
+      },
+      "apply": {
+        "button": "Add selected ({count})",
+        "addAll": "Add all",
+        "disabled": "Select at least one recommendation",
+        "successToast": "Added {count} teammates.",
+        "partialToast": "Added {applied} of {total}. {failed} failed.",
+        "failToast": "Couldn't add teammates."
+      }
     }
   },
   "multimedia": {
