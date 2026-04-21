@@ -735,4 +735,61 @@ locales/
 
 ---
 
+## 10. 신규 i18n 키 초안 (locales/{en,ko}.json)
+
+§1.10 토스트용 키 5종. 기존 `locale.*` / `onboarding.*` 네임스페이스 규약 계승.
+
+```jsonc
+// locales/en.json — onboarding 블록에 추가
+"onboarding": {
+  "toast": {
+    "locale": {
+      "title": "Choose your language",
+      "body":  "You can switch between English and 한국어 anytime from the header dropdown. Press Alt + Shift + L to jump there.",
+      "cta": {
+        "primary":   "Open language switcher",
+        "secondary": "Got it"
+      },
+      "aria": {
+        "dismiss": "Dismiss language onboarding"
+      }
+    }
+  }
+}
+```
+
+```jsonc
+// locales/ko.json — onboarding 블록에 추가
+"onboarding": {
+  "toast": {
+    "locale": {
+      "title": "언어를 선택하세요",
+      "body":  "상단 드롭다운에서 언제든 English 와 한국어를 전환할 수 있어요. Alt + Shift + L 로 바로 이동합니다.",
+      "cta": {
+        "primary":   "언어 선택기 열기",
+        "secondary": "알겠어요"
+      },
+      "aria": {
+        "dismiss": "언어 온보딩 닫기"
+      }
+    }
+  }
+}
+```
+
+- 키 추가 시 `tests/i18nLocale.unit.test.ts` · `tests/i18n/languageToggle.regression.test.tsx` 의 키 누락 감지 스위트에 자동 포함되므로 별도 회귀 테스트 신설 불필요.
+- `Alt + Shift + L` 심볼은 KBD element 로 마크업해 WebAIM "Don't hide accelerator keys from screen readers" 권고를 따른다.
+
+---
+
+## 11. 요약 · 이번 개정(2026-04-21 · 지시 #7d57cc47)에서 확정된 것
+
+1. 드롭다운 초기 표기는 **영어 디폴트** (`DEFAULT_LOCALE='en'` 정합). 감지 분기는 §1.11 표로 확정.
+2. 최초 방문자 `LocaleOnboardingToast` 시안 §1.10 신설 — 투어와 독립된 가벼운 1회 알림.
+3. 프로젝트 생성 다이얼로그 추천 카드는 **① 설명 → ② 카드 리스트 → ③ 일괄 추가 CTA** 의 3 구역 세로 분할 로 명문화(§2.0).
+4. src/ui 토큰(§6) · McpConnectionForm 토큰 규약(§4) 그대로 계승 · **신규 CSS 변수 · Tailwind 유틸 0건**.
+5. 신규 i18n 키 5종(§10) 만 추가. 번역 외주에 전달할 JSON 스니펫 포함.
+
+---
+
 끝.
