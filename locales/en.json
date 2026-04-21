@@ -44,6 +44,8 @@
     "recommend": {
       "title": "AI recommended team",
       "intro": "Describe the project and Claude suggests a starter team.",
+      "cta": "Recommend the best team",
+      "ctaHint": "Suggests agents that fit the description you entered.",
       "loading": "Loading recommendations…",
       "empty": "Recommendations appear as you type.",
       "error": "Couldn't load recommendations.",

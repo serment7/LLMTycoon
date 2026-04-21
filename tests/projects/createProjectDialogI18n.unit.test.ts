@@ -12,6 +12,8 @@ import { translate } from '../../src/i18n/index.ts';
 const REQUIRED_KEYS: readonly string[] = [
   'projects.recommend.title',
   'projects.recommend.intro',
+  'projects.recommend.cta',
+  'projects.recommend.ctaHint',
   'projects.recommend.loading',
   'projects.recommend.empty',
   'projects.recommend.error',

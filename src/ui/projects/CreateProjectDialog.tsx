@@ -312,8 +312,24 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
               placeholder={t('projects.create.descriptionPlaceholder')}
               rows={4}
               maxLength={2000}
+              aria-describedby="cpd-recommend-cta-hint"
             />
           </label>
+          <div className="cpd-cta">
+            <button
+              type="button"
+              className="cpd-cta-primary"
+              onClick={() => triggerRecommendation(state.description)}
+              disabled={
+                state.description.trim().length === 0 || state.status === 'loading'
+              }
+            >
+              {t('projects.recommend.cta')}
+            </button>
+            <small id="cpd-recommend-cta-hint" className="cpd-cta-hint">
+              {t('projects.recommend.ctaHint')}
+            </small>
+          </div>
           <label className="cpd-field">
             <span>{t('projects.create.workspacePath')}</span>
             <input
