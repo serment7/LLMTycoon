@@ -16,7 +16,8 @@
 //   (4) 스키마 검증 — invoker 응답이 깨졌을 때 조용히 원문을 돌려주지 않고,
 //       `validateRecommendations` 를 통과한 항목만 반환한다. 스키마 위반은 폴백으로 대체.
 
-import { buildCacheableMessages, type CacheableClaudeMessages } from '../server/claudeClient';
+import { messagesWithCache } from '../server/llm/messagesWithCache';
+import type { CacheableClaudeMessages } from '../server/claudeClient';
 import type { AgentRole } from '../types';
 
 /** i18n 모듈과 동일 Locale 유니언. 순환 의존을 피하려고 로컬로 선언. */
@@ -152,13 +153,14 @@ export function buildRecommendationMessages(
   description: string,
   locale: RecommendationLocale = DEFAULT_RECOMMENDATION_LOCALE,
 ): CacheableClaudeMessages {
-  // 시스템 프리픽스는 정책 + 예시 두 블록. buildCacheableMessages 가 마지막 블록에만
+  // 시스템 프리픽스는 정책 + 예시 두 블록. messagesWithCache 가 마지막 블록에만
   // cache_control: ephemeral 을 붙여 앞 블록까지 모두 하나의 캐시 프리픽스로 묶는다.
   const p = SYSTEM_PROMPTS[locale];
-  return buildCacheableMessages(
-    [p.policy, p.fewShot],
-    `${p.userPrefix}\n${description.trim()}`,
-  );
+  const { messages } = messagesWithCache({
+    system: [p.policy, p.fewShot],
+    user: `${p.userPrefix}\n${description.trim()}`,
+  });
+  return messages;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -179,15 +181,16 @@ export function buildTranslationMessages(
   targetLocale: RecommendationLocale,
 ): CacheableClaudeMessages {
   // 캐시 프리픽스(시스템) 가 locale 과 무관하므로 재번역 구간은 대부분 히트.
-  return buildCacheableMessages(
-    [TRANSLATE_SYSTEM_PROMPT],
-    [
+  const { messages } = messagesWithCache({
+    system: [TRANSLATE_SYSTEM_PROMPT],
+    user: [
       `Target locale: ${targetLocale}`,
       `Source locale: ${existing.locale}`,
       'Items to translate (preserve order, role unchanged):',
       JSON.stringify({ items: existing.items }),
     ].join('\n'),
-  );
+  });
+  return messages;
 }
 
 // ────────────────────────────────────────────────────────────────────────────

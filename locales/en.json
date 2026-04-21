@@ -40,6 +40,28 @@
         "addOne": "Add",
         "regenerate": "Regenerate"
       }
+    },
+    "recommend": {
+      "title": "AI recommended team",
+      "intro": "Describe the project and Claude suggests a starter team.",
+      "loading": "Loading recommendations…",
+      "empty": "Recommendations appear as you type.",
+      "error": "Couldn't load recommendations.",
+      "retry": "Retry",
+      "regenerate": "Regenerate",
+      "addToTeam": "Add to team",
+      "addAll": "Add all",
+      "addedBadge": "Added",
+      "failedBadge": "Failed to add",
+      "seedOnCreate": "Seed on create",
+      "seedCount": "Seed {count} on create",
+      "pendingSeed": "Pending",
+      "source": {
+        "heuristic": "Heuristic fallback",
+        "claude": "Recommended by Claude",
+        "cache": "Cached",
+        "translated": "Translated"
+      }
     }
   },
   "project": {

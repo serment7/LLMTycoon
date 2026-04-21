@@ -40,6 +40,28 @@
         "addOne": "추가",
         "regenerate": "다시 생성"
       }
+    },
+    "recommend": {
+      "title": "AI 추천 팀",
+      "intro": "설명을 입력하면 Claude 가 시작 팀을 제안합니다.",
+      "loading": "추천을 불러오는 중…",
+      "empty": "설명을 입력하면 추천이 나타납니다.",
+      "error": "추천을 불러오지 못했습니다.",
+      "retry": "다시 시도",
+      "regenerate": "다시 생성",
+      "addToTeam": "팀에 바로 추가",
+      "addAll": "전체 추가",
+      "addedBadge": "추가됨",
+      "failedBadge": "추가 실패",
+      "seedOnCreate": "프로젝트 생성 시 자동 반영",
+      "seedCount": "생성 시 {count}명 자동 반영",
+      "pendingSeed": "대기 중",
+      "source": {
+        "heuristic": "휴리스틱 폴백",
+        "claude": "Claude 추천",
+        "cache": "캐시",
+        "translated": "재번역"
+      }
     }
   },
   "project": {
