@@ -5687,3 +5687,187 @@ body {
     transition: none;
   }
 }
+
+/* CreateProjectDialog — 프로젝트 생성 + 팀 추천 모달(#fdee74ae). 얇은 스캐폴딩만.
+   Modal 컴포넌트를 재사용하지 않는 이유: 다이얼로그 내부에 자체 섹션/스크롤이
+   필요하고, 자체 backdrop 이 이미 컴포넌트에 포함돼 있음. */
+.cpd-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 25, 0.72);
+  z-index: 100;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  overflow-y: auto;
+}
+.cpd-dialog {
+  width: min(720px, 100%);
+  background: var(--pixel-card, #16213e);
+  color: var(--pixel-white, #e6f0ff);
+  border: 4px solid var(--pixel-border, #3a4a6a);
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  font-family: inherit;
+}
+.cpd-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.cpd-header h2 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--pixel-accent, #7fd4ff);
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+.cpd-close {
+  background: transparent;
+  border: 2px solid var(--pixel-border, #3a4a6a);
+  color: var(--pixel-accent, #7fd4ff);
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.cpd-close:hover { border-color: var(--pixel-accent, #7fd4ff); }
+.cpd-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.cpd-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.cpd-field > span {
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--pixel-accent, #7fd4ff);
+  font-weight: 700;
+}
+.cpd-field input,
+.cpd-field textarea {
+  background: rgba(0, 0, 0, 0.3);
+  border: 2px solid var(--pixel-border, #3a4a6a);
+  color: var(--pixel-white, #e6f0ff);
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 12px;
+}
+.cpd-field input:focus,
+.cpd-field textarea:focus {
+  outline: none;
+  border-color: var(--pixel-accent, #7fd4ff);
+}
+.cpd-cta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.cpd-cta-primary,
+.cpd-footer button,
+.cpd-recommend-actions button,
+.cpd-card-add {
+  background: var(--pixel-accent, #7fd4ff);
+  color: var(--pixel-bg, #0b1320);
+  border: 2px solid var(--pixel-accent, #7fd4ff);
+  padding: 4px 10px;
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+.cpd-cta-primary:disabled,
+.cpd-footer button:disabled,
+.cpd-recommend-actions button:disabled,
+.cpd-card-add:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.cpd-cta-hint { color: var(--pixel-border, #8a9cb8); font-size: 11px; }
+.cpd-recommend {
+  border-top: 2px solid var(--pixel-border, #3a4a6a);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cpd-recommend h3 {
+  font-size: 13px;
+  color: var(--pixel-accent, #7fd4ff);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.cpd-recommend-intro,
+.cpd-recommend-empty,
+.cpd-recommend-loading,
+.cpd-seed-summary { font-size: 11px; color: var(--pixel-white, #e6f0ff); opacity: 0.85; }
+.cpd-recommend-error { color: #ff9b9b; font-size: 12px; display: flex; gap: 8px; align-items: center; }
+.cpd-recommend-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.cpd-source-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 2px 6px;
+  border: 1px solid var(--pixel-border, #3a4a6a);
+  color: var(--pixel-accent, #7fd4ff);
+}
+.cpd-recommend-actions { display: inline-flex; gap: 8px; }
+.cpd-cards {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+.cpd-card {
+  background: rgba(0, 0, 0, 0.25);
+  border: 2px solid var(--pixel-border, #3a4a6a);
+  padding: 10px;
+}
+.cpd-card[data-card-status="queued"] { border-color: var(--pixel-accent, #7fd4ff); }
+.cpd-card[data-card-status="success"] { border-color: #6be47a; }
+.cpd-card[data-card-status="failed"] { border-color: #ff9b9b; }
+.cpd-card-body { display: flex; flex-direction: column; gap: 4px; }
+.cpd-role {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--pixel-accent, #7fd4ff);
+}
+.cpd-name { font-weight: 700; font-size: 12px; }
+.cpd-rationale { font-size: 11px; opacity: 0.9; line-height: 1.4; }
+.cpd-skills { list-style: none; padding: 0; margin: 4px 0 0; display: flex; flex-wrap: wrap; gap: 4px; }
+.cpd-skill-chip {
+  font-size: 10px;
+  padding: 1px 5px;
+  border: 1px solid var(--pixel-border, #3a4a6a);
+  background: rgba(127, 212, 255, 0.08);
+}
+.cpd-card-actions { margin-top: 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.cpd-card-success { color: #6be47a; font-size: 11px; font-weight: 700; }
+.cpd-card-failed { color: #ff9b9b; font-size: 11px; }
+.cpd-card-queued { color: var(--pixel-accent, #7fd4ff); font-size: 11px; }
+.cpd-submit-error { color: #ff9b9b; font-size: 12px; }
+.cpd-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 2px solid var(--pixel-border, #3a4a6a);
+  padding-top: 12px;
+}
+.cpd-footer button[type="button"] {
+  background: transparent;
+  color: var(--pixel-accent, #7fd4ff);
+}

@@ -55,6 +55,9 @@ import { ToastProvider, useToast } from './components/ToastProvider';
 import { UploadDropzone } from './components/UploadDropzone';
 import { OnboardingTour } from './components/OnboardingTour';
 import { TokenUsageIndicator } from './components/TokenUsageIndicator';
+import { LanguageToggle } from './ui/LanguageToggle';
+import { CreateProjectDialog, type CreateProjectDialogSubmit, type CreateProjectDialogResult } from './ui/projects/CreateProjectDialog';
+import { applyRecommendedTeam } from './project/api';
 import { ConversationSearch } from './components/ConversationSearch';
 import { SettingsDrawer } from './components/SettingsDrawer';
 import type { SearchableMessage } from './utils/conversationSearch';
@@ -1818,6 +1821,7 @@ function App() {
             </div>
           )}
           <TokenUsageIndicator />
+          <LanguageToggle />
           {/* 설정 드로어 톱니 버튼(#0dceedcd) */}
           <button
             type="button"
@@ -2653,9 +2657,42 @@ function App() {
           </Modal>
         )}
         {showProjectModal && (
-          <Modal title="Start New Project" onClose={() => setShowProjectModal(false)}>
-            <ProjectForm onCreate={createProject} />
-          </Modal>
+          <CreateProjectDialog
+            isOpen={showProjectModal}
+            onClose={() => setShowProjectModal(false)}
+            onSubmit={async (input: CreateProjectDialogSubmit): Promise<CreateProjectDialogResult> => {
+              const trimmed = input.name.trim();
+              if (trimmed.length > NAME_MAX_LEN) {
+                throw new Error(`프로젝트 이름이 너무 깁니다(최대 ${NAME_MAX_LEN}자).`);
+              }
+              if (input.description.length > DESCRIPTION_MAX_LEN) {
+                throw new Error(`프로젝트 설명이 너무 깁니다(최대 ${DESCRIPTION_MAX_LEN}자).`);
+              }
+              if (gameState.projects.some(p => p.name.trim().toLowerCase() === trimmed.toLowerCase())) {
+                addLog(`이미 같은 이름의 프로젝트가 있습니다: ${trimmed} (중복 허용)`);
+              }
+              const res = await safeFetch('/api/projects', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  name: trimmed,
+                  description: input.description,
+                  workspacePath: input.workspacePath,
+                }),
+              });
+              const project = (await res.json()) as { id: string };
+              addLog(`새 프로젝트 시작: ${trimmed}`);
+              // Leader 는 서버가 생성 직후 자동 합류시키므로 추천 seed 에서 제외.
+              const seedItems = input.recommendedAgents.filter(r => r.role !== 'Leader');
+              const seeded = seedItems.length > 0
+                ? await applyRecommendedTeam(project.id, seedItems)
+                : undefined;
+              if (seeded && seeded.appliedCount > 0) {
+                addLog(`추천 팀원 ${seeded.appliedCount}명 합류`);
+              }
+              return { projectId: project.id, seeded };
+            }}
+          />
         )}
         {manageMembersProjectId && (() => {
           const project = gameState.projects.find(p => p.id === manageMembersProjectId);
