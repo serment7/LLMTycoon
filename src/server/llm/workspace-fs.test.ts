@@ -81,6 +81,45 @@ test('writeFileContent: .git/ 쓰기는 거부', async () => {
   } finally { cleanup(ws); }
 });
 
+// #local-llm-empty-args — 로컬 LLM 이 "무엇을 쓸지" 모를 때 빈 문자열로 호출해
+// 실제 파일을 비워 버리는 사고 방지. 기존 파일 존재 여부와 상관없이 거부해 에러
+// 메시지로 모델을 read_file 경로로 유도한다.
+test('writeFileContent: 빈 content 는 거부 (기존 파일 보호)', async () => {
+  const ws = makeWorkspace();
+  try {
+    writeFileSync(path.join(ws, 'existing.txt'), 'important data', 'utf8');
+    await assert.rejects(
+      () => writeFileContent(ws, 'existing.txt', ''),
+      /빈 content/,
+    );
+    // 가드가 제대로 걸려서 원본이 보존됐는지 확인.
+    assert.equal(readFileSync(path.join(ws, 'existing.txt'), 'utf8'), 'important data');
+  } finally { cleanup(ws); }
+});
+
+test('writeFileContent: 신규 파일도 빈 content 는 거부', async () => {
+  const ws = makeWorkspace();
+  try {
+    await assert.rejects(
+      () => writeFileContent(ws, 'new.txt', ''),
+      /빈 content/,
+    );
+  } finally { cleanup(ws); }
+});
+
+test('editFileContent: 빈 old_string 은 락 잡기 전에 즉시 거부', async () => {
+  const ws = makeWorkspace();
+  try {
+    writeFileSync(path.join(ws, 'f.txt'), 'hello', 'utf8');
+    await assert.rejects(
+      () => editFileContent(ws, 'f.txt', '', 'X'),
+      /빈 old_string/,
+    );
+    // 원본 보존 확인.
+    assert.equal(readFileSync(path.join(ws, 'f.txt'), 'utf8'), 'hello');
+  } finally { cleanup(ws); }
+});
+
 test('editFileContent(전체모드): unique old_string 교체', async () => {
   const ws = makeWorkspace();
   try {

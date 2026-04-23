@@ -138,6 +138,12 @@ export async function readFileChunk(
 /**
  * 파일을 덮어쓴다(또는 신규 생성). 부모 디렉터리가 없으면 자동 생성. 쓰기 금지
  * 경로면 throw. 쓰기는 파일 단위 mutex 로 직렬화된다.
+ *
+ * 데이터 손실 가드(#local-llm-empty-args): 7-8B급 로컬 모델이 "무엇을 쓸지" 모를 때
+ * 빈 문자열을 content 로 넘겨 실제 파일을 통째로 비워 버리는 사고가 관측됐다
+ * (llama3.1:8b 실사례, 2026-04). 빈 content 를 명시적으로 거부해 덮어쓰기를 차단하고,
+ * 모델이 read_file 로 먼저 내용을 확인하도록 유도하는 에러 메시지를 돌려 준다.
+ * 빈 파일이 꼭 필요한 경우는 드물지만 있으면 그 때 별도 경로를 마련한다.
  */
 export async function writeFileContent(
   workspacePath: string,
@@ -146,6 +152,14 @@ export async function writeFileContent(
 ): Promise<{ bytes: number }> {
   if (isWriteForbidden(workspacePath, rel)) {
     throw new Error(`쓰기 금지 경로입니다: ${rel}`);
+  }
+  if (typeof content !== 'string') {
+    throw new Error('content 는 문자열이어야 합니다');
+  }
+  if (content.length === 0) {
+    throw new Error(
+      'write_file 에 빈 content 를 넘길 수 없습니다. 파일을 덮어쓰려면 실제 내용을 담으세요. 내용을 모른다면 먼저 read_file 로 확인하세요.',
+    );
   }
   const abs = resolveSafePath(workspacePath, rel);
   const key = `${path.resolve(workspacePath)}::${rel}`;
@@ -189,6 +203,17 @@ export async function editFileContent(
 ): Promise<EditFileResult> {
   if (isWriteForbidden(workspacePath, rel)) {
     throw new Error(`쓰기 금지 경로입니다: ${rel}`);
+  }
+  // #local-llm-empty-args — 빈 old_string 은 replaceWithCheck 심층에서도 잡히지만,
+  // 락을 잡고 파일을 열기 전 단계에서 미리 돌려보내 에러 메시지가 모델에 더 빨리
+  // 도달하도록 한다(락 점유·tmp 파일 생성 비용 절감).
+  if (typeof oldString !== 'string' || oldString.length === 0) {
+    throw new Error(
+      'edit_file 에 빈 old_string 을 넘길 수 없습니다. 먼저 read_file 로 대상 구간을 확인하고 고유한 문자열을 old_string 으로 지정하세요.',
+    );
+  }
+  if (typeof newString !== 'string') {
+    throw new Error('new_string 은 문자열이어야 합니다');
   }
   if (oldString === newString) {
     throw new Error('old_string 과 new_string 이 동일합니다');

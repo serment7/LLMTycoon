@@ -252,7 +252,18 @@ export async function executeLocalTool(
       return `created: ${JSON.stringify(file)}`;
     }
     if (name === 'add_dependency') {
-      const body = JSON.stringify({ from: args.from_file_id, to: args.to_file_id });
+      // #local-llm-empty-args — 로컬 LLM(llama3.1:8b 실사례) 이 from/to 중 한쪽을 빈
+      // 문자열로 호출해 무의미한 엣지 POST 가 나가는 경우가 있다. 여기서 빠르게
+      // 거절해 서버 엔드포인트·DB 에 쓰레기 데이터가 도달하지 않도록 막는다.
+      const fromId = typeof args.from_file_id === 'string' ? args.from_file_id.trim() : '';
+      const toId = typeof args.to_file_id === 'string' ? args.to_file_id.trim() : '';
+      if (!fromId || !toId) {
+        return 'error: add_dependency 의 from_file_id / to_file_id 는 둘 다 실제 파일 ID 여야 합니다. 먼저 list_files 로 ID 를 확인하세요.';
+      }
+      if (fromId === toId) {
+        return 'error: add_dependency 의 from_file_id 와 to_file_id 가 동일합니다';
+      }
+      const body = JSON.stringify({ from: fromId, to: toId });
       await api(ctx, '/api/dependencies', { method: 'POST', body });
       return 'dependency added';
     }

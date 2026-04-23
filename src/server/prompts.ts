@@ -174,6 +174,16 @@ function localChecklist(): string[] {
     '- import 나 require 로 끌어오는 관계가 있으면 add_dependency 로 의존성을 기록한다.',
     '- 작업이 끝나면 update_status 로 idle 을 보고한 뒤, 한국어 한 줄로만 완료 메시지를 남긴다.',
     '- 도구 이름이나 호출 문법(add_file("x","y") 등)을 본문에 쓰지 않는다. 그러면 실행되지 않는다.',
+    '',
+    '[도구 인자 가드 — 빈 값으로 호출하지 말 것]',
+    '- write_file 의 content 는 절대 빈 문자열이면 안 된다. 실제 파일 전체 내용을 담아라. 무엇을 쓸지 모르면 먼저 read_file 로 현재 내용을 확인한다.',
+    '- edit_file 의 old_string 은 비우지 말고, 파일 안에서 고유한(유일하게 매칭되는) 문자열을 지정한다. 매칭이 실패하면 더 긴 맥락을 포함해 재시도한다.',
+    '- add_dependency 의 from_file_id / to_file_id 는 둘 다 list_files 결과에서 얻은 실제 ID 여야 한다. 빈 문자열·추측 ID 금지.',
+    '- list_files 는 인자가 없는 도구다. project_id 같은 추가 인자는 넘기지 말라(무시됨).',
+    '',
+    '[도구 응답 처리 규칙]',
+    '- 도구가 결과를 돌려주면 결과를 영어든 한국어든 "요약·설명"하는 대신, 다음에 필요한 도구를 곧바로 호출한다. 예: list_files_fs 결과 → 바로 read_file 로 후속 호출, 설명 출력 금지.',
+    '- 작업이 완전히 끝난 경우에만 content 에 한국어 한 줄을 쓰고 마무리한다. 중간 단계에서는 content 를 비워 두고 tool_calls 만 돌려 준다.',
   ];
 }
 

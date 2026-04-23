@@ -79,6 +79,24 @@ describe('buildSystemPrompt', () => {
     assert.match(text, /tool_calls/);
   });
 
+  it('ollama 경로는 빈-인자 호출 방지 가드 지시를 포함한다', () => {
+    // 배경: llama3.1:8b 가 write_file 에 content:"" 로, edit_file 에 old_string:"" 로,
+    // add_dependency 에 빈 ID 로 호출하는 사례가 관측됐다. 서버측 가드와 짝을
+    // 이루는 프롬프트 경고가 있어야 한다.
+    const text = buildSystemPrompt(agent, { provider: 'ollama' });
+    assert.match(text, /write_file.*content.*(빈 문자열|비우)/);
+    assert.match(text, /edit_file.*old_string.*(비우|빈)/);
+    assert.match(text, /add_dependency.*ID/s);
+  });
+
+  it('ollama 경로는 도구 응답을 요약하지 말라는 규칙을 포함한다', () => {
+    // 배경: llama3.1:8b 가 list_files_fs 결과를 받으면 영문으로 "This is a list of..."
+    // 같은 설명을 뱉고 후속 도구 호출을 안 하는 회귀. 응답 처리 방식을 명시해야 한다.
+    const text = buildSystemPrompt(agent, { provider: 'ollama' });
+    assert.match(text, /요약.*(대신|말고|금지)|설명.*(대신|말고|금지)/);
+    assert.match(text, /(다음에 필요한 도구|곧바로 호출)/);
+  });
+
   it('vllm 경로도 ollama 와 동일한 로컬 분기를 탄다', () => {
     const ollama = buildSystemPrompt(agent, { provider: 'ollama' });
     const vllm = buildSystemPrompt(agent, { provider: 'vllm' });
