@@ -14,7 +14,7 @@
 import { chatLoop } from './local-chat';
 import { OllamaTransport } from './ollama-transport';
 import { VllmTransport } from './vllm-transport';
-import { LOCAL_TOOL_DEFINITIONS } from './tools-adapter';
+import { getToolDefinitions } from './tools-adapter';
 import { readLLMEnv, type LLMMessage, type OneshotContext } from './provider';
 
 export type ClaudeCliOneshot = (prompt: string, ctx?: OneshotContext) => Promise<string>;
@@ -49,10 +49,20 @@ export async function callLLMOneshot(prompt: string, ctx?: OneshotContext): Prom
     { role: 'system', content: '당신은 LLMTycoon 서버가 호출하는 단일 턴 어시스턴트입니다. 답은 한국어로, 간결하게.' },
     { role: 'user', content: prompt },
   ];
-  const tools = ctx ? LOCAL_TOOL_DEFINITIONS : [];
   const toolContext = ctx
-    ? { agentId: ctx.agentId, projectId: ctx.projectId, port: parseInt(process.env.PORT || '3000', 10) }
-    : { agentId: '', projectId: '', port: parseInt(process.env.PORT || '3000', 10) };
+    ? {
+        agentId: ctx.agentId,
+        projectId: ctx.projectId,
+        port: parseInt(process.env.PORT || '3000', 10),
+        workspacePath: ctx.workspacePath,
+      }
+    : {
+        agentId: '',
+        projectId: '',
+        port: parseInt(process.env.PORT || '3000', 10),
+      };
+  // ctx 가 없으면 파일 도구를 닫는다(진단 ping 등이 우연히 쓰기 권한을 얻지 않도록).
+  const tools = ctx ? getToolDefinitions(toolContext) : [];
 
   const transport = env.provider === 'ollama'
     ? new OllamaTransport(env.baseUrl, env.model, env.requestTimeoutMs)

@@ -30,7 +30,7 @@ import { parseMediaToolRequests, type MediaToolName, type MediaToolRequest } fro
 import { chatLoop, type ChatTransport } from './llm/local-chat';
 import { OllamaTransport } from './llm/ollama-transport';
 import { VllmTransport } from './llm/vllm-transport';
-import { LOCAL_TOOL_DEFINITIONS } from './llm/tools-adapter';
+import { getToolDefinitions } from './llm/tools-adapter';
 import { readLLMEnv, type LLMMessage, type AgentSession } from './llm/provider';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1045,10 +1045,16 @@ export class LocalAgentWorker implements AgentSession {
       // 이번 턴 user 메시지를 히스토리에 추가. chatLoop 가 assistant/tool 메시지를
       // in-place 로 이어 붙인다 — 즉 동일 세션이 계속 누적된다.
       this.messages.push({ role: 'user', content: item.prompt.replace(/\r\n/g, '\n') });
+      const toolContext = {
+        agentId: this.agentId,
+        projectId: this.projectId,
+        port: this.port,
+        workspacePath: this.workspacePath,
+      };
       const text = await chatLoop(this.transport, this.messages, {
         maxToolIterations: this.maxToolIterations,
-        toolContext: { agentId: this.agentId, projectId: this.projectId, port: this.port },
-        tools: LOCAL_TOOL_DEFINITIONS,
+        toolContext,
+        tools: getToolDefinitions(toolContext),
       });
 
       warnIfLowKoreanRatioShared(this.agentId, text, item.taskId);
