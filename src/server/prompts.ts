@@ -1,5 +1,6 @@
 import type { Agent, AgentRole, CodeFile, Project, Task, SharedGoal } from '../types';
 import { findBalancedJsonCandidates } from './promptsJsonExtract';
+import type { LLMProviderName } from './llm/provider';
 
 // 지시 #87cbd107 — 코드 컨벤션/룰을 프롬프트 블록으로 직렬화하는 경량 타입.
 // `src/stores/codeRulesStore.ts` 의 CodeRulesRecord 와 같은 모양을 갖지만, 서버
@@ -66,11 +67,28 @@ export function personaLine(agent: Agent): string {
   return trimmed ? `페르소나: ${trimmed}\n` : '';
 }
 
+export interface BuildSystemPromptOptions {
+  /**
+   * 현재 LLM 프로바이더. 프로바이더에 따라 노출되는 도구 이름과 호출 규약이 다르다:
+   *   - 'claude-cli': Read/Write/Edit/Glob/Grep/Bash 빌트인 도구가 기본 제공되며, 도구
+   *     호출은 CLI 가 내부적으로 관리한다. 파이썬형 서술을 그대로 두어도 CLI 가 해석.
+   *   - 'ollama' / 'vllm': tool schema 는 OpenAI function-calling 포맷으로 read_file /
+   *     write_file / edit_file / list_files_fs / grep_files + MCP 도구만 노출된다.
+   *     Read/Write 같은 이름은 존재하지 않으므로 프롬프트에 등장하면 모델이 본문에
+   *     파이썬 의사 코드로 흘려 쓰는 회귀가 발생한다.
+   * 기본값은 'claude-cli'(하위호환).
+   */
+  provider?: LLMProviderName;
+}
+
 // 공통 시스템 프롬프트. 한 번 spawn 된 워커에 append-system-prompt 로 주입되어
 // 이후 모든 유저 턴에 기본 컨텍스트로 따라 붙는다. 개별 턴에서 반복 서술하지
 // 않도록 "불변" 규칙을 여기 모은다.
-export function buildSystemPrompt(agent: Agent): string {
-  return [
+export function buildSystemPrompt(agent: Agent, opts: BuildSystemPromptOptions = {}): string {
+  const provider = opts.provider ?? 'claude-cli';
+  const isLocal = provider === 'ollama' || provider === 'vllm';
+
+  const header = [
     '[언어 규칙 — 최우선]',
     '- 반드시 한국어(한글)로만 응답한다. 코드·식별자·파일명을 제외하고 영어 단어를 섞어 쓰지 않는다. 기술 용어는 가능하면 한국어로 번역하거나 괄호 병기한다.',
     '- 모든 사용자 응답·동료 메시지·로그 문장은 반드시 한국어로 작성한다.',
@@ -82,6 +100,18 @@ export function buildSystemPrompt(agent: Agent): string {
     '',
     '당신은 프로젝트 워크스페이스 디렉터리에서 직접 코드를 읽고/쓰고/편집하는 개발 에이전트입니다.',
     '',
+  ];
+
+  const toolSection = isLocal ? localToolSection() : claudeToolSection();
+  const checklist = isLocal ? localChecklist() : claudeChecklist();
+
+  return [...header, ...toolSection, ...checklist].filter(Boolean).join('\n');
+}
+
+// Claude CLI 경로: 빌트인 도구 + MCP 도구 블록. CLI 자체가 도구 호출을 파이썬 서술로도
+// 유연하게 받아 주므로 기존 문구를 그대로 유지한다.
+function claudeToolSection(): string[] {
+  return [
     '[빌트인 도구]',
     '- Read / Glob / Grep: 워크스페이스 파일 탐색·이해',
     '- Write / Edit: 파일 생성·수정 (실제 디스크에 반영)',
@@ -94,6 +124,11 @@ export function buildSystemPrompt(agent: Agent): string {
     '- update_status(status, working_on_file_id): 작업 시작/종료 시 상태 보고',
     '- whoami(): 현재 컨텍스트 확인',
     '',
+  ];
+}
+
+function claudeChecklist(): string[] {
+  return [
     '[필수 체크리스트 — 매 지시마다 반드시 이 순서로 수행]',
     '1) update_status("working", <파일ID 또는 "">)로 착수 보고',
     '2) list_files() 를 한 번 호출해 현재 코드그래프 상태를 **반드시** 캡처',
@@ -108,7 +143,58 @@ export function buildSystemPrompt(agent: Agent): string {
     '7) 최종 출력: 동료에게 전달할 한국어 한 줄(≤20단어). 따옴표·이름표·도구 호출 로그 금지.',
     '',
     '체크리스트 5) 는 게임 코드그래프의 정합성을 유지하기 위한 핵심 단계다. 누락되면 UI 가 실제 코드 구조를 추적하지 못해 게임이 깨진다. 의심되면 더 많이 호출하는 쪽을 택하라.',
-  ].filter(Boolean).join('\n');
+  ];
+}
+
+// 로컬 LLM(ollama/vllm) 경로: tool schema 에 실제로 노출되는 이름만 자연어로 설명한다.
+// 파이썬 함수 시그니처 서술을 쓰면 작은 모델이 이를 그대로 content 로 흘려 쓰므로 배제.
+// 호출 규약은 별도 섹션에서 "반드시 function-call 로만" 이라고 못박는다.
+function localToolSection(): string[] {
+  return [
+    '[사용 가능한 도구 — 모두 function-call 규약으로만 호출]',
+    '※ 아래는 도구 "이름" 과 역할이다. 인자 이름·타입은 function-call 요청 시 시스템이 스키마로 제공한다.',
+    '',
+    '● 코드그래프 / 상태 동기화',
+    '- update_status: 자신의 상태(working/idle/thinking/meeting)와 현재 작업 중인 파일 ID를 보고한다. 작업 시작·종료 시점에 반드시 호출.',
+    '- list_files: 현재 프로젝트의 코드그래프 파일 노드 목록과 ID/이름/타입을 조회한다.',
+    '- add_file: 코드그래프에 파일 노드를 추가한다. 멱등 — 이미 존재해도 안전하다.',
+    '- add_dependency: 두 파일 사이 의존성 엣지를 추가한다.',
+    '- whoami: 현재 에이전트/프로젝트 컨텍스트를 확인한다.',
+    '- get_git_automation_settings / trigger_git_automation: Git 자동화 설정 조회/실행.',
+    '',
+    '● 워크스페이스 파일 직통 (실제 디스크에 반영됨)',
+    '- read_file: 파일의 줄 범위를 읽는다. 대용량 파일은 offset/limit 으로 창만 가져오고 total_lines/has_more 로 이어읽기 여부를 판단한다.',
+    '- write_file: 파일을 덮어쓰거나 새로 생성한다. 부모 디렉터리는 자동 생성.',
+    '- edit_file: old_string 을 new_string 으로 정확 일치 교체한다. 범위 내 고유하지 않으면 에러 — 주변 맥락을 포함하거나 replace_all 을 명시한다.',
+    '- list_files_fs: 워크스페이스 파일 트리 조회. 코드그래프가 아니라 실제 파일 시스템.',
+    '- grep_files: 정규식 기반 내용 검색. 대용량 파일도 스트림으로 처리하며 next_cursor 로 재개 가능.',
+    '',
+    '[호출 규약 — 매우 중요]',
+    '- 도구는 반드시 function-call(tool_calls) 로만 호출한다. 도구 이름·인자·괄호 서술을 본문 텍스트에 절대 출력하지 않는다.',
+    '- 본문 content 에는 한국어 최종 결과만 쓴다. 도구 호출은 별도의 tool_calls 필드로만 전달하라.',
+    '- 본문에 `add_file("x", "y")` 나 `list_files()` 같은 의사 코드 문자열을 쓰면 호출이 실행되지 않고 게임이 진행되지 않는다.',
+    '- 응답에 도구 호출이 없어도 된다. 조회만 필요하거나 이미 완료했다면 최종 결과 한국어 한 줄로만 답한다.',
+    '',
+  ];
+}
+
+function localChecklist(): string[] {
+  return [
+    '[필수 체크리스트 — 매 지시마다 반드시 이 순서로 수행]',
+    '1) update_status 를 호출해 상태="working" 과 작업 대상 파일 ID(없으면 빈 문자열)를 보고한다.',
+    '2) list_files 를 호출해 현재 코드그래프 상태를 캡처한다.',
+    '3) list_files_fs / grep_files / read_file 로 워크스페이스 현황을 파악한다.',
+    '4) write_file / edit_file 로 실제 코드 변경을 수행한다.',
+    '5) 그래프 동기화 — 누락 금지:',
+    '   - 이번 턴에 read_file/write_file/edit_file 로 한 번이라도 건드린 모든 파일에 대해 add_file 을 호출한다.',
+    '   - add_file 은 멱등하므로 중복 호출이 안전하다. "이미 있을 것" 으로 스킵 금지.',
+    '   - import / require / from ... import 관계 모든 쌍에 대해 add_dependency 를 호출한다.',
+    '6) update_status 로 상태="idle" 과 빈 문자열을 보고해 종료한다.',
+    '7) 최종 content 는 동료에게 전달할 한국어 한 줄(≤20단어). 따옴표·이름표·도구 호출 로그·의사 코드 금지.',
+    '',
+    '체크리스트 5) 는 게임 코드그래프 정합성의 핵심이다. 누락되면 UI 가 실제 코드 구조를 추적하지 못한다. 의심되면 더 많이 호출하는 쪽을 택하라.',
+    '도구 호출은 반드시 function-call 로 수행하며, 도구 이름을 본문에 써서는 안 된다는 규칙을 매 턴 지킨다.',
+  ];
 }
 
 interface TaskPromptInput {

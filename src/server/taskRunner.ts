@@ -6,6 +6,7 @@ import { mkdirSync } from 'fs';
 
 import type { Agent, CodeFile, GameState, Project, Task, AutoDevSettings, SharedGoal } from '../types';
 import { AgentWorkerRegistry } from './agentWorker';
+import { readLLMEnv } from './llm/provider';
 import {
   buildSystemPrompt,
   buildTaskPrompt,
@@ -165,7 +166,9 @@ export class TaskRunner {
   async ensureWorkerForAgent(agent: Agent, project: Project): Promise<ReturnType<AgentWorkerRegistry['ensure']>> {
     const workspacePath = this.resolveWorkspace(project.workspacePath);
     try { mkdirSync(workspacePath, { recursive: true }); } catch { /* noop */ }
-    const systemPrompt = buildSystemPrompt(agent);
+    // 로컬 LLM(ollama/vllm) 과 claude-cli 는 노출되는 도구 이름·호출 규약이 다르므로,
+    // 현재 프로바이더를 프롬프트 빌더에 넘겨 알맞은 도구 목록과 규칙 블록을 선택한다.
+    const systemPrompt = buildSystemPrompt(agent, { provider: readLLMEnv().provider });
     return this.registry.ensure({
       agentId: agent.id,
       projectId: project.id,
