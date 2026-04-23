@@ -19,6 +19,11 @@ import { setAgentWorkerSessionStatus, notifyAgentMediaGenerated } from './src/se
 import type { ClaudeSessionStatus } from './src/types';
 import { AgentWorkerRegistry } from './src/server/agentWorker';
 import { TaskRunner } from './src/server/taskRunner';
+// LLM 프로바이더 추상화(#llm-provider-abstraction):
+//   - callLLMOneshot: LLM_PROVIDER 설정에 따라 claude-cli/ollama/vllm 중 하나로 분기
+//   - setClaudeCliOneshot: claude-cli 경로 구현체를 내부 모듈에 주입
+// 아래에서 callClaude 가 정의되자마자 setClaudeCliOneshot(callClaude) 로 배선한다.
+import { callLLMOneshot, setClaudeCliOneshot } from './src/server/llm/oneshot';
 import { processDirectiveFile } from './src/server/fileProcessor';
 import {
   createMediaProcessor,
@@ -386,9 +391,13 @@ function callClaude(prompt: string, ctx?: AgentContext): Promise<string> {
   });
 }
 
+// 프로바이더 추상화 경로가 claude-cli 구현을 호출할 수 있도록 훅을 걸어 둔다.
+// 함수 선언은 호이스팅되므로 이 모듈 상단에서 callClaude 를 참조해도 안전하다.
+setClaudeCliOneshot(callClaude);
+
 async function diagnoseClaudeCli() {
   try {
-    const out = await callClaude('한 단어만 답하세요: ping');
+    const out = await callLLMOneshot('한 단어만 답하세요: ping');
     console.log(`[claude] CLI OK — response: "${out.slice(0, 80)}"`);
   } catch (e) {
     console.error(`[claude] CLI UNAVAILABLE: ${(e as Error).message}`);
@@ -1100,9 +1109,10 @@ async function startServer() {
       }
       return;
     }
-    // 컨텍스트 없는 일회성 호출(진단·ping 등)은 기존 1-shot 경로를 유지한다.
+    // 컨텍스트 없는 일회성 호출(진단·ping 등)은 1-shot 경로. 프로바이더 추상화
+    // 덕분에 LLM_PROVIDER 값에 따라 claude-cli/ollama/vllm 어느 쪽으로든 간다.
     try {
-      const text = await callClaude(prompt);
+      const text = await callLLMOneshot(prompt);
       res.json({ text });
     } catch (e: any) {
       console.error('claude CLI failed:', e?.message);

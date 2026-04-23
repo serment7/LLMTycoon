@@ -23,6 +23,15 @@ import type {
 } from '../types';
 import { DEFAULT_TASK_BOUNDARY_COMMIT_CONFIG, mediaAssetToTimelineEvent } from '../types';
 import { parseMediaToolRequests, type MediaToolName, type MediaToolRequest } from './prompts';
+// LLM 프로바이더 추상화(#llm-provider-abstraction):
+//   LocalAgentWorker 는 Ollama/vLLM 프로바이더에서 AgentWorker 와 동일한 public
+//   API(AgentSession) 를 제공한다. AgentWorker 자체도 이 인터페이스를 만족하도록
+//   implements 표기를 단다.
+import { chatLoop, type ChatTransport } from './llm/local-chat';
+import { OllamaTransport } from './llm/ollama-transport';
+import { VllmTransport } from './llm/vllm-transport';
+import { LOCAL_TOOL_DEFINITIONS } from './llm/tools-adapter';
+import { readLLMEnv, type LLMMessage, type AgentSession } from './llm/provider';
 
 // ────────────────────────────────────────────────────────────────────────────
 // MediaAsset → CollabTimeline 로그 브리지 (#b425328e §3)
@@ -422,7 +431,7 @@ interface WorkerInit {
 
 type WorkerStatus = 'idle' | 'busy';
 
-export class AgentWorker {
+export class AgentWorker implements AgentSession {
   readonly agentId: string;
   projectId: string;
   workspacePath: string;
@@ -817,63 +826,12 @@ export class AgentWorker {
     return report;
   }
 
-  // 응답 본문에서 흔히 쓰이는 "개선 제안 / 후속 작업 / 다음에는 / TODO / FIXME /
-  // follow-up" 패턴을 뽑아 리포트 seed 로 돌려준다. 단순 문자열 검색이라 오탐이
-  // 전혀 없지는 않지만, createImprovementReport 가 summary/필드 유효성을 한 번 더
-  // 검증하고 taskRunner 쪽에서 리더가 최종적으로 mode="reply" 로 흘려 보낼 수도
-  // 있으므로, 과잉 감지를 두려워하지 않고 넓게 매칭한다. 관련 파일은 본문에서
-  // "src/..." 혹은 백틱으로 감싼 파일 경로만 수집한다.
-  private detectImprovementHint(text: string | undefined | null): {
-    summary: string;
-    detail?: string;
-    category: ImprovementReportCategory;
-    focusFiles?: string[];
-  } | null {
-    if (!text) return null;
-    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    if (lines.length === 0) return null;
-    const HINT_RE = /^(?:[-*•]\s*)?(?:개선\s*제안|후속\s*작업|다음에는|todo|fixme|follow[-\s]?up|improvement)\s*[::\-]\s*(.+)$/i;
-    const hits: string[] = [];
-    for (const l of lines) {
-      const m = l.match(HINT_RE);
-      if (m && m[1]) hits.push(m[1].trim());
-    }
-    if (hits.length === 0) return null;
-    const [summary, ...rest] = hits;
-    const focusFiles = this.extractFocusFiles(text);
-    return {
-      summary,
-      detail: rest.length > 0 ? rest.join(' / ') : undefined,
-      category: 'followup',
-      focusFiles: focusFiles.length > 0 ? focusFiles : undefined,
-    };
+  private detectImprovementHint(text: string | undefined | null) {
+    return detectImprovementHintShared(text);
   }
 
-  private extractFocusFiles(text: string): string[] {
-    const found = new Set<string>();
-    const pathRe = /`([^`\s]+?\.(?:tsx?|jsx?|css|md|json))`|\b((?:src|tests|scripts)\/[\w./\-]+)/g;
-    let m: RegExpExecArray | null;
-    while ((m = pathRe.exec(text)) !== null) {
-      const captured = (m[1] || m[2] || '').trim();
-      if (captured) found.add(captured);
-      if (found.size >= 16) break;
-    }
-    return Array.from(found);
-  }
-
-  // 시스템 프롬프트가 "한국어로만 응답" 을 강제함에도 모델이 영어로 회귀하는
-  // 사례가 관측된다. 결과 턴이 성공했을 때 자연어 영역만 샘플링해 한국어 비율을
-  // 재확인하고, 임계값 아래면 경고 로그를 남긴다. 흐름은 막지 않는다 —
-  // 오탐으로 실제 결과를 차단하면 사용자 손실이 더 크다.
   private warnIfLowKoreanRatio(text: string, taskId?: string): void {
-    if (!text) return;
-    const sample = collectNaturalLanguageSample(text);
-    if (isMostlyKorean(sample)) return;
-    const ratio = koreanRatio(sample);
-    const preview = sample.replace(/\s+/g, ' ').slice(0, 120);
-    console.warn(
-      `[worker:${this.agentId}] korean ratio below threshold: ${ratio.toFixed(2)} < ${DEFAULT_KOREAN_THRESHOLD} (taskId=${taskId ?? 'n/a'}, sample="${preview}")`,
-    );
+    warnIfLowKoreanRatioShared(this.agentId, text, taskId);
   }
 
   private killChild() {
@@ -891,17 +849,296 @@ export class AgentWorker {
   }
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// 공통 헬퍼 (#llm-provider-abstraction)
+// ClaudeCLI 기반 AgentWorker 와 로컬 모델 기반 LocalAgentWorker 가 동일 로직을 공유
+// 해야 하는 부분을 top-level 함수로 뽑아 둔다. 인스턴스 상태에 의존하지 않거나,
+// 의존하더라도 인자로 주입받는 형태만 남긴다.
+// ────────────────────────────────────────────────────────────────────────────
+
+function detectImprovementHintShared(text: string | undefined | null): {
+  summary: string;
+  detail?: string;
+  category: ImprovementReportCategory;
+  focusFiles?: string[];
+} | null {
+  if (!text) return null;
+  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (lines.length === 0) return null;
+  const HINT_RE = /^(?:[-*•]\s*)?(?:개선\s*제안|후속\s*작업|다음에는|todo|fixme|follow[-\s]?up|improvement)\s*[::\-]\s*(.+)$/i;
+  const hits: string[] = [];
+  for (const l of lines) {
+    const m = l.match(HINT_RE);
+    if (m && m[1]) hits.push(m[1].trim());
+  }
+  if (hits.length === 0) return null;
+  const [summary, ...rest] = hits;
+  const focusFiles = extractFocusFilesShared(text);
+  return {
+    summary,
+    detail: rest.length > 0 ? rest.join(' / ') : undefined,
+    category: 'followup',
+    focusFiles: focusFiles.length > 0 ? focusFiles : undefined,
+  };
+}
+
+function extractFocusFilesShared(text: string): string[] {
+  const found = new Set<string>();
+  const pathRe = /`([^`\s]+?\.(?:tsx?|jsx?|css|md|json))`|\b((?:src|tests|scripts)\/[\w./\-]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = pathRe.exec(text)) !== null) {
+    const captured = (m[1] || m[2] || '').trim();
+    if (captured) found.add(captured);
+    if (found.size >= 16) break;
+  }
+  return Array.from(found);
+}
+
+function warnIfLowKoreanRatioShared(agentId: string, text: string, taskId?: string): void {
+  if (!text) return;
+  const sample = collectNaturalLanguageSample(text);
+  if (isMostlyKorean(sample)) return;
+  const ratio = koreanRatio(sample);
+  const preview = sample.replace(/\s+/g, ' ').slice(0, 120);
+  console.warn(
+    `[worker:${agentId}] korean ratio below threshold: ${ratio.toFixed(2)} < ${DEFAULT_KOREAN_THRESHOLD} (taskId=${taskId ?? 'n/a'}, sample="${preview}")`,
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 로컬 모델 (Ollama / vLLM) 기반 에이전트 세션 (#llm-provider-abstraction)
+//
+// Claude CLI 와 달리 로컬 모델은 stdin/stdout 스트림이 아닌 HTTP 요청/응답으로
+// 한 턴씩 주고받는다. 따라서 "동일 세션 유지" 는 자식 프로세스가 아니라 이 객체가
+// 소유한 `messages` 배열로 구현된다. 시스템 프롬프트가 갱신되면 messages[0] 를
+// 교체하고, 각 턴의 user/assistant/tool 메시지는 히스토리에 누적한다.
+//
+// 구현 초점:
+//   - public API 는 AgentWorker 와 동일(AgentSession 인터페이스). 외부(TaskRunner,
+//     server.ts) 는 클래스 구분 없이 동일하게 다룰 수 있다.
+//   - 도구 실행: LOCAL_TOOL_DEFINITIONS 를 열고, 콜이 오면 executeLocalTool 로 REST
+//     프록시. mcp-agent-server.ts 와 1:1 동등.
+//   - 세션 소진 가드(currentSessionStatus==='exhausted') / 태스크 경계 이벤트 훅 /
+//     개선 보고 / 매체 도구 디스패처 — 모두 AgentWorker 경로와 동일한 훅을 호출.
+// ────────────────────────────────────────────────────────────────────────────
+
+interface LocalQueueItem {
+  prompt: string;
+  taskId?: string;
+  onResult: (text: string) => void;
+  onError: (err: Error) => void;
+}
+
+export class LocalAgentWorker implements AgentSession {
+  readonly agentId: string;
+  projectId: string;
+  workspacePath: string;
+  private port: number;
+  private systemPrompt?: string;
+  private onImprovementReport?: ImprovementReportHandler;
+
+  private transport: ChatTransport;
+  private messages: LLMMessage[] = [];
+
+  private queue: LocalQueueItem[] = [];
+  private processing: LocalQueueItem | null = null;
+  private closed = false;
+  private lastFailureLog: string | null = null;
+
+  private maxToolIterations: number;
+
+  constructor(init: WorkerInit) {
+    this.agentId = init.agentId;
+    this.projectId = init.projectId;
+    this.workspacePath = init.workspacePath;
+    this.port = init.port ?? DEFAULT_PORT;
+    this.systemPrompt = init.systemPrompt;
+    this.onImprovementReport = init.onImprovementReport;
+
+    const env = readLLMEnv();
+    this.maxToolIterations = env.maxToolIterations;
+    if (env.provider === 'ollama') {
+      this.transport = new OllamaTransport(env.baseUrl, env.model, env.requestTimeoutMs);
+    } else if (env.provider === 'vllm') {
+      this.transport = new VllmTransport(env.baseUrl, env.model, env.apiKey, env.requestTimeoutMs);
+    } else {
+      throw new Error(`LocalAgentWorker 는 claude-cli 프로바이더와 호환되지 않습니다 (LLM_PROVIDER=${env.provider})`);
+    }
+    this.applySystemMessage();
+    // workspace 디렉토리는 AgentWorker 와 동일하게 구현체가 보장한다 — 파일 작성 도구가
+    // 상대경로를 기대할 수 있어 워커 생성 시점에 만들어 둔다.
+    try { mkdirSync(this.workspacePath, { recursive: true }); } catch { /* 무해 */ }
+  }
+
+  private applySystemMessage() {
+    const sys = this.systemPrompt?.trim();
+    if (!sys) {
+      if (this.messages[0]?.role === 'system') this.messages.shift();
+      return;
+    }
+    if (this.messages[0]?.role === 'system') {
+      this.messages[0] = { role: 'system', content: sys };
+    } else {
+      this.messages.unshift({ role: 'system', content: sys });
+    }
+  }
+
+  setOnImprovementReport(handler: ImprovementReportHandler | undefined) {
+    this.onImprovementReport = handler;
+  }
+
+  status(): WorkerStatus {
+    return this.processing || this.queue.length > 0 ? 'busy' : 'idle';
+  }
+
+  queueLength(): number {
+    return this.queue.length + (this.processing ? 1 : 0);
+  }
+
+  isIdle(): boolean {
+    return !this.processing && this.queue.length === 0;
+  }
+
+  updateSystemPrompt(next: string | undefined) {
+    this.systemPrompt = next;
+    this.applySystemMessage();
+  }
+
+  logFailure(entry: string): void {
+    const clipped = entry.trim().slice(0, 600);
+    this.lastFailureLog = clipped;
+    console.warn(`[worker:${this.agentId}] git-automation failure: ${clipped}`);
+  }
+
+  getLastFailureLog(): string | null {
+    return this.lastFailureLog;
+  }
+
+  enqueue(prompt: string, taskId?: string): Promise<string> {
+    if (this.closed) return Promise.reject(new Error(WORKER_ERROR.disposed));
+    if (currentSessionStatus === 'exhausted') {
+      return Promise.reject(new Error(WORKER_SESSION_EXHAUSTED_MESSAGE));
+    }
+    return new Promise((resolve, reject) => {
+      this.queue.push({ prompt, taskId, onResult: resolve, onError: reject });
+      this.drain();
+    });
+  }
+
+  dispose() {
+    if (this.closed) return;
+    this.closed = true;
+    const pending = [...this.queue];
+    this.queue = [];
+    for (const item of pending) item.onError(new Error(WORKER_ERROR.disposed));
+    if (this.processing) {
+      this.processing.onError(new Error(WORKER_ERROR.disposed));
+      this.processing = null;
+    }
+  }
+
+  private async drain() {
+    if (this.closed || this.processing || this.queue.length === 0) return;
+    const item = this.queue.shift()!;
+    this.processing = item;
+    try {
+      // 이번 턴 user 메시지를 히스토리에 추가. chatLoop 가 assistant/tool 메시지를
+      // in-place 로 이어 붙인다 — 즉 동일 세션이 계속 누적된다.
+      this.messages.push({ role: 'user', content: item.prompt.replace(/\r\n/g, '\n') });
+      const text = await chatLoop(this.transport, this.messages, {
+        maxToolIterations: this.maxToolIterations,
+        toolContext: { agentId: this.agentId, projectId: this.projectId, port: this.port },
+        tools: LOCAL_TOOL_DEFINITIONS,
+      });
+
+      warnIfLowKoreanRatioShared(this.agentId, text, item.taskId);
+      item.onResult(text);
+
+      // AgentWorker 와 동일하게 개선 보고 → 리더 큐 / 매체 도구 디스패처 훅 호출.
+      this.reportImprovementToLeader({
+        agentId: this.agentId,
+        projectId: this.projectId,
+        taskId: item.taskId,
+        text,
+      });
+      dispatchAgentToolUses(text, {
+        agentId: this.agentId,
+        projectId: this.projectId,
+        taskId: item.taskId,
+      }).catch(err => {
+        console.warn(`[worker:${this.agentId}] media tool dispatch error: ${(err as Error).message}`);
+      });
+    } catch (err) {
+      item.onError(err as Error);
+    } finally {
+      this.processing = null;
+      // 다음 턴은 비동기 드레인 — 핸들러 호출 체인을 짧게 유지한다.
+      setImmediate(() => this.drain());
+    }
+  }
+
+  reportImprovementToLeader(
+    info: TaskCompleteInfo,
+    override?: {
+      summary?: string;
+      detail?: string;
+      category?: ImprovementReportCategory;
+      focusFiles?: string[];
+      agentName?: string;
+      role?: string;
+    },
+  ): ImprovementReport | null {
+    const suggestion = override?.summary
+      ? {
+          summary: override.summary,
+          detail: override.detail,
+          category: override.category ?? 'followup',
+          focusFiles: override.focusFiles,
+        }
+      : detectImprovementHintShared(info.text);
+    if (!suggestion) return null;
+    const report = createImprovementReport({
+      agentId: info.agentId || this.agentId,
+      projectId: info.projectId || this.projectId,
+      taskId: info.taskId,
+      agentName: override?.agentName,
+      role: override?.role,
+      summary: suggestion.summary,
+      detail: suggestion.detail,
+      category: suggestion.category,
+      focusFiles: suggestion.focusFiles,
+    });
+    if (!report) return null;
+    if (this.onImprovementReport) {
+      try {
+        this.onImprovementReport(report);
+      } catch (e) {
+        console.warn(
+          `[worker:${this.agentId}] onImprovementReport threw:`,
+          (e as Error).message,
+        );
+      }
+    }
+    return report;
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 레지스트리 — env `LLM_PROVIDER` 에 따라 AgentWorker(claude-cli) 또는 LocalAgentWorker
+// 를 스폰한다. 외부 소비자(TaskRunner) 는 AgentSession 타입만 보므로 구분이 없다.
+// ────────────────────────────────────────────────────────────────────────────
+
 // 에이전트 ID 를 키로 단일 워커를 유지. 동일 에이전트가 서로 다른 프로젝트의
 // 지시를 받으면 컨텍스트가 오염되므로, projectId 가 바뀌면 기존 워커를 dispose
 // 하고 새로 만든다(세션 리셋과 동등).
 export class AgentWorkerRegistry {
-  private workers = new Map<string, AgentWorker>();
+  private workers = new Map<string, AgentSession>();
 
-  get(agentId: string): AgentWorker | undefined {
+  get(agentId: string): AgentSession | undefined {
     return this.workers.get(agentId);
   }
 
-  ensure(init: WorkerInit): AgentWorker {
+  ensure(init: WorkerInit): AgentSession {
     const existing = this.workers.get(init.agentId);
     if (existing) {
       if (existing.projectId === init.projectId && existing.workspacePath === init.workspacePath) {
@@ -912,7 +1149,12 @@ export class AgentWorkerRegistry {
       existing.dispose();
       this.workers.delete(init.agentId);
     }
-    const worker = new AgentWorker(init);
+    // env LLM_PROVIDER 에 따라 구현체 선택. claude-cli 는 기존 AgentWorker(자식 프로세스 +
+    // stream-json), ollama/vllm 은 LocalAgentWorker(HTTP + tool-call 루프).
+    const providerName = readLLMEnv().provider;
+    const worker: AgentSession = providerName === 'claude-cli'
+      ? new AgentWorker(init)
+      : new LocalAgentWorker(init);
     this.workers.set(init.agentId, worker);
     return worker;
   }
