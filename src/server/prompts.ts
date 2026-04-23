@@ -146,54 +146,34 @@ function claudeChecklist(): string[] {
   ];
 }
 
-// 로컬 LLM(ollama/vllm) 경로: tool schema 에 실제로 노출되는 이름만 자연어로 설명한다.
-// 파이썬 함수 시그니처 서술을 쓰면 작은 모델이 이를 그대로 content 로 흘려 쓰므로 배제.
-// 호출 규약은 별도 섹션에서 "반드시 function-call 로만" 이라고 못박는다.
+// 로컬 LLM(ollama/vllm) 경로: 7-8B급 지시 모델은 "번호 매긴 긴 체크리스트"를 주면
+// 실행이 아니라 echo(그대로 재출력)로 빠지는 회귀가 있다(실사례: llama3.1:8b 가
+// "1) update_status... 2) list_files..." 를 통째로 본문에 복사). 대응책은 두 가지:
+//   (a) 서술형·번호매김을 최소화하고 명령형·단문으로 행동 원칙만 제시,
+//   (b) "~할 것입니다 / ~합니다" 같은 narration 이 발생하면 실패임을 모델에게 직접 알림.
 function localToolSection(): string[] {
   return [
-    '[사용 가능한 도구 — 모두 function-call 규약으로만 호출]',
-    '※ 아래는 도구 "이름" 과 역할이다. 인자 이름·타입은 function-call 요청 시 시스템이 스키마로 제공한다.',
+    '[도구 호출 규약]',
+    '작업을 말로 설명하지 말고 도구(tool_calls)를 호출해 실제로 실행하라.',
+    '"~할 것입니다 / ~합니다 / ~를 작성합니다" 같은 미래형 서술이 본문에 등장하면 실패다 — 그런 문장이 떠오르면 그 행위를 tool_calls 로 바꿔라.',
+    '본문(content)에는 모든 도구 호출이 끝난 뒤 동료에게 전할 한국어 한 줄만 쓴다. 도구 이름을 본문에 적거나 체크리스트를 재출력하지 않는다.',
     '',
-    '● 코드그래프 / 상태 동기화',
-    '- update_status: 자신의 상태(working/idle/thinking/meeting)와 현재 작업 중인 파일 ID를 보고한다. 작업 시작·종료 시점에 반드시 호출.',
-    '- list_files: 현재 프로젝트의 코드그래프 파일 노드 목록과 ID/이름/타입을 조회한다.',
-    '- add_file: 코드그래프에 파일 노드를 추가한다. 멱등 — 이미 존재해도 안전하다.',
-    '- add_dependency: 두 파일 사이 의존성 엣지를 추가한다.',
-    '- whoami: 현재 에이전트/프로젝트 컨텍스트를 확인한다.',
-    '- get_git_automation_settings / trigger_git_automation: Git 자동화 설정 조회/실행.',
-    '',
-    '● 워크스페이스 파일 직통 (실제 디스크에 반영됨)',
-    '- read_file: 파일의 줄 범위를 읽는다. 대용량 파일은 offset/limit 으로 창만 가져오고 total_lines/has_more 로 이어읽기 여부를 판단한다.',
-    '- write_file: 파일을 덮어쓰거나 새로 생성한다. 부모 디렉터리는 자동 생성.',
-    '- edit_file: old_string 을 new_string 으로 정확 일치 교체한다. 범위 내 고유하지 않으면 에러 — 주변 맥락을 포함하거나 replace_all 을 명시한다.',
-    '- list_files_fs: 워크스페이스 파일 트리 조회. 코드그래프가 아니라 실제 파일 시스템.',
-    '- grep_files: 정규식 기반 내용 검색. 대용량 파일도 스트림으로 처리하며 next_cursor 로 재개 가능.',
-    '',
-    '[호출 규약 — 매우 중요]',
-    '- 도구는 반드시 function-call(tool_calls) 로만 호출한다. 도구 이름·인자·괄호 서술을 본문 텍스트에 절대 출력하지 않는다.',
-    '- 본문 content 에는 한국어 최종 결과만 쓴다. 도구 호출은 별도의 tool_calls 필드로만 전달하라.',
-    '- 본문에 `add_file("x", "y")` 나 `list_files()` 같은 의사 코드 문자열을 쓰면 호출이 실행되지 않고 게임이 진행되지 않는다.',
-    '- 응답에 도구 호출이 없어도 된다. 조회만 필요하거나 이미 완료했다면 최종 결과 한국어 한 줄로만 답한다.',
+    '[사용 가능한 도구 이름]',
+    'update_status, list_files, add_file, add_dependency, whoami, get_git_automation_settings, trigger_git_automation, read_file, write_file, edit_file, list_files_fs, grep_files',
+    '각 도구의 인자 스키마는 tool schema 로 시스템이 제공한다. 여기서는 이름만 기억하라.',
     '',
   ];
 }
 
 function localChecklist(): string[] {
   return [
-    '[필수 체크리스트 — 매 지시마다 반드시 이 순서로 수행]',
-    '1) update_status 를 호출해 상태="working" 과 작업 대상 파일 ID(없으면 빈 문자열)를 보고한다.',
-    '2) list_files 를 호출해 현재 코드그래프 상태를 캡처한다.',
-    '3) list_files_fs / grep_files / read_file 로 워크스페이스 현황을 파악한다.',
-    '4) write_file / edit_file 로 실제 코드 변경을 수행한다.',
-    '5) 그래프 동기화 — 누락 금지:',
-    '   - 이번 턴에 read_file/write_file/edit_file 로 한 번이라도 건드린 모든 파일에 대해 add_file 을 호출한다.',
-    '   - add_file 은 멱등하므로 중복 호출이 안전하다. "이미 있을 것" 으로 스킵 금지.',
-    '   - import / require / from ... import 관계 모든 쌍에 대해 add_dependency 를 호출한다.',
-    '6) update_status 로 상태="idle" 과 빈 문자열을 보고해 종료한다.',
-    '7) 최종 content 는 동료에게 전달할 한국어 한 줄(≤20단어). 따옴표·이름표·도구 호출 로그·의사 코드 금지.',
-    '',
-    '체크리스트 5) 는 게임 코드그래프 정합성의 핵심이다. 누락되면 UI 가 실제 코드 구조를 추적하지 못한다. 의심되면 더 많이 호출하는 쪽을 택하라.',
-    '도구 호출은 반드시 function-call 로 수행하며, 도구 이름을 본문에 써서는 안 된다는 규칙을 매 턴 지킨다.',
+    '[행동 원칙]',
+    '- 지시를 받으면 곧바로 update_status 를 호출해 상태 working 을 보고하며 시작한다.',
+    '- 파일 내용을 파악할 땐 list_files_fs / grep_files / read_file 을, 수정할 땐 write_file / edit_file 을 호출한다.',
+    '- 건드린 파일마다 add_file 을 호출해 코드그래프에 반영한다(멱등, 중복 안전).',
+    '- import 나 require 로 끌어오는 관계가 있으면 add_dependency 로 의존성을 기록한다.',
+    '- 작업이 끝나면 update_status 로 idle 을 보고한 뒤, 한국어 한 줄로만 완료 메시지를 남긴다.',
+    '- 도구 이름이나 호출 문법(add_file("x","y") 등)을 본문에 쓰지 않는다. 그러면 실행되지 않는다.',
   ];
 }
 

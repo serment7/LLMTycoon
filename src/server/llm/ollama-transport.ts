@@ -71,7 +71,21 @@ export class OllamaTransport implements ChatTransport {
       const text = await res.text().catch(() => '');
       throw new Error(`ollama ${res.status}: ${text.slice(0, 400)}`);
     }
-    const data = (await res.json()) as OllamaChatResponse;
+    const raw = await res.text();
+    // 드리프트 디버깅용 — env LLM_DEBUG_RAW=1 일 때만 원본 응답을 stderr 에 덤프한다.
+    // 로컬 모델이 tool_calls 필드를 실제로 채우는지, 아니면 content 로 흘리는지
+    // 눈으로 확인하는 용도. 기본값 off — 운영 로그를 오염시키지 않기 위해.
+    if (process.env.LLM_DEBUG_RAW === '1') {
+      console.warn(
+        `[ollama:${this.model}] raw response (first 1200 chars):\n${raw.slice(0, 1200)}`,
+      );
+    }
+    let data: OllamaChatResponse;
+    try {
+      data = JSON.parse(raw) as OllamaChatResponse;
+    } catch (e) {
+      throw new Error(`ollama: JSON 파싱 실패 (${(e as Error).message}): ${raw.slice(0, 200)}`);
+    }
     const content = data.message?.content ?? '';
     const toolCalls: ToolCall[] = (data.message?.tool_calls ?? []).map((c, i) => ({
       id: c.id ?? `call_${Date.now()}_${i}`,

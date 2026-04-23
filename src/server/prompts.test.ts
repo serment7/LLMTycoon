@@ -55,11 +55,28 @@ describe('buildSystemPrompt', () => {
     }
   });
 
-  it('ollama 경로는 function-call 규약을 명시적으로 못박는다', () => {
+  it('ollama 경로는 tool_calls 규약을 명시적으로 못박는다', () => {
     const text = buildSystemPrompt(agent, { provider: 'ollama' });
-    // 본문 텍스트에 의사 코드 금지 규칙이 포함돼야 함.
-    assert.match(text, /function-call/);
-    assert.match(text, /본문.*(출력하지|쓰지|금지)/);
+    // 본문에 도구 이름/의사 코드 쓰지 말라는 규칙이 있어야 함.
+    assert.match(text, /tool_calls/);
+    assert.match(text, /본문.*(쓰지|적거나|재출력|금지)/);
+  });
+
+  it('ollama 경로는 번호 매긴 체크리스트 서술을 쓰지 않는다', () => {
+    // 배경: llama3.1:8b 가 "1) update_status... 2) list_files..." 형식을 받으면
+    // 실행 대신 그대로 본문에 재출력하는 회귀가 있었다. 번호 체크리스트를 피하고
+    // 명령형·단문으로만 표현해야 한다.
+    const text = buildSystemPrompt(agent, { provider: 'ollama' });
+    assert.doesNotMatch(text, /^\d\)\s/m);
+    assert.doesNotMatch(text, /필수 체크리스트/);
+  });
+
+  it('ollama 경로는 narration 금지 지시를 포함한다', () => {
+    // 서술형("~합니다 / ~작성합니다") 을 감지해 tool_calls 로 전환하라는 가이드가
+    // 있어야 한다. 이 문구가 빠지면 작은 모델이 곧바로 narration 으로 빠진다.
+    const text = buildSystemPrompt(agent, { provider: 'ollama' });
+    assert.match(text, /서술/);
+    assert.match(text, /tool_calls/);
   });
 
   it('vllm 경로도 ollama 와 동일한 로컬 분기를 탄다', () => {
