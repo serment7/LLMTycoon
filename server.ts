@@ -395,17 +395,37 @@ function callClaude(prompt: string, ctx?: AgentContext): Promise<string> {
 // 함수 선언은 호이스팅되므로 이 모듈 상단에서 callClaude 를 참조해도 안전하다.
 setClaudeCliOneshot(callClaude);
 
-async function diagnoseClaudeCli() {
+async function diagnoseLLM() {
+  // 프로바이더별로 진단 대상이 다르므로 메시지도 분기. 진단 실패는 서버 기동을
+  // 막지 않는다(fire-and-forget). 첫 호출은 로컬 모델 로드/콜드스타트에 수십 초가
+  // 걸릴 수 있어 가이드만 남기고 조용히 물러난다.
+  const providerRaw = (process.env.LLM_PROVIDER || 'claude-cli').trim();
+  const label = providerRaw === 'claude-cli' ? 'claude' : providerRaw;
   try {
     const out = await callLLMOneshot('한 단어만 답하세요: ping');
-    console.log(`[claude] CLI OK — response: "${out.slice(0, 80)}"`);
+    console.log(`[${label}] OK — response: "${out.slice(0, 80).replace(/\s+/g, ' ')}"`);
   } catch (e) {
-    console.error(`[claude] CLI UNAVAILABLE: ${(e as Error).message}`);
-    console.error('[claude] 점검 항목:');
-    console.error('  1) "claude --version" 이 터미널에서 동작하는지');
-    console.error('  2) "claude login" 으로 구독 세션 인증 완료했는지');
-    console.error('  3) 환경변수 CLAUDE_BIN 으로 절대경로 지정 필요 여부');
-    console.error('  4) DEBUG_CLAUDE=1 로 재실행하면 실제 명령어 로그 확인');
+    const msg = (e as Error).message;
+    console.error(`[${label}] UNAVAILABLE: ${msg}`);
+    if (providerRaw === 'claude-cli') {
+      console.error('[claude] 점검 항목:');
+      console.error('  1) "claude --version" 이 터미널에서 동작하는지');
+      console.error('  2) "claude login" 으로 구독 세션 인증 완료했는지');
+      console.error('  3) 환경변수 CLAUDE_BIN 으로 절대경로 지정 필요 여부');
+      console.error('  4) DEBUG_CLAUDE=1 로 재실행하면 실제 명령어 로그 확인');
+    } else if (providerRaw === 'ollama') {
+      console.error('[ollama] 점검 항목:');
+      console.error('  1) "ollama ps" 로 데몬이 떠 있는지 확인');
+      console.error(`  2) "ollama list" 에 ${process.env.LLM_MODEL || '(LLM_MODEL 미설정)'} 이 있는지`);
+      console.error(`  3) LLM_BASE_URL=${process.env.LLM_BASE_URL || 'http://localhost:11434'} 가 접근 가능한지`);
+      console.error('  4) reasoning 모델(qwen3 등)은 thinking 토큰 때문에 초회 응답이 길다 — LLM_REQUEST_TIMEOUT_MS=600000 권장');
+      console.error('  5) 컨텍스트 소진이 자주 나면 LLM_NUM_CTX=16384 정도로 확장');
+    } else if (providerRaw === 'vllm') {
+      console.error('[vllm] 점검 항목:');
+      console.error(`  1) LLM_BASE_URL=${process.env.LLM_BASE_URL || 'http://localhost:8000'} /v1/chat/completions 가 떠 있는지`);
+      console.error('  2) LLM_API_KEY 토큰이 필요한 배포인지');
+      console.error(`  3) LLM_MODEL=${process.env.LLM_MODEL || '(미설정)'} 이 서버에 등록된 ID 인지`);
+    }
   }
 }
 
@@ -450,7 +470,7 @@ async function startServer() {
   await filesCol.createIndex({ projectId: 1, name: 1 }, { unique: true });
 
   console.log(`Connected to MongoDB at ${MONGODB_URI}/${MONGODB_DB}`);
-  diagnoseClaudeCli();
+  diagnoseLLM();
 
   const app = express();
   const httpServer = createServer(app);

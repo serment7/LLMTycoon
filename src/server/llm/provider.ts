@@ -124,6 +124,9 @@ export function readLLMEnv(): {
     baseUrl: (process.env.LLM_BASE_URL || d.baseUrl).trim(),
     apiKey: (process.env.LLM_API_KEY || '').trim(),
     maxToolIterations: Math.max(1, parseInt(process.env.LLM_MAX_TOOL_ITERATIONS || '10', 10)),
-    requestTimeoutMs: Math.max(10_000, parseInt(process.env.LLM_REQUEST_TIMEOUT_MS || '180000', 10)),
+    // 로컬 reasoning 모델(qwen3·deepseek-r1 등) 은 thinking 토큰이 수백 개씩 찍히는
+    // 탓에 단일 턴이 수 분까지 늘어날 수 있다. 기본 10분으로 넉넉히 잡고, 필요 시
+    // env 로 줄이거나 늘린다.
+    requestTimeoutMs: Math.max(10_000, parseInt(process.env.LLM_REQUEST_TIMEOUT_MS || '600000', 10)),
   };
 }
