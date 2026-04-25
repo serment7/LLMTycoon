@@ -16,6 +16,7 @@ import { OllamaTransport } from './ollama-transport';
 import { VllmTransport } from './vllm-transport';
 import { getToolDefinitions } from './tools-adapter';
 import { readLLMEnv, type LLMMessage, type OneshotContext } from './provider';
+import { getCached, setCached, makeCacheKey } from '../../services/llm/responseCache';
 
 export type ClaudeCliOneshot = (prompt: string, ctx?: OneshotContext) => Promise<string>;
 
@@ -32,14 +33,25 @@ export function setClaudeCliOneshot(impl: ClaudeCliOneshot | null): void {
 
 /**
  * 공급자 설정에 따라 단발 호출을 분기한다. 호출자는 프로바이더 종류를 몰라도 된다.
+ *
+ * 캐시 정책: ctx 가 없는 순수 텍스트 생성 경로만 응답을 캐시한다. ctx 가 있으면
+ * 도구 호출 부수효과(파일 작성·그래프 변경 등) 가 섞일 수 있어 동일 프롬프트라도
+ * 매번 다시 실행해야 한다.
  */
 export async function callLLMOneshot(prompt: string, ctx?: OneshotContext): Promise<string> {
   const env = readLLMEnv();
+  const cacheKey = ctx ? null : makeCacheKey(env.model || env.provider, prompt);
+  if (cacheKey) {
+    const hit = getCached(cacheKey);
+    if (hit !== undefined) return hit;
+  }
   if (env.provider === 'claude-cli') {
     if (!claudeCliOneshotImpl) {
       throw new Error('claude-cli oneshot impl not registered — server.ts 가 setClaudeCliOneshot 로 주입해야 합니다');
     }
-    return claudeCliOneshotImpl(prompt, ctx);
+    const out = await claudeCliOneshotImpl(prompt, ctx);
+    if (cacheKey) setCached(cacheKey, out);
+    return out;
   }
 
   // 로컬 모델 경로: 단발 호출용 메시지 히스토리를 즉석에서 만든다. 시스템 프롬프트는
@@ -68,9 +80,11 @@ export async function callLLMOneshot(prompt: string, ctx?: OneshotContext): Prom
     ? new OllamaTransport(env.baseUrl, env.model, env.requestTimeoutMs)
     : new VllmTransport(env.baseUrl, env.model, env.apiKey, env.requestTimeoutMs);
 
-  return chatLoop(transport, messages, {
+  const result = await chatLoop(transport, messages, {
     maxToolIterations: env.maxToolIterations,
     toolContext,
     tools,
   });
+  if (cacheKey) setCached(cacheKey, result);
+  return result;
 }
