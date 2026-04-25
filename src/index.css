@@ -1521,6 +1521,73 @@ select:focus-visible,
   }
 }
 
+/* ── 상단 헤더 메트릭 칩 (지시 #ed0f0ebb) — 한 줄 유지 + 동적 스케일 ──────
+ * App.tsx 헤더의 `app-header-metrics` 컨테이너는 확대·에이전트·프로젝트·커버리지·
+ * 활성률·협업 등 9개 지표 칩을 한 줄에 나란히 보인다. flex-wrap=nowrap + min-width:0
+ * + overflow:hidden 으로 줄바꿈 회귀를 차단하고, gap·padding·font-size 를 clamp() 로
+ * 컨테이너 폭에 비례 축소해 1024/768/480px 어느 폭에서도 한 줄을 유지한다. 768px
+ * 이하에서는 라벨 풀텍스트를 1글자 약어로 토글하고 전체 명칭은 aria-label·title
+ * 로 보존(스크린리더·hover 양쪽에서 의미 손실 없음). 16px 이상 폭에서는 기존
+ * `bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)]` 외관과 픽셀 일치.
+ */
+.app-header-metrics {
+  --app-header-metric-gap: clamp(4px, 0.6vw + 2px, 20px);
+  --app-header-metric-pad-x: clamp(4px, 0.5vw + 2px, 12px);
+  --app-header-metric-pad-y: clamp(2px, 0.2vw + 1px, 4px);
+  --app-header-metric-font: clamp(11px, 0.4vw + 9px, 14px);
+  gap: var(--app-header-metric-gap);
+  font-size: var(--app-header-metric-font);
+}
+
+.app-header-metrics__chip {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: rgba(0, 0, 0, 0.3);
+  padding: var(--app-header-metric-pad-y) var(--app-header-metric-pad-x);
+  border: 2px solid var(--pixel-border);
+}
+
+.app-header-metrics__chip--accent {
+  border-left-width: 6px;
+}
+
+/* 좁은 폭 토글 — 기본은 풀라벨이 보이고 short 는 숨겨진다. 768px 이하에서 역전. */
+.app-header-metrics__label-short {
+  display: none;
+}
+
+@media (max-width: 1024px) {
+  .app-header-metrics {
+    --app-header-metric-pad-x: clamp(3px, 0.4vw + 2px, 10px);
+    --app-header-metric-gap: clamp(4px, 0.5vw + 2px, 14px);
+  }
+}
+
+@media (max-width: 768px) {
+  .app-header-metrics__label-full {
+    display: none;
+  }
+  .app-header-metrics__label-short {
+    display: inline;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-header-metrics {
+    --app-header-metric-font: clamp(10px, 0.4vw + 8px, 12px);
+    --app-header-metric-pad-x: 3px;
+    --app-header-metric-gap: 4px;
+  }
+  .app-header-metrics__chip {
+    border-width: 1px;
+  }
+}
+
 * {
   box-sizing: border-box;
   image-rendering: pixelated;

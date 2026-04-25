@@ -1703,27 +1703,39 @@ function App() {
           polite 라도 스팸 고지가 된다. 변경 시점 공지가 필요한 위젯은 이미
           ClaudeTokenUsage 가 자체 role="button"+aria-expanded 로 가지고 있다.
         */}
+        {/*
+          상단바 메트릭 컨테이너(#ed0f0ebb) — 좁은 화면에서 두 줄로 줄바꿈되던 회귀를
+          flex-nowrap + min-width 0 + clamp() 동적 스케일로 차단한다. 칩의 라벨 텍스트는
+          full/short 두 span 으로 분리해 좁은 폭에서 짧은 약어만 노출하고 전체 명칭은
+          aria-label·title 로 보존(스크린리더·hover 양쪽에서 의미 손실 없음).
+        */}
         <div
-          className="flex flex-wrap items-center gap-3 sm:gap-5 text-sm"
+          className="app-header-metrics flex flex-nowrap items-center text-sm min-w-0 overflow-hidden"
           role="group"
           aria-label="상단 요약 지표"
           data-testid="app-header-metrics"
         >
           <div
-            className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] text-[var(--pixel-accent)]"
+            className="app-header-metrics__chip text-[var(--pixel-accent)]"
             role="status"
             aria-label={`확대 ${Math.round(zoom * 100)} 퍼센트`}
+            title={`확대 ${Math.round(zoom * 100)}%`}
             data-testid="header-metric-zoom"
           >
-            확대: {Math.round(zoom * 100)}%
+            <span className="app-header-metrics__label-full">확대: </span>
+            <span className="app-header-metrics__label-short" aria-hidden="true">🔍 </span>
+            {Math.round(zoom * 100)}%
           </div>
           <div
-            className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)]"
+            className="app-header-metrics__chip"
             role="status"
             aria-label={`전체 에이전트 ${gameState.agents.length} 명`}
+            title={`전체 에이전트 ${gameState.agents.length}명`}
             data-testid="header-metric-agents"
           >
-            에이전트: {gameState.agents.length}
+            <span className="app-header-metrics__label-full">에이전트: </span>
+            <span className="app-header-metrics__label-short" aria-hidden="true">AG </span>
+            {gameState.agents.length}
           </div>
           {/*
             `CurrentProjectBadge` 가 "현재 프로젝트: 이름" 을 보여 주기 때문에 본 칩은
@@ -1732,14 +1744,17 @@ function App() {
             풀 문장으로 내려 스크린리더가 두 배지를 혼동하지 않는다.
           */}
           <div
-            className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)]"
+            className="app-header-metrics__chip"
             role="status"
             aria-label={`관리 중인 전체 프로젝트 ${gameState.projects.length} 개`}
+            title={`관리 중인 전체 프로젝트 ${gameState.projects.length}개`}
             data-testid="header-metric-projects"
           >
-            전체 프로젝트: {gameState.projects.length}
+            <span className="app-header-metrics__label-full">전체 프로젝트: </span>
+            <span className="app-header-metrics__label-short" aria-hidden="true">PJ </span>
+            {gameState.projects.length}
           </div>
-          <div className="flex items-center gap-1 shrink-0 min-w-0">
+          <div className="app-header-metrics__group flex items-center gap-1 shrink-0 min-w-0">
             <CurrentProjectBadge projectName={project?.name ?? null} />
             <button
               type="button"
@@ -1779,7 +1794,7 @@ function App() {
             </button>
           </div>
           <div
-            className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] border-l-[6px]"
+            className="app-header-metrics__chip app-header-metrics__chip--accent"
             style={{ borderLeftColor: getMetricTierColor(workspaceInsights.coveragePercent) }}
             role="status"
             aria-label={`의존성 커버리지 ${workspaceInsights.coveragePercent} 퍼센트${
@@ -1788,31 +1803,37 @@ function App() {
                 : ''
             }`}
             title={workspaceInsights.isolatedFiles.length > 0
-              ? `고립 파일: ${workspaceInsights.isolatedFiles.join(', ')}`
-              : '의존성이 연결되지 않은 파일이 없습니다'}
+              ? `커버리지 ${workspaceInsights.coveragePercent}% · 고립 파일: ${workspaceInsights.isolatedFiles.join(', ')}`
+              : `커버리지 ${workspaceInsights.coveragePercent}% (의존성이 연결되지 않은 파일 없음)`}
             data-testid="header-metric-coverage"
           >
-            커버리지: {workspaceInsights.coveragePercent}%
+            <span className="app-header-metrics__label-full">커버리지: </span>
+            <span className="app-header-metrics__label-short" aria-hidden="true">커 </span>
+            {workspaceInsights.coveragePercent}%
           </div>
           <div
-            className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] border-l-[6px]"
+            className="app-header-metrics__chip app-header-metrics__chip--accent"
             style={{ borderLeftColor: getMetricTierColor(agentActivity.total === 0 ? null : agentActivity.ratio) }}
             role="status"
             aria-label={`에이전트 활성률 ${agentActivity.ratio} 퍼센트`}
-            title={activityBreakdownLabel}
+            title={`활성률 ${agentActivity.ratio}% — ${activityBreakdownLabel}`}
             data-testid="header-metric-activity"
           >
-            활성률: {agentActivity.ratio}%
+            <span className="app-header-metrics__label-full">활성률: </span>
+            <span className="app-header-metrics__label-short" aria-hidden="true">활 </span>
+            {agentActivity.ratio}%
           </div>
           <div
-            className="bg-black/30 px-3 py-1 border-2 border-[var(--pixel-border)] border-l-[6px]"
+            className="app-header-metrics__chip app-header-metrics__chip--accent"
             style={{ borderLeftColor: getMetricTierColor(collaborationStats.messageCount === 0 ? null : collaborationStats.participationRate) }}
             role="status"
             aria-label={`협업 지표 ${collaborationBadge}`}
-            title={collaborationLabel}
+            title={`협업 ${collaborationBadge} — ${collaborationLabel}`}
             data-testid="header-metric-collaboration"
           >
-            협업: {collaborationBadge}
+            <span className="app-header-metrics__label-full">협업: </span>
+            <span className="app-header-metrics__label-short" aria-hidden="true">협 </span>
+            {collaborationBadge}
           </div>
           {!online && (
             <div
