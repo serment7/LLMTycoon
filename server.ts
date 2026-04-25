@@ -8,12 +8,13 @@ import { spawn } from 'child_process';
 import { writeFileSync, unlinkSync, mkdirSync, readFileSync, readdirSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
-import { MongoClient, Db } from 'mongodb';
+import { MongoClient, Db, ObjectId } from 'mongodb';
 import multer from 'multer';
 import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegration, ManagedProject, SourceProvider, GitAutomationSettings, GitAutomationBranchStrategy, GIT_AUTOMATION_BRANCH_STRATEGY_VALUES, GitCredential, GitCredentialRedacted, SharedGoal, SharedGoalPriority, SharedGoalStatus, ProjectOptionsUpdate, PROJECT_OPTION_DEFAULTS, ClaudeTokenUsage, ClaudeTokenUsageTotals, MediaAsset, MediaKind } from './src/types';
 import { EMPTY_TOTALS as EMPTY_CLAUDE_USAGE_TOTALS, mergeUsage as mergeClaudeUsageTotals, recordErrorToTotals, emptyErrorCounters } from './src/utils/claudeTokenUsageStore';
 import { parseClaudeUsageFromStdout } from './src/utils/claudeTokenUsageParse';
 import { onClaudeUsage, onTokenExhausted, emitTokenExhausted } from './src/server/claudeClient';
+import { recordCompletedTask } from './src/server/recentlyCompletedTasks';
 import { classifyClaudeError, type ClaudeErrorCategory } from './src/server/claudeErrors';
 import { setAgentWorkerSessionStatus, notifyAgentMediaGenerated } from './src/server/agentWorker';
 import type { ClaudeSessionStatus } from './src/types';
@@ -60,6 +61,10 @@ import {
   type GitAutomationStepResult,
 } from './src/utils/gitAutomation';
 import { ActiveBranchCache, resolveBranch } from './src/utils/branchResolver';
+import {
+  buildAgentsCompletedCommitMessage,
+  type CompletedAgentTask,
+} from './src/server/git/commitMessageBuilder';
 import {
   decryptToken,
   encryptToken,
@@ -818,6 +823,17 @@ async function startServer() {
       // 작업일 때만 자동 git 실행을 시도한다. Leader 는 orchestration 전용이라
       // 본인의 "completed" 를 다시 트리거하면 무한 루프 위험이 있다.
       const actor = await agentsCol.findOne({ id: task.assignedTo });
+      // 자동 커밋 메시지 빌더(commitMessageBuilder, Thanos #06aa5c30) 가 동기적으로
+      // 끄집어 쓸 "직전 사이클 완료 태스크 버퍼" 에 한 건을 push 해 둔다. changedFiles
+      // 는 이 시점에 동기 조회가 어렵기 때문에 빌더 측에서 collectChangedFiles 로
+      // 보강하도록 비워 둔다 — record 자체는 "어떤 에이전트가 무엇을 끝냈는가" 만
+      // 누락 없이 남기는 데 의의가 있다.
+      recordCompletedTask({
+        projectId: task.projectId,
+        taskId: id,
+        agent: actor?.name ?? '',
+        summary: task.description ?? '',
+      });
       if (actor && actor.role !== 'Leader') {
         executeGitAutomation(task.projectId, {
           type: 'chore',
@@ -1781,6 +1797,12 @@ async function startServer() {
       // MCP/REST 트리거 1회 한정 오버라이드. 저장된 settings.branchStrategy 보다 우선.
       branchStrategy?: GitAutomationBranchStrategy;
       branchName?: string;
+      // 호출자가 제목·본문이 포함된 다중 라인 커밋 메시지를 직접 결정해 넘길 때 사용한다.
+      // 지정되면 formatCommitMessage 의 `{type}: {summary}` 단일 라인을 무시하고 그대로
+      // `git commit -m` 인자에 흘린다. allAgentsCompletedWatcher 가 buildAgentsCompletedCommitMessage
+      // 결과(full)를 이 필드로 전달해, 회고/리뷰가 어느 에이전트가 무엇을 마쳤는지를
+      // 한 커밋 메시지로 읽을 수 있게 한다(#f907fb65).
+      commitMessageOverride?: string;
     },
   ): Promise<GitAutomationRunResult> {
     try {
@@ -1891,10 +1913,15 @@ async function startServer() {
           activeBranchCache.set(projectId, branch);
         }
       }
-      const commitMessage = formatCommitMessage(settings, {
-        type: ctxHint?.type || 'chore',
-        summary: ctxHint?.summary || 'auto update',
-      });
+      // commitMessageOverride 가 지정되면 그대로 사용한다 — allAgentsCompletedWatcher 가
+      // buildAgentsCompletedCommitMessage 로 다중 라인 메시지를 만들어 넘기는 경로(#f907fb65).
+      // 그 외(태스크 경계 커밋 등 단일 라인 흐름) 는 기존 formatCommitMessage 계약 유지.
+      const commitMessage = (ctxHint?.commitMessageOverride && ctxHint.commitMessageOverride.trim())
+        ? ctxHint.commitMessageOverride
+        : formatCommitMessage(settings, {
+          type: ctxHint?.type || 'chore',
+          summary: ctxHint?.summary || 'auto update',
+        });
       const prTitle = formatPrTitle(settings.prTitleTemplate, {
         type: ctxHint?.type || 'chore',
         summary: ctxHint?.summary || 'auto update',
@@ -2223,13 +2250,61 @@ async function startServer() {
     const statuses = members.map(m => m.status as Agent['status']);
     const { fire } = completionTracker.observe(projectId, statuses);
     if (!fire) return;
+    // 직전 턴에 완료된 태스크 + 워크스페이스 변경 파일을 모아 다중 라인 커밋 메시지를
+    // 만든다(#f907fb65). description 만 사용해 응답 본문을 그대로 끌어오지 않고,
+    // 60분 이내 완료된 태스크만 후보로 잡아 이전 배치 잔여를 끌어오지 않는다.
+    let commitMessageOverride: string | undefined;
+    let summary = 'all agents completed';
+    try {
+      const cutoffSec = Math.floor(Date.now() / 1000) - 60 * 60;
+      const cutoffOid = ObjectId.createFromTime(cutoffSec);
+      const recent = await tasksCol
+        .find(
+          {
+            projectId,
+            status: 'completed',
+            assignedTo: { $in: project.agents },
+            _id: { $gt: cutoffOid },
+          },
+          { projection: { _id: 0, assignedTo: 1, description: 1 } },
+        )
+        .sort({ _id: -1 })
+        .limit(50)
+        .toArray();
+      const agentNameById = new Map(members.map(m => [m.id, m.name || m.id]));
+      const tasks: CompletedAgentTask[] = recent.map(t => ({
+        agent: agentNameById.get(t.assignedTo as string) || (t.assignedTo as string) || 'unknown',
+        description: (t.description as string) || '',
+      }));
+      const cwd = resolveWorkspace(project.workspacePath);
+      const status = spawnSync('git', ['-C', cwd, 'status', '--porcelain'], {
+        encoding: 'utf8', windowsHide: true,
+      });
+      const changedFiles = status.status === 0
+        ? (status.stdout || '')
+            .split(/\r?\n/)
+            // porcelain 행 형식: `XY <path>` (X=staged, Y=worktree). 첫 3자만 떼면 경로.
+            .map(line => line.length > 3 ? line.slice(3).trim() : '')
+            .filter(Boolean)
+        : [];
+      if (tasks.length > 0 || changedFiles.length > 0) {
+        const built = buildAgentsCompletedCommitMessage({ tasks, changedFiles });
+        commitMessageOverride = built.full;
+        summary = built.subject;
+      }
+    } catch (err) {
+      // 메시지 빌드 실패는 기존 폴백(`chore: all agents completed`) 으로 흘려 보낸다 —
+      // 자동 커밋 자체를 막는 건 과도한 부작용이고, 진단용 로그만 남긴다.
+      console.warn('[all-agents-watcher] commit message build failed:', (err as Error).message);
+    }
     // 정상 전이 — 집계 커밋을 트리거. 실패는 기존 executeGitAutomation 의 구조화
     // 로그/소켓 이벤트 경로로 흘러가므로 여기서는 로그만 남긴다.
     executeGitAutomation(projectId, {
       type: 'chore',
-      summary: 'all agents completed',
+      summary,
       // 긴급 수정 #a7b258fb: 전원 idle 수렴 집계 커밋도 원격까지 한 번에 반영.
       forcePush: true,
+      commitMessageOverride,
     }).catch(err =>
       console.error('[all-agents-watcher] auto-run failed:', (err as Error).message),
     );
