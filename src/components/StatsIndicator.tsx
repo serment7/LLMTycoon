@@ -195,11 +195,18 @@ export function StatsIndicator(props: StatsIndicatorProps): React.ReactElement {
   );
   const ariaSummary = useMemo(() => buildAriaSummary(lines), [lines]);
 
+  // 트리거와 popover 둘 다 같은 hover 영역으로 묶기 위해 hover 핸들러를 wrapper
+  // span 에 둔다(#ab6c9d78). 이전 구현은 트리거 span 에만 onMouseEnter/Leave 가
+  // 있어 마우스가 popover 영역으로 이동하는 순간 hovered=false 가 발사돼 popover
+  // 가 다시 닫혔다. wrapper span 한 곳에서 양쪽 영역을 묶으면 popover 안에서도
+  // hover 상태가 유지된다. focus 는 트리거 span 만 가지므로 onFocus/Blur 는 그대로.
   return (
     <span
       className={['stats-indicator', className].filter(Boolean).join(' ')}
       style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
       data-testid="stats-indicator"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
       <span
         role="button"
@@ -208,8 +215,6 @@ export function StatsIndicator(props: StatsIndicatorProps): React.ReactElement {
         aria-describedby={popoverId}
         aria-expanded={open}
         data-testid="stats-indicator-trigger"
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         onKeyDown={(e) => {
@@ -242,14 +247,15 @@ export function StatsIndicator(props: StatsIndicatorProps): React.ReactElement {
         role="tooltip"
         data-testid="stats-indicator-popover"
         data-open={open ? 'true' : 'false'}
-        // 마우스 진입에도 popover 가 닫히지 않도록 hover 가 wrapping span 으로 위임됨.
+        // marginTop=0 + paddingTop 으로 트리거와 popover 사이 dead zone 을 없앤다 —
+        // 사용자가 마우스를 popover 로 옮기는 도중 hover 가 끊기는 회귀 차단(#ab6c9d78).
         style={{
           position: 'absolute',
           top: '100%',
           right: 0,
-          marginTop: 6,
+          marginTop: 0,
           minWidth: 240,
-          padding: '8px 10px',
+          padding: '14px 10px 8px',
           background: 'var(--pixel-card, #11182a)',
           border: '2px solid var(--pixel-border, #2a3140)',
           color: 'var(--pixel-text, #e6edf6)',

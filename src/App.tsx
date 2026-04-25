@@ -1701,8 +1701,14 @@ function App() {
           full/short 두 span 으로 분리해 좁은 폭에서 짧은 약어만 노출하고 전체 명칭은
           aria-label·title 로 보존(스크린리더·hover 양쪽에서 의미 손실 없음).
         */}
+        {/*
+          overflow-hidden 은 자식 칩 단위에서만 적용해야 한다 — 컨테이너에 걸면
+          StatsIndicator 의 popover(`position: absolute; top: 100%`)가 헤더 박스
+          밖으로 펼쳐지지 못하고 잘려 보인다(#ab6c9d78). 가로 넘침은 칩 각각의
+          flex-shrink + min-width:0 + truncate 로 흡수한다.
+        */}
         <div
-          className="app-header-metrics flex flex-nowrap items-center text-sm min-w-0 overflow-hidden"
+          className="app-header-metrics flex flex-nowrap items-center text-sm min-w-0"
           role="group"
           aria-label="상단 요약 지표"
           data-testid="app-header-metrics"
