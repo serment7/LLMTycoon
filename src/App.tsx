@@ -56,6 +56,8 @@ import { UploadDropzone } from './components/UploadDropzone';
 import { OnboardingTour } from './components/OnboardingTour';
 import { TokenUsageIndicator } from './components/TokenUsageIndicator';
 import { LanguageToggle } from './ui/LanguageToggle';
+import { updateMyLanguagePreference } from './server/api/userPreferences';
+import { useLocale as useI18nLocale } from './i18n';
 import { CreateProjectDialog, type CreateProjectDialogSubmit, type CreateProjectDialogResult } from './ui/projects/CreateProjectDialog';
 import { applyRecommendedTeam } from './project/api';
 import { ConversationSearch } from './components/ConversationSearch';
@@ -191,6 +193,9 @@ const AGENT_PATH_CLEANUP_MS = 500;
 function App() {
   // Agents 탭 라이브 닷·기타 펄스 마이크로 인터랙션을 prefers-reduced-motion 사용자에게 비활성화한다.
   const reducedMotion = useReducedMotion();
+  // 지시 #ba58ad2d · 헤더 라벨/배너의 i18n 화. setLocale 호출 시 useSyncExternalStore
+  // 가 본 컴포넌트를 다시 렌더해 새 번역이 즉시 반영된다.
+  const { t: i18nT } = useI18nLocale();
   // 멀티미디어 업로드 토스트(#25c6969c) — UploadDropzone 에서 검증 실패/네트워크 오류를
   // 사용자 친화 메시지로 고지한다. ToastProvider 는 AppRoot 가 감싸므로 본 훅이 안전.
   const mediaToast = useToast();
@@ -1821,7 +1826,13 @@ function App() {
             </div>
           )}
           <TokenUsageIndicator />
-          <LanguageToggle />
+          <LanguageToggle
+            onPersist={(next) => {
+              // 지시 #ba58ad2d · 토글 즉시 PATCH 로 서버 영속화. 401(미인증) · 네트워크
+              // 실패는 조용히 무시하고 localStorage 폴백을 유지한다.
+              updateMyLanguagePreference(next).catch(() => undefined);
+            }}
+          />
           {/* 설정 드로어 톱니 버튼(#0dceedcd) */}
           <button
             type="button"

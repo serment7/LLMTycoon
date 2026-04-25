@@ -22,7 +22,11 @@ import {
 
 export const SUBJECT_MAX_LEN = 72;
 export const BODY_BULLET_LIMIT = 5;
-export const DEFAULT_GUARD_FALLBACK = 'chore: all agents completed';
+// 0건 폴백 — 정적 문구가 git log 를 가득 채우는 회귀(#0dc42359) 를 차단하기 위해
+// 의미가 살아 있는 한국어 문구로 통일한다. 호출자가 시각이 박힌 fallback 을 직접
+// 넘기는 정상 경로를 권장하지만, 입력이 누락된 경우에도 결과 메시지가 의미를 잃지
+// 않도록 'chore: 자동 동기화' 한 줄을 기본값으로 둔다.
+export const DEFAULT_GUARD_FALLBACK = 'chore: 자동 동기화';
 const ELLIPSIS = '…';
 
 // 한글(자모/완성형) 한 글자라도 있으면 한국어 summary 로 본다.
@@ -47,7 +51,7 @@ export interface GuardedAutoCommitMessage extends AutoCommitMessage {
 
 export interface BuildGuardedAutoCommitMessageInput
   extends Omit<BuildAutoCommitMessageInput, 'fallbackMessage'> {
-  /** 0건 폴백. 미지정 시 'chore: all agents completed'(server.ts 트리거 규약과 동일). */
+  /** 0건 폴백. 미지정 시 'chore: 자동 동기화' — 정적 문구 회귀(#0dc42359) 차단. */
   readonly fallbackMessage?: string;
 }
 

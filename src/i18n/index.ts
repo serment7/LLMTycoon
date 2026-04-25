@@ -11,13 +11,15 @@
 //   (5) `t(key)` 는 점 경로(dot-path) 탐색. 없는 키는 대체로 영어 → 그래도 없으면 key 원문.
 //
 // 설계 근거
-//   · 리소스 파일은 리포 루트 `locales/{en,ko}.json` 로 분리(번역 외주가 JSON 만 수정할
-//     수 있도록). 런타임은 ESM `import … assert { type: 'json' }` 대신 `import` 를 쓴다.
+//   · 리소스 파일은 `src/i18n/{en,ko}.json` 가 정본(지시 #ba58ad2d). 클라이언트 코드와
+//     함께 번들링되도록 모듈 디렉터리 안에 둔다. 리포 루트 `locales/{en,ko}.json` 은
+//     기존 외부 번역가 워크플로우 호환 사본이며, 두 위치는 동일 내용을 유지해야 한다.
+//   · 런타임은 ESM `import … assert { type: 'json' }` 대신 `import` 를 쓴다.
 //     Vite/TypeScript 에서 resolveJsonModule=true 이므로 정적 import 로 충분.
 //   · 언어 모드는 "UI 문자열 사전 + 설정값" 에 한정한다. 날짜/숫자 포맷은 본 PR 범위 외.
 
-import en from '../../locales/en.json';
-import ko from '../../locales/ko.json';
+import en from './en.json';
+import ko from './ko.json';
 import React, { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from 'react';
 
 export type Locale = 'en' | 'ko';

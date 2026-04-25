@@ -141,6 +141,39 @@ export function createFetchPreferenceHandler(
   };
 }
 
+// 지시 #ba58ad2d · PATCH /api/users/me/language — 로그인 사용자 전용.
+//
+// 기존 POST /api/user/preferences 는 익명 fallback(isAnonymous:true) 까지 끌어안는
+// "선택적 동기화" 시맨틱이지만, PATCH /me/language 는 RFC 7231 PATCH 의미상 인증된
+// 사용자 자신의 리소스를 수정하는 경로다. 따라서 익명 호출은 401 로 단호하게 끊고,
+// 200 응답은 갱신 결과를 그대로 돌려준다.
+export function createUpdateLanguageHandler(
+  deps: UserPreferencesRouteDeps,
+): PreferencesHandler {
+  const { store } = deps;
+  const now = deps.now ?? (() => new Date().toISOString());
+
+  return async (req, res) => {
+    const userId = deps.resolveUser?.(req) ?? null;
+    if (!userId) {
+      res.status(401).json({ ok: false, error: 'unauthenticated' });
+      return;
+    }
+    const parsed = parsePreferencePayload(req.body);
+    if (parsed.ok === false) {
+      res.status(400).json({ ok: false, error: parsed.reason });
+      return;
+    }
+    const storedAt = now();
+    await store.upsert({ userId, language: parsed.language, updatedAt: storedAt });
+    res.status(200).json({
+      ok: true,
+      language: parsed.language,
+      storedAt,
+    });
+  };
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // 클라이언트 래퍼 — UI 가 설정 변경 시 호출. 실패 시 로컬 스토리지 폴백만 유지.
 // ────────────────────────────────────────────────────────────────────────────
@@ -169,6 +202,38 @@ export async function syncLanguagePreference(
     }
     const body = (await res.json()) as { ok?: boolean; isAnonymous?: boolean };
     return { ok: Boolean(body?.ok), isAnonymous: body?.isAnonymous };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'unknown' };
+  }
+}
+
+/**
+ * 지시 #ba58ad2d · PATCH /api/users/me/language 클라이언트 헬퍼.
+ *
+ * LanguageToggle.onPersist 가 호출하는 진입점. 401(미인증) 은 "조용한 폴백" — 토글은
+ * 이미 localStorage 에 저장됐으므로 로컬 동작은 유지하고, 호출자는 ok:false 만 받아
+ * 토스트를 띄우거나 무시한다.
+ */
+export async function updateMyLanguagePreference(
+  language: PreferenceLocale,
+  options: SyncLanguagePreferenceOptions = {},
+): Promise<{ ok: boolean; status?: number; error?: string }> {
+  const fetchImpl = options.fetch ?? globalThis.fetch;
+  if (!fetchImpl) {
+    return { ok: false, error: 'fetch-missing' };
+  }
+  try {
+    const res = await fetchImpl(`${options.baseUrl ?? ''}/api/users/me/language`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ language }),
+    });
+    if (!res.ok) {
+      return { ok: false, status: res.status, error: `http-${res.status}` };
+    }
+    const body = (await res.json()) as { ok?: boolean };
+    return { ok: Boolean(body?.ok), status: res.status };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'unknown' };
   }

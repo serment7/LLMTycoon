@@ -14,7 +14,11 @@ import { Agent, Project, GameState, CodeFile, CodeDependency, Task, SourceIntegr
 import { EMPTY_TOTALS as EMPTY_CLAUDE_USAGE_TOTALS, mergeUsage as mergeClaudeUsageTotals, recordErrorToTotals, emptyErrorCounters } from './src/utils/claudeTokenUsageStore';
 import { parseClaudeUsageFromStdout } from './src/utils/claudeTokenUsageParse';
 import { onClaudeUsage, onTokenExhausted, emitTokenExhausted } from './src/server/claudeClient';
-import { recordCompletedTask } from './src/server/recentlyCompletedTasks';
+import {
+  recordCompletedTask,
+  getRecentlyCompletedTasks,
+  consumeRecentlyCompletedTasks,
+} from './src/server/recentlyCompletedTasks';
 import { classifyClaudeError, type ClaudeErrorCategory } from './src/server/claudeErrors';
 import { setAgentWorkerSessionStatus, notifyAgentMediaGenerated } from './src/server/agentWorker';
 import type { ClaudeSessionStatus } from './src/types';
@@ -80,6 +84,12 @@ import {
 } from './src/server/claudeJsonlUsage';
 import type { OAuthUsageFetchResult } from './src/server/claudeOAuthUsage';
 import { loadOAuthUsageFromDisk } from './src/server/claudeOAuthUsage';
+import {
+  createUpdateLanguageHandler,
+  type UserPreferenceRecord,
+  type UserPreferencesStore,
+} from './src/server/api/userPreferences';
+import { parseSidFromCookie } from './src/auth/authRoutes';
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const DEBUG_CLAUDE = process.env.DEBUG_CLAUDE === '1';
@@ -1182,6 +1192,44 @@ async function startServer() {
     }
   });
 
+  // 지시 #ba58ad2d · 사용자별 언어 설정 — PATCH /api/users/me/language.
+  //
+  // 저장소: Mongo `user_settings` 컬렉션({ userId, language, updatedAt }). 컬렉션이
+  // 비어 있어도 처음 PATCH 가 upsert 로 만들어 준다. 별도 마이그레이션 없이 동작.
+  // 사용자 식별: 쿠키의 `llm_tycoon_sid` 가 있으면 그 값을 userId 로 사용. 토큰
+  // 검증을 위한 AuthService 가 server.ts 에 마운트되기 전까지는 sid = userId 식별자
+  // 로 직결시켜, dev/온프레미스 구간에서도 토글 → 영속화가 동작하도록 한다.
+  const userSettingsCol = db.collection('user_settings');
+  const userSettingsStore: UserPreferencesStore = {
+    async upsert(record) {
+      await userSettingsCol.updateOne(
+        { userId: record.userId },
+        { $set: { userId: record.userId, language: record.language, updatedAt: record.updatedAt } },
+        { upsert: true },
+      );
+    },
+    async get(userId) {
+      const doc = await userSettingsCol.findOne({ userId }) as
+        | { userId: string; language: 'en' | 'ko'; updatedAt: string }
+        | null;
+      if (!doc) return null;
+      return { userId: doc.userId, language: doc.language, updatedAt: doc.updatedAt };
+    },
+  };
+  const updateLanguageHandler = createUpdateLanguageHandler({
+    store: userSettingsStore,
+    resolveUser: (req) => {
+      const headers = (req.headers ?? {}) as Record<string, string | string[] | undefined>;
+      const cookie = headers.cookie;
+      const sid = parseSidFromCookie(typeof cookie === 'string' ? cookie : undefined);
+      // 쿠키 토큰을 그대로 식별자로 채택. 검증된 세션 마운트는 후속 작업.
+      return sid ?? null;
+    },
+  });
+  app.patch('/api/users/me/language', async (req, res) => {
+    await updateLanguageHandler(req as any, res as any);
+  });
+
   // --- MCP-backed endpoints ---
   // 에이전트(또는 MCP 도구)가 스스로 상태를 보고하는 엔드포인트. 워커 아키텍처
   // 도입 이후 태스크 완료/ git 자동화 트리거는 전적으로 TaskRunner.dispatchTask
@@ -2250,64 +2298,92 @@ async function startServer() {
     const statuses = members.map(m => m.status as Agent['status']);
     const { fire } = completionTracker.observe(projectId, statuses);
     if (!fire) return;
-    // 직전 턴에 완료된 태스크 + 워크스페이스 변경 파일을 모아 다중 라인 커밋 메시지를
-    // 만든다(#f907fb65). description 만 사용해 응답 본문을 그대로 끌어오지 않고,
-    // 60분 이내 완료된 태스크만 후보로 잡아 이전 배치 잔여를 끌어오지 않는다.
-    let commitMessageOverride: string | undefined;
-    let summary = 'all agents completed';
+    // 직전 사이클에 완료된 태스크 + 워크스페이스 변경 파일을 모아 다중 라인 커밋
+    // 메시지를 만든다(#f907fb65 / #0dc42359). 우선순위:
+    //   1) recordCompletedTask 가 누적한 메모리 버퍼 — task.completed 훅이 즉시 push 하므로
+    //      ObjectId 시간 비교 같은 폴백 의존성 없이 정확하게 직전 사이클을 끌어온다.
+    //   2) 메모리 버퍼가 비어 있을 때만 tasksCol 의 60분 컷오프 조회로 폴백.
+    //   3) 둘 다 비어도 빌더 폴백 제목에 ISO 시각을 박아 "chore: all agents completed"
+    //      같은 정적 문자열이 매 사이클 동일 메시지로 누적되는 회귀를 차단한다.
+    const agentNameById = new Map(members.map(m => [m.id, m.name || m.id]));
+    let tasks: CompletedAgentTask[] = [];
     try {
-      const cutoffSec = Math.floor(Date.now() / 1000) - 60 * 60;
-      const cutoffOid = ObjectId.createFromTime(cutoffSec);
-      const recent = await tasksCol
-        .find(
-          {
-            projectId,
-            status: 'completed',
-            assignedTo: { $in: project.agents },
-            _id: { $gt: cutoffOid },
-          },
-          { projection: { _id: 0, assignedTo: 1, description: 1 } },
-        )
-        .sort({ _id: -1 })
-        .limit(50)
-        .toArray();
-      const agentNameById = new Map(members.map(m => [m.id, m.name || m.id]));
-      const tasks: CompletedAgentTask[] = recent.map(t => ({
-        agent: agentNameById.get(t.assignedTo as string) || (t.assignedTo as string) || 'unknown',
-        description: (t.description as string) || '',
-      }));
+      const buffered = getRecentlyCompletedTasks(projectId);
+      if (buffered.length > 0) {
+        tasks = buffered.map(b => ({
+          agent: b.agent,
+          description: b.summary,
+          type: b.type,
+        }));
+      } else {
+        const cutoffSec = Math.floor(Date.now() / 1000) - 60 * 60;
+        const cutoffOid = ObjectId.createFromTime(cutoffSec);
+        const recent = await tasksCol
+          .find(
+            {
+              projectId,
+              status: 'completed',
+              assignedTo: { $in: project.agents },
+              _id: { $gt: cutoffOid },
+            },
+            { projection: { _id: 0, assignedTo: 1, description: 1 } },
+          )
+          .sort({ _id: -1 })
+          .limit(50)
+          .toArray();
+        tasks = recent.map(t => ({
+          agent: agentNameById.get(t.assignedTo as string) || (t.assignedTo as string) || 'unknown',
+          description: (t.description as string) || '',
+        }));
+      }
+    } catch (err) {
+      // tasks 수집 실패는 빌더 폴백 경로로 흘린다 — 자동 커밋 자체를 막는 건 과한
+      // 부작용이고, 빌더가 시각 폴백을 만들어 정적 문구 회귀는 발생하지 않는다.
+      console.warn('[all-agents-watcher] task lookup failed:', (err as Error).message);
+    }
+    let changedFiles: string[] = [];
+    try {
       const cwd = resolveWorkspace(project.workspacePath);
       const status = spawnSync('git', ['-C', cwd, 'status', '--porcelain'], {
         encoding: 'utf8', windowsHide: true,
       });
-      const changedFiles = status.status === 0
+      changedFiles = status.status === 0
         ? (status.stdout || '')
             .split(/\r?\n/)
             // porcelain 행 형식: `XY <path>` (X=staged, Y=worktree). 첫 3자만 떼면 경로.
             .map(line => line.length > 3 ? line.slice(3).trim() : '')
             .filter(Boolean)
         : [];
-      if (tasks.length > 0 || changedFiles.length > 0) {
-        const built = buildAgentsCompletedCommitMessage({ tasks, changedFiles });
-        commitMessageOverride = built.full;
-        summary = built.subject;
-      }
     } catch (err) {
-      // 메시지 빌드 실패는 기존 폴백(`chore: all agents completed`) 으로 흘려 보낸다 —
-      // 자동 커밋 자체를 막는 건 과도한 부작용이고, 진단용 로그만 남긴다.
-      console.warn('[all-agents-watcher] commit message build failed:', (err as Error).message);
+      console.warn('[all-agents-watcher] git status failed:', (err as Error).message);
     }
+    // 빌더는 항상 호출 — tasks/changedFiles 가 0건이라도 fallback 에 시각이 박힌 동적
+    // 메시지를 돌려주므로 git log 가 동일 문구로 가득 차는 회귀(#0dc42359)가 막힌다.
+    const ts = new Date().toISOString().slice(0, 16).replace('T', ' ');
+    const fallback = tasks.length === 0 && changedFiles.length === 0
+      ? `chore: 자동 동기화 ${ts}`
+      : undefined;
+    const built = buildAgentsCompletedCommitMessage({ tasks, changedFiles, fallback });
+    const commitMessageOverride = built.full;
+    // PR 제목/브랜치 슬러그용 summary 는 builder subject 에서 conventional prefix 만
+    // 떼어 사용한다 — formatCommitMessage 가 다시 'chore: ' 를 붙이는 이중 prefix 방지.
+    const summary = built.subject.replace(/^[a-z]+(?:\([^)]*\))?:\s*/i, '').trim() || 'agents sync';
     // 정상 전이 — 집계 커밋을 트리거. 실패는 기존 executeGitAutomation 의 구조화
-    // 로그/소켓 이벤트 경로로 흘러가므로 여기서는 로그만 남긴다.
+    // 로그/소켓 이벤트 경로로 흘러가므로 여기서는 로그만 남긴다. 성공한 사이클은
+    // 메모리 버퍼를 소비해 같은 항목이 후속 커밋 본문에 다시 등장하지 않게 한다.
     executeGitAutomation(projectId, {
       type: 'chore',
       summary,
       // 긴급 수정 #a7b258fb: 전원 idle 수렴 집계 커밋도 원격까지 한 번에 반영.
       forcePush: true,
       commitMessageOverride,
-    }).catch(err =>
-      console.error('[all-agents-watcher] auto-run failed:', (err as Error).message),
-    );
+    })
+      .then(result => {
+        if (result?.ok) consumeRecentlyCompletedTasks(projectId);
+      })
+      .catch(err =>
+        console.error('[all-agents-watcher] auto-run failed:', (err as Error).message),
+      );
   }
 
   // 긴급중단: 모든 에이전트를 idle 로 되돌리고, 완료되지 않은 모든 작업을 pending

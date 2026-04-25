@@ -26,7 +26,7 @@ import {
   readOnboardingCompleted,
   type OnboardingStorage,
 } from './onboarding/onboardingPrefs';
-import { I18nProvider, type Locale } from '../i18n';
+import { I18nProvider, useLocale, type Locale } from '../i18n';
 import { LanguageToggle } from './LanguageToggle';
 import { useOverflowMenu, type OverflowMenuItem } from '../hooks/useOverflowMenu';
 
@@ -65,9 +65,12 @@ export function AppShell(props: AppShellProps): React.ReactElement {
   //   · 보조 액션(언어 토글)은 컨테이너 폭 < 720 일 때 useOverflowMenu 가 더보기로 분류.
   //   · 1280/960/720 브레이크포인트는 CSS 미디어 쿼리와 동일 축으로 className 토글에 사용.
   // 측정-너비는 ResizeObserver 가 채우므로 호출자는 추정 너비만 잡아 두면 된다.
+  // i18n 은 Provider 외부에서도 안전한 useLocale() 로 직접 구독한다 — Provider 는
+  // 자식 트리용이고, 여기 본문은 그 외부이므로 Context 가 비어 있다.
+  const { t } = useLocale();
   const overflowItems = useMemo<OverflowMenuItem[]>(() => [
-    { id: 'language', label: '언어 설정', width: 132, hideBelowPx: 720 },
-  ], []);
+    { id: 'language', label: t('header.actions.language'), width: 132, hideBelowPx: 720 },
+  ], [t]);
   const {
     containerRef: actionBarRef,
     visibleItems,
@@ -102,10 +105,10 @@ export function AppShell(props: AppShellProps): React.ReactElement {
                   type="button"
                   className="app-shell-header__more"
                   aria-haspopup="menu"
-                  aria-label={`보조 액션 더보기 (${hiddenActions.length}개)`}
+                  aria-label={t('header.actions.moreAria').replace('{count}', String(hiddenActions.length))}
                   data-testid="app-shell-header-more"
                 >
-                  더보기
+                  {t('header.actions.more')}
                 </button>
               )}
             </div>

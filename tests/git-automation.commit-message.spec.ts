@@ -3,7 +3,7 @@
 // 지시 #98854d74 — 자동 커밋 메시지 가드(buildGuardedAutoCommitMessage) 회귀 잠금.
 //
 // 검증 계약
-//   (1) 완료 태스크 0건 → fallback 'chore: all agents completed' 사용
+//   (1) 완료 태스크 0건 → fallback 'chore: 자동 동기화' 사용 (#0dc42359 — 정적 문구 회귀 차단)
 //   (2) 1건 → 단일 에이전트 요약 형식(본문 비어 있음)
 //   (3) 다수 에이전트·다수 파일 → 제목 72자 초과 시 말줄임, 본문 bullet 5건 + …외 N건
 //   (4) description 에 줄바꿈/특수문자 → 안전하게 sanitize 되어 한 줄로 합쳐짐
@@ -55,12 +55,14 @@ function kaiTask(changedFiles: readonly string[], summary?: string): CompletedAg
 // (1) 0건 → 기존 fallback 사용
 // ────────────────────────────────────────────────────────────────────────────
 
-test('1. 0건이면 기본 fallback chore: all agents completed 사용', () => {
+test('1. 0건이면 기본 fallback chore: 자동 동기화 사용 (정적 all-agents-completed 회귀 잠금 해제 #0dc42359)', () => {
   const result = buildGuardedAutoCommitMessage({ tasks: [] });
-  assert.equal(result.subject, 'chore: all agents completed');
+  assert.equal(result.subject, 'chore: 자동 동기화');
   assert.equal(result.body, '');
-  assert.equal(result.full, 'chore: all agents completed');
+  assert.equal(result.full, 'chore: 자동 동기화');
   assert.equal(result.subject, DEFAULT_GUARD_FALLBACK, '상수와 일치해야 회귀 시 같이 추적 가능');
+  // "all agents completed" 같은 정적 영어 문구는 결과 메시지에 절대 등장하지 않아야 한다.
+  assert.doesNotMatch(result.full, /all agents completed/i);
   assert.equal(result.subjectTruncated, false);
   assert.equal(result.truncatedBullets, 0);
   assert.deepEqual(result.warnings, []);
