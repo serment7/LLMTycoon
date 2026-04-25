@@ -46,13 +46,14 @@ test('1. hover 핸들러는 트리거가 아닌 wrapper span 에 위임돼 popov
   // 트리거 시작 태그의 닫는 괄호 위치를 정확히 잡기 위해 다음 `<svg` 직전까지만 검사한다.
   const triggerEnd = STATS_SRC.indexOf('<svg', triggerStart);
   const triggerBlock = STATS_SRC.slice(triggerStart, triggerEnd);
-  assert.doesNotMatch(triggerBlock, /onMouseEnter/,
+  assert.doesNotMatch(triggerBlock, /onMouseEnter\s*=/,
     '트리거 span 에는 onMouseEnter 가 더 이상 단독 선언되면 안 된다 — wrapper 로 위임');
-  // 반대로 wrapper span 영역(트리거 시작 이전) 에는 onMouseEnter 가 정확히 1번 등장한다.
+  // wrapper span 영역(트리거 시작 이전) 에는 onMouseEnter 속성이 정확히 1번 등장한다.
+  // (주석 안의 'onMouseEnter' 문자열을 무시하기 위해 `=` 가 따라붙은 형태만 카운트한다.)
   const wrapperBlock = STATS_SRC.slice(0, triggerStart);
-  const wrapperEnters = wrapperBlock.match(/onMouseEnter/g) ?? [];
+  const wrapperEnters = wrapperBlock.match(/onMouseEnter\s*=/g) ?? [];
   assert.equal(wrapperEnters.length, 1,
-    `wrapper span 에 onMouseEnter 가 정확히 1회 선언돼야 한다(실제 ${wrapperEnters.length})`);
+    `wrapper span 에 onMouseEnter 속성이 정확히 1회 선언돼야 한다(실제 ${wrapperEnters.length})`);
 });
 
 test('2. popover 의 marginTop 이 0 으로 dead zone 없음', () => {
