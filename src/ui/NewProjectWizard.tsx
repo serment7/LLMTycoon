@@ -41,6 +41,14 @@ import {
   clampRecommendCount,
   useRecommendCount,
 } from '../stores/recommendCountStore';
+import {
+  MIN_DESCRIPTION_LENGTH,
+  RECOMMENDATION_DEBOUNCE_MS,
+  isDescriptionLongEnough,
+  mergeLockedRoles,
+  useProjectCreateStore,
+  type LastRecommendationSnapshot,
+} from '../stores/projectCreateStore';
 
 // ────────────────────────────────────────────────────────────────────────────
 // 공용 유틸
@@ -108,6 +116,13 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
   const [state, setState] = useState<WizardState>(INITIAL_STATE);
   // 지시 #797538d6 — 추천 인원수 영속 스토어. 마법사·다이얼로그가 동일 키로 공유.
   const { count: recommendCount, setCount: setRecommendCount } = useRecommendCount();
+  // 지시 #462fa5ec — 잠긴 역할/마지막 추천 영속 스토어.
+  const {
+    lockedRoles,
+    lastRecommendation,
+    toggleLockedRole,
+    setLastRecommendation,
+  } = useProjectCreateStore();
 
   // 캐시·디바운스된 요청기는 컴포넌트 생애에 1회만 생성(props.cache 가 오면 공유).
   const cache = useMemo<RecommendationCache>(
@@ -120,10 +135,11 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
   );
   const recommenderRef = useRef<DebouncedRecommender | null>(null);
   if (recommenderRef.current === null) {
+    // 지시 #462fa5ec — 디바운스 기본값을 600ms 로 상향. props 명시값은 그대로 사용.
     recommenderRef.current = createDebouncedRecommender({
       fetcher,
       cache,
-      debounceMs: props.debounceMs ?? 400,
+      debounceMs: props.debounceMs ?? RECOMMENDATION_DEBOUNCE_MS,
     });
   }
 
@@ -131,6 +147,25 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
     return () => {
       recommenderRef.current?.cancel();
     };
+  }, []);
+
+  // 지시 #462fa5ec — 마운트 직후 lastRecommendation 이 있으면 카드 영역을 즉시 복원.
+  useEffect(() => {
+    if (lastRecommendation && state.description.length === 0 && !state.team) {
+      setState((prev) => ({
+        ...prev,
+        description: lastRecommendation.description,
+        status: 'ready',
+        team: {
+          items: lastRecommendation.items,
+          source: lastRecommendation.source,
+          locale: lastRecommendation.locale,
+        },
+        selected: lastRecommendation.items.map((_, idx) => idx),
+      }));
+    }
+    // 마운트 시점만 — 사용자가 입력 중일 때 덮어쓰지 않는다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 언어 전환 → 기존 추천을 버리지 않고 translateRecommendations 로 경량 재번역.
@@ -165,17 +200,41 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
         setState((prev) => ({ ...prev, status: 'idle', team: undefined, selected: [] }));
         return;
       }
+      // 지시 #462fa5ec — 최소 글자 수 미만이면 호출 차단(토큰 절약). UI 는 idle 로 남고
+      // 가이드 문구가 노출된다.
+      if (!isDescriptionLongEnough(description)) {
+        recommender.cancel();
+        setState((prev) => ({ ...prev, status: 'idle', errorMessage: undefined }));
+        return;
+      }
       setState((prev) => ({ ...prev, status: 'loading', errorMessage: undefined }));
       recommender
         .request(description, count)
         .then((team) => {
           if (team === null) return;
+          // 지시 #462fa5ec — 잠긴 역할은 새 응답 위에 머지.
+          const merged = mergeLockedRoles(team.items, {
+            lockedRoles,
+            previous: state.team?.items ?? lastRecommendation?.items ?? null,
+            count,
+          });
+          const nextTeam: AgentTeamRecommendation = { ...team, items: merged };
           setState((prev) => ({
             ...prev,
             status: 'ready',
-            team,
-            selected: team.items.map((_, idx) => idx),
+            team: nextTeam,
+            selected: nextTeam.items.map((_, idx) => idx),
           }));
+          // 마지막 추천 스냅샷 영속화 — 새로고침 후 즉시 복원.
+          const snapshot: LastRecommendationSnapshot = {
+            description,
+            count,
+            locale: nextTeam.locale,
+            source: nextTeam.source,
+            items: nextTeam.items,
+            storedAt: new Date().toISOString(),
+          };
+          setLastRecommendation(snapshot);
         })
         .catch((err: unknown) => {
           setState((prev) => ({
@@ -185,7 +244,7 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
           }));
         });
     },
-    [t],
+    [t, lockedRoles, lastRecommendation, setLastRecommendation, state.team],
   );
 
   const onDescriptionChange = useCallback(
@@ -344,11 +403,23 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
             type="button"
             className="npw-describe-request"
             onClick={() => triggerRecommendation(state.description, recommendCount)}
-            disabled={state.description.trim().length === 0 || state.status === 'loading'}
+            disabled={
+              !isDescriptionLongEnough(state.description) || state.status === 'loading'
+            }
           >
             {t('project.newProjectWizard.describe.requestButton')}
           </button>
         </div>
+        {/* 지시 #462fa5ec — 최소 글자 수 미만일 때 가이드 노출. */}
+        {state.description.length > 0
+          && !isDescriptionLongEnough(state.description) && (
+            <p className="npw-too-short" role="status" data-testid="npw-too-short-hint">
+              {interpolate(t('project.newProjectWizard.describe.tooShort'), {
+                min: MIN_DESCRIPTION_LENGTH,
+                current: state.description.trim().length,
+              })}
+            </p>
+          )}
       </label>
 
       {state.status === 'loading' && (
@@ -409,8 +480,13 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
                   ? 'success'
                   : 'failed'
                 : 'idle';
+              const isLocked = lockedRoles.includes(rec.role);
               return (
-                <li key={`${rec.role}-${idx}`} data-card-status={cardStatus}>
+                <li
+                  key={`${rec.role}-${idx}`}
+                  data-card-status={cardStatus}
+                  data-card-locked={isLocked || undefined}
+                >
                   <label className="npw-card" data-selected={selected} role="option" aria-selected={selected}>
                     <input
                       type="checkbox"
@@ -418,13 +494,47 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
                       onChange={() => toggleSelection(idx)}
                     />
                     <div className="npw-card-body">
-                      <strong className="npw-role">{rec.role}</strong>
-                      <span className="npw-name">{rec.name}</span>
+                      <header className="npw-card-head">
+                        <strong className="npw-role">{rec.role}</strong>
+                        <span className="npw-name">{rec.name}</span>
+                        {/* 지시 #462fa5ec — "이 역할 고정" 토글. label 안에 nested checkbox 가
+                            이미 있으므로 본 버튼은 stopPropagation 으로 카드 선택과 분리한다. */}
+                        <button
+                          type="button"
+                          className="npw-card-lock"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            toggleLockedRole(rec.role);
+                          }}
+                          aria-pressed={isLocked}
+                          aria-label={t(
+                            isLocked
+                              ? 'project.newProjectWizard.review.lock.aria.locked'
+                              : 'project.newProjectWizard.review.lock.aria.unlocked',
+                          )}
+                        >
+                          {t(
+                            isLocked
+                              ? 'project.newProjectWizard.review.lock.locked'
+                              : 'project.newProjectWizard.review.lock.unlocked',
+                          )}
+                        </button>
+                      </header>
                       <p className="npw-rationale">
                         {segments.map((s, si) =>
                           s.strong ? <strong key={si}>{s.text}</strong> : <span key={si}>{s.text}</span>,
                         )}
                       </p>
+                      {/* 지시 #462fa5ec — Joker 가 채우는 reason 보강 텍스트. 비어 있으면 숨김. */}
+                      {rec.reason && rec.reason.trim().length > 0 && (
+                        <p className="npw-reason" data-testid="npw-card-reason">
+                          <span className="npw-reason-label">
+                            {t('project.newProjectWizard.review.reasonLabel')}
+                          </span>
+                          <span className="npw-reason-body">{rec.reason}</span>
+                        </p>
+                      )}
                       {rec.skills && rec.skills.length > 0 && (
                         <ul className="npw-skills" aria-label="skills">
                           {rec.skills.map((skill) => (

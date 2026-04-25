@@ -41,6 +41,16 @@ import {
   clampRecommendCount,
   useRecommendCount,
 } from '../../stores/recommendCountStore';
+import {
+  MIN_DESCRIPTION_LENGTH,
+  RECOMMENDATION_DEBOUNCE_MS,
+  isDescriptionLongEnough,
+  mergeLockedRoles,
+  useProjectCreateStore,
+  type LastRecommendationSnapshot,
+} from '../../stores/projectCreateStore';
+import { ROLE_CATALOG } from '../../project/recommendAgentTeam';
+import type { AgentRole } from '../../types';
 
 // ────────────────────────────────────────────────────────────────────────────
 // 공용 유틸
@@ -132,6 +142,14 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
   // 지시 #797538d6 — 추천 인원수 영속 스토어. 마지막 선택값을 localStorage 에서 복원하고,
   // 변경 시 다음 세션에도 유지된다. 디바운서·캐시 키 모두 본 값에 의존한다.
   const { count: recommendCount, setCount: setRecommendCount } = useRecommendCount();
+  // 지시 #462fa5ec — 잠긴 역할 + 마지막 추천 스냅샷 영속 스토어. 두 상태 모두 새로고침
+  // 후에도 사용자의 직전 작업 화면을 즉시 복원해 준다.
+  const {
+    lockedRoles,
+    lastRecommendation,
+    toggleLockedRole,
+    setLastRecommendation,
+  } = useProjectCreateStore();
 
   const cache = useMemo<RecommendationCache>(
     () => props.cache ?? createRecommendationCache(8),
@@ -143,10 +161,12 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
   );
   const recommenderRef = useRef<DebouncedRecommender | null>(null);
   if (recommenderRef.current === null) {
+    // 지시 #462fa5ec — 디바운스 기본값을 600ms 로 상향(토큰 절약). props 가 명시값을 주면
+    // 그대로 사용해 테스트·스토리북의 결정성을 유지한다.
     recommenderRef.current = createDebouncedRecommender({
       fetcher,
       cache,
-      debounceMs: props.debounceMs ?? 400,
+      debounceMs: props.debounceMs ?? RECOMMENDATION_DEBOUNCE_MS,
     });
   }
 
@@ -156,6 +176,26 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
     };
   }, []);
 
+  // 지시 #462fa5ec — 마운트 직후 lastRecommendation 이 있으면 카드 영역을 즉시 복원.
+  // 사용자의 description 도 함께 복원해 입력 → 추천 흐름이 끊기지 않는다.
+  useEffect(() => {
+    if (!props.isOpen) return;
+    if (lastRecommendation && state.description.length === 0 && !state.team) {
+      setState((prev) => ({
+        ...prev,
+        description: lastRecommendation.description,
+        status: 'ready',
+        team: {
+          items: lastRecommendation.items,
+          source: lastRecommendation.source,
+          locale: lastRecommendation.locale,
+        },
+      }));
+    }
+    // 의도적으로 props.isOpen 만 트리거 — 사용자가 입력 중일 때 덮어쓰지 않는다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.isOpen]);
+
   const triggerRecommendation = useCallback(
     (description: string, count: number) => {
       const recommender = recommenderRef.current;
@@ -164,12 +204,37 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
         setState((prev) => ({ ...prev, status: 'idle', team: undefined, seedQueue: [] }));
         return;
       }
+      // 지시 #462fa5ec — 최소 글자 수 미만이면 LLM 호출 자체를 차단해 토큰을 아낀다.
+      // UI 는 'idle' 상태로 머물고, 별도 가이드 문구가 노출된다.
+      if (!isDescriptionLongEnough(description)) {
+        recommender.cancel();
+        setState((prev) => ({ ...prev, status: 'idle', errorMessage: undefined }));
+        return;
+      }
       setState((prev) => ({ ...prev, status: 'loading', errorMessage: undefined }));
       recommender
         .request(description, count)
         .then((team) => {
           if (team === null) return;
-          setState((prev) => ({ ...prev, status: 'ready', team }));
+          // 지시 #462fa5ec — 잠긴 역할은 새 응답 위에 머지. fresh 에 같은 역할이 있으면
+          // 응답값(LLM 의 갱신된 카피) 채택, 없으면 직전 카드 보존.
+          const merged = mergeLockedRoles(team.items, {
+            lockedRoles,
+            previous: state.team?.items ?? lastRecommendation?.items ?? null,
+            count,
+          });
+          const nextTeam: AgentTeamRecommendation = { ...team, items: merged };
+          setState((prev) => ({ ...prev, status: 'ready', team: nextTeam }));
+          // 마지막 추천 스냅샷은 user settings 에 저장 — 새로고침 후 즉시 복원.
+          const snapshot: LastRecommendationSnapshot = {
+            description,
+            count,
+            locale: nextTeam.locale,
+            source: nextTeam.source,
+            items: nextTeam.items,
+            storedAt: new Date().toISOString(),
+          };
+          setLastRecommendation(snapshot);
         })
         .catch((err: unknown) => {
           setState((prev) => ({
@@ -179,7 +244,7 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
           }));
         });
     },
-    [t],
+    [t, lockedRoles, lastRecommendation, setLastRecommendation, state.team],
   );
 
   const onDescriptionChange = useCallback(
@@ -344,7 +409,8 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
               className="cpd-cta-primary"
               onClick={() => triggerRecommendation(state.description, recommendCount)}
               disabled={
-                state.description.trim().length === 0 || state.status === 'loading'
+                !isDescriptionLongEnough(state.description)
+                || state.status === 'loading'
               }
             >
               {t('projects.recommend.cta')}
@@ -352,6 +418,21 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
             <small id="cpd-recommend-cta-hint" className="cpd-cta-hint">
               {t('projects.recommend.ctaHint')}
             </small>
+            {/* 지시 #462fa5ec — 최소 글자 수 미만일 때 사용자에게 명시적 가이드. 입력란에
+                포커스가 있는 상태에서 카드가 갱신되지 않는 이유를 즉시 알 수 있다. */}
+            {state.description.length > 0
+              && !isDescriptionLongEnough(state.description) && (
+                <p
+                  className="cpd-recommend-too-short"
+                  role="status"
+                  data-testid="cpd-too-short-hint"
+                >
+                  {interpolate(t('projects.recommend.tooShort'), {
+                    min: MIN_DESCRIPTION_LENGTH,
+                    current: state.description.trim().length,
+                  })}
+                </p>
+              )}
             <label className="cpd-count-field">
               <span>
                 {interpolate(t('projects.recommend.countLabel'), { count: recommendCount })}
@@ -451,20 +532,55 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
                     : queued
                       ? 'queued'
                       : 'idle';
+                  const isLocked = lockedRoles.includes(rec.role);
                   return (
                     <li
                       key={`${rec.role}-${idx}`}
                       className="cpd-card"
                       data-card-status={cardStatus}
+                      data-card-locked={isLocked || undefined}
                     >
                       <div className="cpd-card-body">
-                        <strong className="cpd-role">{rec.role}</strong>
-                        <span className="cpd-name">{rec.name}</span>
+                        <header className="cpd-card-head">
+                          <strong className="cpd-role">{rec.role}</strong>
+                          <span className="cpd-name">{rec.name}</span>
+                          {/* 지시 #462fa5ec — "이 역할 고정" 토글. 잠긴 카드는 다음 추천
+                              새로고침에서 동일 역할이 응답에 포함되면 새 카피로 갱신되고,
+                              없으면 기존 카드를 그대로 보존한다. */}
+                          <button
+                            type="button"
+                            className="cpd-card-lock"
+                            onClick={() => toggleLockedRole(rec.role)}
+                            aria-pressed={isLocked}
+                            aria-label={t(
+                              isLocked
+                                ? 'projects.recommend.lock.aria.locked'
+                                : 'projects.recommend.lock.aria.unlocked',
+                            )}
+                          >
+                            {t(
+                              isLocked
+                                ? 'projects.recommend.lock.locked'
+                                : 'projects.recommend.lock.unlocked',
+                            )}
+                          </button>
+                        </header>
                         <p className="cpd-rationale">
                           {segments.map((s, si) =>
                             s.strong ? <strong key={si}>{s.text}</strong> : <span key={si}>{s.text}</span>,
                           )}
                         </p>
+                        {/* 지시 #462fa5ec — Joker 가 추가한 "추천 이유" 보강 텍스트.
+                            응답·휴리스틱이 reason 을 안 채우면 영역 자체를 숨겨 레이아웃이
+                            튀지 않는다. */}
+                        {rec.reason && rec.reason.trim().length > 0 && (
+                          <p className="cpd-reason" data-testid="cpd-card-reason">
+                            <span className="cpd-reason-label">
+                              {t('projects.recommend.reasonLabel')}
+                            </span>
+                            <span className="cpd-reason-body">{rec.reason}</span>
+                          </p>
+                        )}
                         {rec.skills && rec.skills.length > 0 && (
                           <ul className="cpd-skills" aria-label="skills">
                             {rec.skills.map((skill) => (

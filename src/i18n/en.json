@@ -46,6 +46,16 @@
       "intro": "Describe the project and Claude suggests a starter team.",
       "cta": "Recommend the best team",
       "ctaHint": "Suggests agents that fit the description you entered.",
+      "tooShort": "Please add more detail. At least {min} characters (currently {current}).",
+      "reasonLabel": "Why this role",
+      "lock": {
+        "locked": "Unlock role",
+        "unlocked": "Keep this role",
+        "aria": {
+          "locked": "Unlock this role",
+          "unlocked": "Keep this role across the next recommendation"
+        }
+      },
       "loading": "Loading recommendations…",
       "empty": "Recommendations appear as you type.",
       "error": "Couldn't load recommendations.",
@@ -83,6 +93,7 @@
         "placeholder": "e.g., Payment module hardening — PCI audit + token encryption",
         "hint": "Describe scope and goals. Recommendations update as you type.",
         "requestButton": "Request recommendation",
+        "tooShort": "Please add more detail. At least {min} characters (currently {current}).",
         "countLabel": "Team size: {count} (default 5)",
         "countAriaLabel": "Recommended team size (2–5)"
       },
@@ -90,6 +101,15 @@
         "title": "Recommended team",
         "selectAll": "Select all",
         "clear": "Clear",
+        "reasonLabel": "Why this role",
+        "lock": {
+          "locked": "Unlock role",
+          "unlocked": "Keep this role",
+          "aria": {
+            "locked": "Unlock this role",
+            "unlocked": "Keep this role across the next recommendation"
+          }
+        },
         "source": {
           "heuristic": "Heuristic fallback",
           "claude": "Recommended by Claude",

@@ -19,6 +19,14 @@
 import { messagesWithCache } from '../server/llm/messagesWithCache';
 import type { CacheableClaudeMessages } from '../server/claudeClient';
 import type { AgentRole } from '../types';
+import {
+  analyzeDescription,
+  buildReason,
+  describeAnalysisForPrompt,
+  scoreRoles,
+  selectTopRoles,
+  type RoleScore,
+} from './descriptionAnalyzer';
 
 /** i18n 모듈과 동일 Locale 유니언. 순환 의존을 피하려고 로컬로 선언. */
 export type RecommendationLocale = 'en' | 'ko';
@@ -60,6 +68,13 @@ export interface AgentRecommendation {
   readonly rationale: string;
   /** 역할별 핵심 스킬 태그(≤5개). UI 카드에 칩으로 노출 + 서버 persona 에 합쳐 저장. */
   readonly skills?: readonly string[];
+  /**
+   * 지시 #462fa5ec — Joker 가 추가한 "추천 이유" 보강 필드.
+   * `rationale` 은 1문장 한 줄 카피(≤80자), `reason` 은 그 뒤에 노출되는 1~2문장 부연
+   * 설명. 모델·휴리스틱·서버 어느 쪽도 강제하지 않으며, 비어 있으면 UI 가 영역 자체를
+   * 숨긴다(레이아웃 점프 없음).
+   */
+  readonly reason?: string;
 }
 
 /** 추천 결과 봉투. UI 는 `items` 만 쓰고, `source`/`locale` 은 디버깅/재번역 판정용. */
@@ -118,20 +133,22 @@ export const SYSTEM_PROMPTS: Record<
     policy: [
       'You are the HR/staffing lead of a small software studio.',
       'Read the user project description and recommend a core team of 2 to 5 members.',
+      'Use the "Extracted signals" line(s) in the user message — domains, skills, deliverables — as the primary basis for choosing roles; do not invent personas unrelated to those signals.',
       'Respond with a single JSON object and nothing else (no prose, no markdown).',
       'Allowed role values are exactly: Leader, Developer, QA, Designer, Researcher.',
       'The first item must be role="Leader"; there is exactly one Leader.',
       'Response schema:',
-      '{"items":[{"role":"<AgentRole>","name":"<short English alias>","rationale":"<one sentence in English>"}]}',
+      '{"items":[{"role":"<AgentRole>","name":"<short English alias>","rationale":"<one sentence in English>","reason":"<one short clause citing matched domain/skill/deliverable>"}]}',
       'rationale: one sentence (<=80 chars) in English. name: <=8 chars alias.',
+      'reason: one short clause (<=60 chars) that names the matched signal (e.g., "Matches commerce + security").',
     ].join('\n'),
     fewShot: [
-      'Example input: "Payment module hardening — PCI audit + token encryption"',
+      'Example input signals: "Extracted signals — domains: commerce / skills: security / deliverables: api."',
       'Example output:',
       '{"items":[',
-      '  {"role":"Leader","name":"Kai","rationale":"Breaks the scope down and distributes in parallel."},',
-      '  {"role":"Developer","name":"Dev","rationale":"Handles PCI token and encryption work."},',
-      '  {"role":"QA","name":"QA","rationale":"Locks regression and security tests on the payment path."}',
+      '  {"role":"Leader","name":"Kai","rationale":"Breaks the scope down and distributes in parallel.","reason":"Anchors commerce + security delivery"},',
+      '  {"role":"Developer","name":"Dev","rationale":"Handles PCI token and encryption work.","reason":"Matches commerce + backend"},',
+      '  {"role":"QA","name":"QA","rationale":"Locks regression and security tests on the payment path.","reason":"Matches security + api"}',
       ']}',
     ].join('\n'),
     userPrefix: 'Project description:',
@@ -139,21 +156,21 @@ export const SYSTEM_PROMPTS: Record<
   ko: {
     policy: [
       '당신은 소규모 소프트웨어 스튜디오의 HR/편성 담당입니다.',
-      '사용자가 입력한 프로젝트 설명을 읽고, 최소 2명·최대 5명의 핵심 팀원을 추천하세요.',
+      '사용자가 입력한 프로젝트 설명과 함께 제공되는 "추출 신호" 라인(도메인·스킬·산출물) 을 1차 근거로 삼아 팀원을 추천하세요.',
       '반드시 JSON 오브젝트 하나를 응답하고 그 외 텍스트·마크다운·설명을 붙이지 마세요.',
       '허용된 role 값은 다음 5 가지뿐입니다: Leader, Developer, QA, Designer, Researcher.',
       '첫 번째 추천은 항상 role="Leader" 여야 하며, Leader 는 단 1명입니다.',
       '응답 스키마:',
-      '{"items":[{"role":"<AgentRole>","name":"<짧은 한국어 이름>","rationale":"<한 문장 한국어 설명>"}]}',
-      'rationale 은 1문장(80자 이하) 한국어, name 은 8자 이하 별칭을 권장합니다.',
+      '{"items":[{"role":"<AgentRole>","name":"<짧은 한국어 이름>","rationale":"<한 문장 한국어 설명>","reason":"<매칭된 도메인/스킬/산출물을 짧게 인용한 한 줄>"}]}',
+      'rationale 은 1문장(80자 이하) 한국어, name 은 8자 이하 별칭, reason 은 60자 이하 짧은 절(예: "커머스·보안 매칭") 로 작성하세요.',
     ].join('\n'),
     fewShot: [
-      '예시 입력: "결제 모듈 보안 강화 — PCI 감사·토큰 암호화"',
+      '예시 입력 신호: "추출 신호 — 도메인: commerce / 스킬: security / 산출물: api."',
       '예시 출력:',
       '{"items":[',
-      '  {"role":"Leader","name":"Kai","rationale":"범위를 쪼개고 병렬로 분배합니다."},',
-      '  {"role":"Developer","name":"Dev","rationale":"PCI 토큰·암호화 구현을 맡습니다."},',
-      '  {"role":"QA","name":"QA","rationale":"결제 경로 회귀·보안 테스트를 잠급니다."}',
+      '  {"role":"Leader","name":"Kai","rationale":"범위를 쪼개고 병렬로 분배합니다.","reason":"커머스·보안 분배 적합"},',
+      '  {"role":"Developer","name":"Dev","rationale":"PCI 토큰·암호화 구현을 맡습니다.","reason":"커머스 + 백엔드 매칭"},',
+      '  {"role":"QA","name":"QA","rationale":"결제 경로 회귀·보안 테스트를 잠급니다.","reason":"보안 + API 매칭"}',
       ']}',
     ].join('\n'),
     userPrefix: '프로젝트 설명:',
@@ -179,17 +196,19 @@ export function buildRecommendationMessages(
 ): CacheableClaudeMessages {
   // 시스템 프리픽스는 정책 + 예시 두 블록. messagesWithCache 가 마지막 블록에만
   // cache_control: ephemeral 을 붙여 앞 블록까지 모두 하나의 캐시 프리픽스로 묶는다.
-  // 사용자 선택 인원수(N) 는 휘발성 USER 블록에 한 줄 메타로 추가한다 — 시스템 프리픽스를
-  // 그대로 두어 캐시 프리픽스 히트율을 보존한다.
+  // 사용자 선택 인원수(N) 와 분석기 추출 신호는 휘발성 USER 블록에 한 줄 메타로 추가한다 —
+  // 시스템 프리픽스를 그대로 두어 캐시 프리픽스 히트율을 보존한다.
   const p = SYSTEM_PROMPTS[locale];
   const n = clampRecommendationCount(count);
+  const analysis = analyzeDescription(description);
+  const analysisLine = describeAnalysisForPrompt(analysis, locale);
   const countDirective =
     locale === 'ko'
       ? `요청 인원수: 정확히 ${n}명. (Leader 1명 + 나머지 ${n - 1}명 구성)`
       : `Required size: exactly ${n} members. (1 Leader + ${n - 1} others)`;
   const { messages } = messagesWithCache({
     system: [p.policy, p.fewShot],
-    user: `${p.userPrefix}\n${description.trim()}\n${countDirective}`,
+    user: `${p.userPrefix}\n${description.trim()}\n${analysisLine}\n${countDirective}`,
   });
   return messages;
 }
@@ -260,11 +279,18 @@ export function validateRecommendations(
           .map((s) => s.trim())
           .slice(0, 5)
       : undefined;
+    // 지시 #462fa5ec — reason 은 선택 필드. 빈 문자열·공백·비문자열은 무시.
+    const reasonRaw = row.reason;
+    const reason =
+      typeof reasonRaw === 'string' && reasonRaw.trim().length > 0
+        ? reasonRaw.trim().slice(0, 240)
+        : undefined;
     out.push({
       role: row.role,
       name: row.name.trim(),
       rationale: row.rationale.trim(),
       ...(skills && skills.length > 0 ? { skills } : {}),
+      ...(reason ? { reason } : {}),
     });
     if (out.length >= limit) break;
   }
@@ -329,15 +355,14 @@ export const HEURISTIC_ROLE_NAMES: Record<AgentRole, string> = {
 };
 
 /**
- * 휴리스틱 폴백 — 슬롯 배분 알고리즘.
- *   1) Leader 1명 + Developer 1명 고정(최소 구성).
- *   2) description 키워드(UI/보안/연구 등) 가 가리키는 역할은 우선 추가.
- *   3) 그래도 `count` 미만이면 Designer → QA → Researcher 순서로 보조 역할을 채워 균형을 맞춘다.
- *      이는 디폴트 인원수 5(=ROLE_CATALOG 5개) 일 때 모든 역할이 1명씩 들어오는 형태.
- *   4) 최종적으로 count 만큼 절단.
+ * 휴리스틱 폴백 — 분석기·점수 기반 역할 선정.
+ *   1) `analyzeDescription` 으로 도메인/스킬/산출물 추출.
+ *   2) `scoreRoles` 가 역할별 점수(가중치 매트릭스 + base) 를 계산.
+ *   3) `selectTopRoles` 가 점수 내림차순으로 상위 `count` 역할 선정. Leader 는 base=1000
+ *      이라 항상 1순위. 동일 역할은 정의상 중복되지 않으므로 다양성 자동 보장.
+ *   4) 각 카드는 `reason` 한 줄(매칭된 도메인·스킬·산출물 인용) 을 동봉한다.
  *
- * Leader 는 항상 첫 슬롯에 배치되며 중복은 발생하지 않는다(역할 별 1명 보장).
- * rationale 은 locale 에 따라 다른 카피를 고른다(role·name 은 언어 독립).
+ * rationale·name·skills 는 역할별 디폴트 카피/스킬셋을 그대로 쓴다 — 언어는 locale 따라.
  */
 export function heuristicTeam(
   description: string,
@@ -345,40 +370,21 @@ export function heuristicTeam(
   count: number = DEFAULT_RECOMMENDATION_COUNT,
 ): AgentRecommendation[] {
   const target = clampRecommendationCount(count);
-  const lower = description.toLowerCase();
+  const analysis = analyzeDescription(description);
+  const allScores = scoreRoles(analysis);
+  const scoreByRole = new Map<AgentRole, RoleScore>(allScores.map((s) => [s.role, s]));
+  const picked = selectTopRoles(allScores, target);
   const copy = HEURISTIC_COPY[locale];
-  const seen = new Set<AgentRole>();
-  const items: AgentRecommendation[] = [];
-
-  function push(role: AgentRole): void {
-    if (seen.has(role)) return;
-    if (items.length >= target) return;
-    seen.add(role);
-    items.push({
+  return picked.map((role) => {
+    const score = scoreByRole.get(role)!;
+    return {
       role,
       name: HEURISTIC_ROLE_NAMES[role],
       rationale: copy[role],
       skills: DEFAULT_ROLE_SKILLS[role],
-    });
-  }
-
-  // 1) 최소 구성 — Leader/Developer.
-  push('Leader');
-  push('Developer');
-
-  // 2) 키워드 우선 — 사용자가 설명한 도메인을 먼저 반영.
-  const has = (...kws: string[]): boolean => kws.some((k) => lower.includes(k));
-  if (has('ui', 'ux', '디자인', '화면', 'screen', 'design')) push('Designer');
-  if (has('보안', '테스트', 'qa', '회귀', '검증', 'security', 'test')) push('QA');
-  if (has('연구', '조사', 'research', '분석', 'analysis', '시장')) push('Researcher');
-
-  // 3) 부족분 — 보조 역할 우선순위로 채워 균형을 맞춘다. 5명 기본값에서는 모든 역할이 1명씩.
-  for (const role of ['Designer', 'QA', 'Researcher'] as const) {
-    if (items.length >= target) break;
-    push(role);
-  }
-
-  return items.slice(0, target);
+      reason: buildReason(role, score, locale),
+    };
+  });
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -401,6 +407,11 @@ export async function recommendAgentTeam(
   const locale = options.locale ?? DEFAULT_RECOMMENDATION_LOCALE;
   const count = clampRecommendationCount(options.count ?? DEFAULT_RECOMMENDATION_COUNT);
   const messages = buildRecommendationMessages(description, locale, count);
+  // 분석은 캐시 효율을 위해 한 번만. heuristicTeam·reason 보강 양쪽에서 재사용.
+  const analysis = analyzeDescription(description);
+  const scoreByRole = new Map<AgentRole, RoleScore>(
+    scoreRoles(analysis).map((s) => [s.role, s]),
+  );
   if (!options.invoker) {
     return { items: heuristicTeam(description, locale, count), source: 'heuristic', locale, messages };
   }
@@ -410,7 +421,15 @@ export async function recommendAgentTeam(
     if (items.length === 0) {
       return { items: heuristicTeam(description, locale, count), source: 'heuristic', locale, messages };
     }
-    return { items, source: 'claude', locale, messages };
+    // LLM 이 reason 을 빠뜨렸거나 빈 문자열로 돌려준 경우, 점수 기반 분석 결과로 보강한다.
+    // 사용자가 빈 카드를 보지 않도록 항상 한 줄 근거를 보장.
+    const enriched: AgentRecommendation[] = items.map((item) => {
+      if (item.reason && item.reason.trim().length > 0) return item;
+      const score = scoreByRole.get(item.role);
+      if (!score) return item;
+      return { ...item, reason: buildReason(item.role, score, locale) };
+    });
+    return { items: enriched, source: 'claude', locale, messages };
   } catch (err) {
     if (options.fallbackOnError === false) throw err;
     return { items: heuristicTeam(description, locale, count), source: 'heuristic', locale, messages };

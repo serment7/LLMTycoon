@@ -46,6 +46,16 @@
       "intro": "설명을 입력하면 Claude 가 시작 팀을 제안합니다.",
       "cta": "최적의 팀 추천 받기",
       "ctaHint": "입력한 설명을 기반으로 적합한 에이전트 조합을 제안합니다.",
+      "tooShort": "조금 더 자세히 적어주세요. 최소 {min}자 이상 (현재 {current}자)",
+      "reasonLabel": "추천 이유",
+      "lock": {
+        "locked": "고정 해제",
+        "unlocked": "이 역할 고정",
+        "aria": {
+          "locked": "역할 고정 해제",
+          "unlocked": "이 역할을 다음 추천에서도 유지"
+        }
+      },
       "countLabel": "추천 인원: {count}명 (기본 5명)",
       "countAriaLabel": "추천 인원수 슬라이더 (2~5)",
       "loading": "추천을 불러오는 중…",
@@ -83,6 +93,7 @@
         "placeholder": "예: 결제 모듈 보안 강화 — PCI 감사 + 토큰 암호화",
         "hint": "범위와 목표를 적어 주세요. 입력하는 동안 추천이 갱신됩니다.",
         "requestButton": "추천 받기",
+        "tooShort": "조금 더 자세히 적어주세요. 최소 {min}자 이상 (현재 {current}자)",
         "countLabel": "추천 인원: {count}명 (기본 5명)",
         "countAriaLabel": "추천 인원수 슬라이더 (2~5)"
       },
@@ -90,6 +101,15 @@
         "title": "추천 팀",
         "selectAll": "모두 선택",
         "clear": "초기화",
+        "reasonLabel": "추천 이유",
+        "lock": {
+          "locked": "고정 해제",
+          "unlocked": "이 역할 고정",
+          "aria": {
+            "locked": "역할 고정 해제",
+            "unlocked": "이 역할을 다음 추천에서도 유지"
+          }
+        },
         "source": {
           "heuristic": "휴리스틱 폴백",
           "claude": "Claude 추천",
