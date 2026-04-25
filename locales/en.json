@@ -46,6 +46,8 @@
       "intro": "Describe the project and Claude suggests a starter team.",
       "cta": "Recommend the best team",
       "ctaHint": "Suggests agents that fit the description you entered.",
+      "countLabel": "Team size: {count} (default 5)",
+      "countAriaLabel": "Recommended team size (2–5)",
       "loading": "Loading recommendations…",
       "empty": "Recommendations appear as you type.",
       "error": "Couldn't load recommendations.",
@@ -80,7 +82,9 @@
         "label": "Project description",
         "placeholder": "e.g., Payment module hardening — PCI audit + token encryption",
         "hint": "Describe scope and goals. Recommendations update as you type.",
-        "requestButton": "Request recommendation"
+        "requestButton": "Request recommendation",
+        "countLabel": "Team size: {count} (default 5)",
+        "countAriaLabel": "Recommended team size (2–5)"
       },
       "review": {
         "title": "Recommended team",

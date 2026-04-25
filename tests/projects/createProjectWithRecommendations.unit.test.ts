@@ -227,7 +227,8 @@ test('C5. createProjectWithRecommendations — recommender 미주입 시 heurist
   );
   assert.ok(result.recommendation);
   assert.equal(result.recommendation!.source, 'heuristic');
-  // Leader 는 스킵, Developer + QA(키워드 '보안·테스트') 가 seed 목록에 남아야 한다.
+  // 지시 #797538d6 — 기본 인원 5명 정책 하에서 휴리스틱은 Leader/Developer/Designer/QA/Researcher
+  // 5 역할을 모두 채운다. seed 단계에서 Leader 만 제외되므로 4 역할이 남는다.
   const seededRoles = sCalls[0].items.map((it) => it.role).sort();
-  assert.deepEqual(seededRoles, ['Developer', 'QA']);
+  assert.deepEqual(seededRoles, ['Designer', 'Developer', 'QA', 'Researcher']);
 });

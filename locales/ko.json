@@ -46,6 +46,8 @@
       "intro": "설명을 입력하면 Claude 가 시작 팀을 제안합니다.",
       "cta": "최적의 팀 추천 받기",
       "ctaHint": "입력한 설명을 기반으로 적합한 에이전트 조합을 제안합니다.",
+      "countLabel": "추천 인원: {count}명 (기본 5명)",
+      "countAriaLabel": "추천 인원수 슬라이더 (2~5)",
       "loading": "추천을 불러오는 중…",
       "empty": "설명을 입력하면 추천이 나타납니다.",
       "error": "추천을 불러오지 못했습니다.",
@@ -80,7 +82,9 @@
         "label": "프로젝트 설명",
         "placeholder": "예: 결제 모듈 보안 강화 — PCI 감사 + 토큰 암호화",
         "hint": "범위와 목표를 적어 주세요. 입력하는 동안 추천이 갱신됩니다.",
-        "requestButton": "추천 받기"
+        "requestButton": "추천 받기",
+        "countLabel": "추천 인원: {count}명 (기본 5명)",
+        "countAriaLabel": "추천 인원수 슬라이더 (2~5)"
       },
       "review": {
         "title": "추천 팀",

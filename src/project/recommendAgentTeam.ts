@@ -26,6 +26,24 @@ export type RecommendationLocale = 'en' | 'ko';
 /** 기본 locale — 사용자가 명시적으로 선택하지 않은 상태. i18n DEFAULT_LOCALE 과 일치. */
 export const DEFAULT_RECOMMENDATION_LOCALE: RecommendationLocale = 'en';
 
+/**
+ * 지시 #797538d6 — 추천 인원 기본값. recommendCountStore 의 DEFAULT_RECOMMEND_COUNT
+ * 와 동일하지만, 본 모듈은 React 의존을 끊기 위해 상수만 자체 보유한다. 두 값을 동시에
+ * 변경할 때는 `src/stores/recommendCountStore.ts` 도 함께 수정해야 한다.
+ */
+export const DEFAULT_RECOMMENDATION_COUNT = 5;
+export const MIN_RECOMMENDATION_COUNT = 2;
+export const MAX_RECOMMENDATION_COUNT = 5;
+
+export function clampRecommendationCount(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_RECOMMENDATION_COUNT;
+  const rounded = Math.round(n);
+  if (rounded < MIN_RECOMMENDATION_COUNT) return MIN_RECOMMENDATION_COUNT;
+  if (rounded > MAX_RECOMMENDATION_COUNT) return MAX_RECOMMENDATION_COUNT;
+  return rounded;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // 공개 스키마 — UI 와 공유. 이후 변경은 디자이너·QA 합의 필요.
 // ────────────────────────────────────────────────────────────────────────────
@@ -67,6 +85,11 @@ export interface RecommendAgentTeamOptions {
   readonly fallbackOnError?: boolean;
   /** 추천 근거/이름 생성 언어. 기본 DEFAULT_RECOMMENDATION_LOCALE. */
   readonly locale?: RecommendationLocale;
+  /**
+   * 지시 #797538d6 — 사용자가 선택한 팀 크기. 기본 DEFAULT_RECOMMENDATION_COUNT(5).
+   * 시스템 프롬프트에 "정확히 N명" 으로 박히고, 휴리스틱·검증기도 동일 N 으로 슬라이스.
+   */
+  readonly count?: number;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -152,13 +175,21 @@ export const SYSTEM_FEW_SHOT = SYSTEM_PROMPTS.ko.fewShot;
 export function buildRecommendationMessages(
   description: string,
   locale: RecommendationLocale = DEFAULT_RECOMMENDATION_LOCALE,
+  count: number = DEFAULT_RECOMMENDATION_COUNT,
 ): CacheableClaudeMessages {
   // 시스템 프리픽스는 정책 + 예시 두 블록. messagesWithCache 가 마지막 블록에만
   // cache_control: ephemeral 을 붙여 앞 블록까지 모두 하나의 캐시 프리픽스로 묶는다.
+  // 사용자 선택 인원수(N) 는 휘발성 USER 블록에 한 줄 메타로 추가한다 — 시스템 프리픽스를
+  // 그대로 두어 캐시 프리픽스 히트율을 보존한다.
   const p = SYSTEM_PROMPTS[locale];
+  const n = clampRecommendationCount(count);
+  const countDirective =
+    locale === 'ko'
+      ? `요청 인원수: 정확히 ${n}명. (Leader 1명 + 나머지 ${n - 1}명 구성)`
+      : `Required size: exactly ${n} members. (1 Leader + ${n - 1} others)`;
   const { messages } = messagesWithCache({
     system: [p.policy, p.fewShot],
-    user: `${p.userPrefix}\n${description.trim()}`,
+    user: `${p.userPrefix}\n${description.trim()}\n${countDirective}`,
   });
   return messages;
 }
@@ -202,11 +233,15 @@ function isAgentRole(value: unknown): value is AgentRole {
 }
 
 /** invoker 응답을 스키마에 맞춰 정제. 망가진 항목은 버리고 유효한 것만 반환. */
-export function validateRecommendations(raw: unknown): AgentRecommendation[] {
+export function validateRecommendations(
+  raw: unknown,
+  count: number = MAX_RECOMMENDATION_COUNT,
+): AgentRecommendation[] {
   const root = typeof raw === 'string' ? safeJsonParse(raw) : raw;
   if (!root || typeof root !== 'object') return [];
   const list = (root as { items?: unknown }).items;
   if (!Array.isArray(list)) return [];
+  const limit = clampRecommendationCount(count);
   const out: AgentRecommendation[] = [];
   const seenLeader = { flag: false };
   for (const item of list) {
@@ -231,7 +266,7 @@ export function validateRecommendations(raw: unknown): AgentRecommendation[] {
       rationale: row.rationale.trim(),
       ...(skills && skills.length > 0 ? { skills } : {}),
     });
-    if (out.length >= 5) break;
+    if (out.length >= limit) break;
   }
   return out;
 }
@@ -284,32 +319,66 @@ export const DEFAULT_ROLE_SKILLS: Record<AgentRole, readonly string[]> = {
   Researcher: ['desk-research', 'benchmarking', 'synthesis'],
 };
 
+/** 휴리스틱 카드의 역할별 기본 별칭. UI 캐러셀에서 동일 별칭이 반복되면 가독성이 떨어지므로 5종으로 분리. */
+export const HEURISTIC_ROLE_NAMES: Record<AgentRole, string> = {
+  Leader: 'Kai',
+  Developer: 'Dev',
+  Designer: 'Dex',
+  QA: 'QA',
+  Researcher: 'Riz',
+};
+
 /**
- * 휴리스틱 폴백 — description 에 등장하는 키워드로 Developer/QA/Designer/Researcher
- * 를 조건부로 추가한다. Leader 는 고정 1인. 최소 Leader + Developer 2인 구성을 보장.
+ * 휴리스틱 폴백 — 슬롯 배분 알고리즘.
+ *   1) Leader 1명 + Developer 1명 고정(최소 구성).
+ *   2) description 키워드(UI/보안/연구 등) 가 가리키는 역할은 우선 추가.
+ *   3) 그래도 `count` 미만이면 Designer → QA → Researcher 순서로 보조 역할을 채워 균형을 맞춘다.
+ *      이는 디폴트 인원수 5(=ROLE_CATALOG 5개) 일 때 모든 역할이 1명씩 들어오는 형태.
+ *   4) 최종적으로 count 만큼 절단.
+ *
+ * Leader 는 항상 첫 슬롯에 배치되며 중복은 발생하지 않는다(역할 별 1명 보장).
  * rationale 은 locale 에 따라 다른 카피를 고른다(role·name 은 언어 독립).
  */
 export function heuristicTeam(
   description: string,
   locale: RecommendationLocale = DEFAULT_RECOMMENDATION_LOCALE,
+  count: number = DEFAULT_RECOMMENDATION_COUNT,
 ): AgentRecommendation[] {
+  const target = clampRecommendationCount(count);
   const lower = description.toLowerCase();
   const copy = HEURISTIC_COPY[locale];
-  const items: AgentRecommendation[] = [
-    { role: 'Leader', name: 'Kai', rationale: copy.Leader, skills: DEFAULT_ROLE_SKILLS.Leader },
-    { role: 'Developer', name: 'Dev', rationale: copy.Developer, skills: DEFAULT_ROLE_SKILLS.Developer },
-  ];
-  const has = (...kws: string[]) => kws.some((k) => lower.includes(k));
-  if (has('ui', 'ux', '디자인', '화면', 'screen', 'design')) {
-    items.push({ role: 'Designer', name: 'Dex', rationale: copy.Designer, skills: DEFAULT_ROLE_SKILLS.Designer });
+  const seen = new Set<AgentRole>();
+  const items: AgentRecommendation[] = [];
+
+  function push(role: AgentRole): void {
+    if (seen.has(role)) return;
+    if (items.length >= target) return;
+    seen.add(role);
+    items.push({
+      role,
+      name: HEURISTIC_ROLE_NAMES[role],
+      rationale: copy[role],
+      skills: DEFAULT_ROLE_SKILLS[role],
+    });
   }
-  if (has('보안', '테스트', 'qa', '회귀', '검증', 'security', 'test')) {
-    items.push({ role: 'QA', name: 'QA', rationale: copy.QA, skills: DEFAULT_ROLE_SKILLS.QA });
+
+  // 1) 최소 구성 — Leader/Developer.
+  push('Leader');
+  push('Developer');
+
+  // 2) 키워드 우선 — 사용자가 설명한 도메인을 먼저 반영.
+  const has = (...kws: string[]): boolean => kws.some((k) => lower.includes(k));
+  if (has('ui', 'ux', '디자인', '화면', 'screen', 'design')) push('Designer');
+  if (has('보안', '테스트', 'qa', '회귀', '검증', 'security', 'test')) push('QA');
+  if (has('연구', '조사', 'research', '분석', 'analysis', '시장')) push('Researcher');
+
+  // 3) 부족분 — 보조 역할 우선순위로 채워 균형을 맞춘다. 5명 기본값에서는 모든 역할이 1명씩.
+  for (const role of ['Designer', 'QA', 'Researcher'] as const) {
+    if (items.length >= target) break;
+    push(role);
   }
-  if (has('연구', '조사', 'research', '분석', 'analysis', '시장')) {
-    items.push({ role: 'Researcher', name: 'Riz', rationale: copy.Researcher, skills: DEFAULT_ROLE_SKILLS.Researcher });
-  }
-  return items.slice(0, 5);
+
+  return items.slice(0, target);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -330,20 +399,21 @@ export async function recommendAgentTeam(
     throw new Error('description 은 비어 있지 않은 문자열이어야 합니다.');
   }
   const locale = options.locale ?? DEFAULT_RECOMMENDATION_LOCALE;
-  const messages = buildRecommendationMessages(description, locale);
+  const count = clampRecommendationCount(options.count ?? DEFAULT_RECOMMENDATION_COUNT);
+  const messages = buildRecommendationMessages(description, locale, count);
   if (!options.invoker) {
-    return { items: heuristicTeam(description, locale), source: 'heuristic', locale, messages };
+    return { items: heuristicTeam(description, locale, count), source: 'heuristic', locale, messages };
   }
   try {
     const raw = await options.invoker(messages);
-    const items = validateRecommendations(raw);
+    const items = validateRecommendations(raw, count);
     if (items.length === 0) {
-      return { items: heuristicTeam(description, locale), source: 'heuristic', locale, messages };
+      return { items: heuristicTeam(description, locale, count), source: 'heuristic', locale, messages };
     }
     return { items, source: 'claude', locale, messages };
   } catch (err) {
     if (options.fallbackOnError === false) throw err;
-    return { items: heuristicTeam(description, locale), source: 'heuristic', locale, messages };
+    return { items: heuristicTeam(description, locale, count), source: 'heuristic', locale, messages };
   }
 }
 

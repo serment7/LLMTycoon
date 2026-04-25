@@ -58,6 +58,8 @@
       "seedOnCreate": "프로젝트 생성 시 자동 반영",
       "seedCount": "생성 시 {count}명 자동 반영",
       "pendingSeed": "대기 중",
+      "countLabel": "추천 인원: {count}명 (기본 5명)",
+      "countAriaLabel": "추천 인원수 슬라이더 (2~5)",
       "source": {
         "heuristic": "휴리스틱 폴백",
         "claude": "Claude 추천",
@@ -80,7 +82,9 @@
         "label": "프로젝트 설명",
         "placeholder": "예: 결제 모듈 보안 강화 — PCI 감사 + 토큰 암호화",
         "hint": "범위와 목표를 적어 주세요. 입력하는 동안 추천이 갱신됩니다.",
-        "requestButton": "추천 받기"
+        "requestButton": "추천 받기",
+        "countLabel": "추천 인원: {count}명 (기본 5명)",
+        "countAriaLabel": "추천 인원수 슬라이더 (2~5)"
       },
       "review": {
         "title": "추천 팀",

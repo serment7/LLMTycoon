@@ -35,6 +35,12 @@ import {
   type RecommenderFetcher,
 } from '../project/recommendationClient';
 import { translate, useLocale, type Locale } from '../i18n';
+import {
+  MAX_RECOMMEND_COUNT,
+  MIN_RECOMMEND_COUNT,
+  clampRecommendCount,
+  useRecommendCount,
+} from '../stores/recommendCountStore';
 
 // ────────────────────────────────────────────────────────────────────────────
 // 공용 유틸
@@ -48,10 +54,10 @@ function interpolate(template: string, params: Record<string, string | number>):
 }
 
 function fallbackFetcher(locale: RecommendationLocale): RecommenderFetcher {
-  // 기본 fetcher — invoker 없이 recommendAgentTeam 호출(휴리스틱 폴백). locale 은 UI 에서 전달.
-  return async ({ description, signal }) => {
+  // 기본 fetcher — invoker 없이 recommendAgentTeam 호출(휴리스틱 폴백). locale·count 는 UI 에서 전달.
+  return async ({ description, signal, count }) => {
     if (signal?.aborted) throw new Error('aborted');
-    return recommendAgentTeam(description, { locale });
+    return recommendAgentTeam(description, { locale, count });
   };
 }
 
@@ -100,6 +106,8 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
   const t = useCallback((key: string) => translate(key, locale), [locale]);
 
   const [state, setState] = useState<WizardState>(INITIAL_STATE);
+  // 지시 #797538d6 — 추천 인원수 영속 스토어. 마법사·다이얼로그가 동일 키로 공유.
+  const { count: recommendCount, setCount: setRecommendCount } = useRecommendCount();
 
   // 캐시·디바운스된 요청기는 컴포넌트 생애에 1회만 생성(props.cache 가 오면 공유).
   const cache = useMemo<RecommendationCache>(
@@ -150,7 +158,7 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
   }, [locale, props.translator, state.team]);
 
   const triggerRecommendation = useCallback(
-    (description: string) => {
+    (description: string, count: number) => {
       const recommender = recommenderRef.current;
       if (!recommender) return;
       if (description.trim().length === 0) {
@@ -159,7 +167,7 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
       }
       setState((prev) => ({ ...prev, status: 'loading', errorMessage: undefined }));
       recommender
-        .request(description)
+        .request(description, count)
         .then((team) => {
           if (team === null) return;
           setState((prev) => ({
@@ -184,9 +192,21 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const value = e.target.value;
       setState((prev) => ({ ...prev, description: value }));
-      triggerRecommendation(value);
+      triggerRecommendation(value, recommendCount);
     },
-    [triggerRecommendation],
+    [triggerRecommendation, recommendCount],
+  );
+
+  // 인원수 변경 — 영속 스토어 갱신 후 즉시 재요청. 디바운스/캐시는 내부에서 처리.
+  const onRecommendCountChange = useCallback(
+    (next: number) => {
+      const clamped = clampRecommendCount(next);
+      setRecommendCount(clamped);
+      if (state.description.trim().length > 0) {
+        triggerRecommendation(state.description, clamped);
+      }
+    },
+    [setRecommendCount, state.description, triggerRecommendation],
   );
 
   const toggleSelection = useCallback((index: number) => {
@@ -299,20 +319,55 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
         <small id="npw-describe-hint">
           {t('project.newProjectWizard.describe.hint')}
         </small>
-        <button
-          type="button"
-          className="npw-describe-request"
-          onClick={() => triggerRecommendation(state.description)}
-          disabled={state.description.trim().length === 0 || state.status === 'loading'}
-        >
-          {t('project.newProjectWizard.describe.requestButton')}
-        </button>
+        <div className="npw-count-row">
+          <label className="npw-count-field">
+            <span>
+              {interpolate(t('project.newProjectWizard.describe.countLabel'), {
+                count: recommendCount,
+              })}
+            </span>
+            <input
+              type="range"
+              className="npw-count-slider"
+              min={MIN_RECOMMEND_COUNT}
+              max={MAX_RECOMMEND_COUNT}
+              step={1}
+              value={recommendCount}
+              onChange={(e) => onRecommendCountChange(Number(e.target.value))}
+              aria-label={t('project.newProjectWizard.describe.countAriaLabel')}
+              aria-valuemin={MIN_RECOMMEND_COUNT}
+              aria-valuemax={MAX_RECOMMEND_COUNT}
+              aria-valuenow={recommendCount}
+            />
+          </label>
+          <button
+            type="button"
+            className="npw-describe-request"
+            onClick={() => triggerRecommendation(state.description, recommendCount)}
+            disabled={state.description.trim().length === 0 || state.status === 'loading'}
+          >
+            {t('project.newProjectWizard.describe.requestButton')}
+          </button>
+        </div>
       </label>
 
       {state.status === 'loading' && (
-        <p role="status" className="npw-loading">
-          {t('project.newProjectWizard.loading')}
-        </p>
+        <>
+          <p role="status" className="npw-loading">
+            {t('project.newProjectWizard.loading')}
+          </p>
+          {/* 지시 #797538d6 — 응답 도착 전에 인원수만큼 슬롯 placeholder 노출.
+              레이아웃 점프 방지 + 사용자가 "몇 명이 올 예정인지" 즉시 인지. */}
+          <ul className="npw-cards npw-cards-skeleton" role="list" aria-hidden="true">
+            {Array.from({ length: recommendCount }, (_, idx) => (
+              <li key={`npw-skeleton-${idx}`} className="npw-card-skeleton" data-card-status="loading">
+                <span className="npw-skeleton-line npw-skeleton-role" />
+                <span className="npw-skeleton-line npw-skeleton-name" />
+                <span className="npw-skeleton-line npw-skeleton-rationale" />
+              </li>
+            ))}
+          </ul>
+        </>
       )}
 
       {state.status === 'error' && (

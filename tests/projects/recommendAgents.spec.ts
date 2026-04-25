@@ -101,7 +101,9 @@ async function runE2e(params: {
 }) {
   const cacheStore = createRecommendationCacheStore();
   if (params.cacheSeed) {
-    cacheStore.set(params.cacheSeed.description, params.cacheSeed.locale, params.cacheSeed.value);
+    // 지시 #797538d6 — 핸들러는 요청 body 의 count 가 미주입이면 기본 5 로 찾는다. 캐시 키도
+    // `(description, locale, count)` 3 축이라 사전 seed 에서 동일 count 를 명시해야 히트.
+    cacheStore.set(params.cacheSeed.description, params.cacheSeed.locale, params.cacheSeed.value, 5);
   }
   const usageLog = createInMemoryUsageLog();
   let invokerCalls = 0;

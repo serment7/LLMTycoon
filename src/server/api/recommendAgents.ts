@@ -14,7 +14,11 @@
 import { z } from 'zod';
 
 import {
+  DEFAULT_RECOMMENDATION_COUNT,
   DEFAULT_ROLE_SKILLS,
+  MAX_RECOMMENDATION_COUNT,
+  MIN_RECOMMENDATION_COUNT,
+  clampRecommendationCount,
   recommendAgentTeam,
   type AgentRecommendation,
   type AgentTeamRecommendation,
@@ -39,6 +43,13 @@ import {
 export const RecommendAgentsRequestSchema = z.object({
   description: z.string().min(1).max(4000),
   locale: z.enum(['en', 'ko']).optional(),
+  // 지시 #797538d6 — 사용자가 선택한 추천 인원수. 누락 시 서버 기본 5 로 처리.
+  count: z
+    .number()
+    .int()
+    .min(MIN_RECOMMENDATION_COUNT)
+    .max(MAX_RECOMMENDATION_COUNT)
+    .optional(),
 });
 
 export type RecommendAgentsRequest = z.infer<typeof RecommendAgentsRequestSchema>;
@@ -129,10 +140,14 @@ export function createRecommendAgentsHandler(deps: RecommendAgentsDeps = {}): Ha
     const originalDescription = parsed.data.description;
     const description = maybeShrinkDescription(originalDescription);
     const resolvedLocale: RecommendationLocale = parsed.data.locale ?? 'en';
+    const resolvedCount = clampRecommendationCount(
+      parsed.data.count ?? DEFAULT_RECOMMENDATION_COUNT,
+    );
 
     // 1) 캐시 히트 — LLM 왕복 생략. usageLog 에 category=recommend_agents/zero-tokens 라인 기록.
+    //    캐시 키는 (description, locale, count) 3 축이라 동일 설명도 인원수가 다르면 별도 슬롯.
     if (deps.cacheStore) {
-      const hit = deps.cacheStore.get(originalDescription, resolvedLocale);
+      const hit = deps.cacheStore.get(originalDescription, resolvedLocale, resolvedCount);
       if (hit) {
         await deps.usageLog
           ?.appendLine(
@@ -152,7 +167,8 @@ export function createRecommendAgentsHandler(deps: RecommendAgentsDeps = {}): Ha
           ok: true,
           source: 'cache',
           locale: hit.locale,
-          items: ensureSkills(hit.items).slice(0, 5),
+          count: resolvedCount,
+          items: ensureSkills(hit.items).slice(0, resolvedCount),
         });
         return;
       }
@@ -163,6 +179,7 @@ export function createRecommendAgentsHandler(deps: RecommendAgentsDeps = {}): Ha
       outcome = await recommendAgentTeam(description, {
         invoker: deps.invoker,
         locale: parsed.data.locale,
+        count: resolvedCount,
       });
     } catch (err) {
       res.status(500).json({
@@ -173,9 +190,9 @@ export function createRecommendAgentsHandler(deps: RecommendAgentsDeps = {}): Ha
       return;
     }
 
-    // 2) 미스 — 성공한 경우에 한해 원본 description 키로 캐시 저장.
+    // 2) 미스 — 성공한 경우에 한해 (description, locale, count) 키로 캐시 저장.
     if (deps.cacheStore && outcome.items.length > 0) {
-      deps.cacheStore.set(originalDescription, resolvedLocale, outcome);
+      deps.cacheStore.set(originalDescription, resolvedLocale, outcome, resolvedCount);
       await deps.usageLog
         ?.appendLine(
           JSON.stringify({
@@ -192,11 +209,12 @@ export function createRecommendAgentsHandler(deps: RecommendAgentsDeps = {}): Ha
         .catch(() => undefined);
     }
 
-    const items = ensureSkills(outcome.items).slice(0, 5);
+    const items = ensureSkills(outcome.items).slice(0, resolvedCount);
     res.status(200).json({
       ok: true,
       source: outcome.source,
       locale: outcome.locale,
+      count: resolvedCount,
       items,
     });
   };
@@ -216,6 +234,7 @@ export interface RecommendAgentsClient {
     readonly items: readonly AgentRecommendation[];
     readonly source: AgentTeamRecommendation['source'];
     readonly locale: RecommendationLocale;
+    readonly count?: number;
   }>;
 }
 
@@ -237,8 +256,14 @@ export function createRecommendAgentsClient(
         items: AgentRecommendation[];
         source: AgentTeamRecommendation['source'];
         locale: RecommendationLocale;
+        count?: number;
       };
-      return { items: body.items, source: body.source, locale: body.locale };
+      return {
+        items: body.items,
+        source: body.source,
+        locale: body.locale,
+        count: body.count,
+      };
     },
   };
 }

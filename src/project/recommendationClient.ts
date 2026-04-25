@@ -69,8 +69,8 @@ export function sanitizeRationale(raw: string): RationaleSegment[] {
 // ────────────────────────────────────────────────────────────────────────────
 
 export interface RecommendationCache {
-  readonly get: (description: string) => AgentTeamRecommendation | undefined;
-  readonly set: (description: string, value: AgentTeamRecommendation) => void;
+  readonly get: (description: string, count?: number) => AgentTeamRecommendation | undefined;
+  readonly set: (description: string, value: AgentTeamRecommendation, count?: number) => void;
   readonly clear: () => void;
   readonly size: () => number;
 }
@@ -80,12 +80,25 @@ export function normalizeDescription(raw: string): string {
   return raw.trim().replace(/\s+/g, ' ');
 }
 
+/**
+ * 지시 #797538d6 — 캐시 키 빌더. count 가 주어지면 `n=N|...` 프리픽스가 붙어
+ * 동일 description 도 인원수가 다르면 별도 슬롯에 저장된다. count 미주입 시 기존
+ * description-only 키를 유지해 후방 호환을 보장한다(기존 테스트는 count 를 넘기지
+ * 않는다).
+ */
+export function buildCacheKey(description: string, count?: number): string {
+  const base = normalizeDescription(description);
+  return typeof count === 'number' && Number.isFinite(count)
+    ? `n=${Math.round(count)}|${base}`
+    : base;
+}
+
 /** LRU(최근 사용) 캐시 팩토리. 기본 용량 8. */
 export function createRecommendationCache(capacity = 8): RecommendationCache {
   const map = new Map<string, AgentTeamRecommendation>();
   return {
-    get(description) {
-      const key = normalizeDescription(description);
+    get(description, count) {
+      const key = buildCacheKey(description, count);
       if (!map.has(key)) return undefined;
       const value = map.get(key)!;
       // LRU 갱신: 재삽입으로 최신화.
@@ -93,8 +106,8 @@ export function createRecommendationCache(capacity = 8): RecommendationCache {
       map.set(key, value);
       return value;
     },
-    set(description, value) {
-      const key = normalizeDescription(description);
+    set(description, value, count) {
+      const key = buildCacheKey(description, count);
       if (map.has(key)) map.delete(key);
       map.set(key, value);
       while (map.size > capacity) {
@@ -119,6 +132,12 @@ export function createRecommendationCache(capacity = 8): RecommendationCache {
 export interface RecommenderRequest {
   readonly description: string;
   readonly signal?: AbortSignal;
+  /**
+   * 지시 #797538d6 — 사용자가 선택한 추천 인원수. UI 슬라이더가 변경될 때마다
+   * 디바운스 구간 안에서 본 필드도 같이 흘러간다. fetcher 는 이 값을 LLM 호출의
+   * count 옵션으로 전달해야 한다.
+   */
+  readonly count?: number;
 }
 
 export type RecommenderFetcher = (
@@ -140,8 +159,15 @@ export interface DebouncedRecommender {
    * 이미 비행 중인 요청은 AbortController 로 폐기한다. 반환되는 Promise 는 resolve
    * 되거나, 새 요청이 override 하면 '요청 자체가 사라진' 상태로 보류(다음 요청 결과로
    * 덮어쓰기를 유도하므로 호출자는 resolve 만 구독한다).
+   *
+   * count 미주입 시 캐시 키는 description-only(기존 동작). 인원수 셀렉터가 있는
+   * 신규 UI 는 count 를 같이 넘겨, 같은 description 이라도 다른 인원수면 별도 키로
+   * 저장되어 토큰 왕복을 한 번 더 절약한다.
    */
-  readonly request: (description: string) => Promise<AgentTeamRecommendation | null>;
+  readonly request: (
+    description: string,
+    count?: number,
+  ) => Promise<AgentTeamRecommendation | null>;
   /** 보류 타이머·비행 요청을 즉시 취소. 컴포넌트 unmount 시 호출 권장. */
   readonly cancel: () => void;
 }
@@ -167,14 +193,15 @@ export function createDebouncedRecommender(
   }
 
   return {
-    request(description) {
+    request(description, count) {
       cancelPending();
       // 빈 description 은 즉시 null 로 응답(UI 는 empty 상태로 전환).
       if (normalizeDescription(description).length === 0) {
         return Promise.resolve(null);
       }
-      // 캐시 히트는 디바운스 없이 즉시 반환(토큰 절약).
-      const cached = options.cache?.get(description);
+      // 캐시 히트는 디바운스 없이 즉시 반환(토큰 절약). count 가 주어졌으면 (desc,count)
+      // 동시 키, 미주입이면 description-only 키. 두 경로가 한 캐시에 공존 가능.
+      const cached = options.cache?.get(description, count);
       if (cached) {
         return Promise.resolve({ ...cached, source: 'cache' });
       }
@@ -184,13 +211,13 @@ export function createDebouncedRecommender(
         pendingTimer = setTimeoutFn(() => {
           pendingTimer = null;
           options
-            .fetcher({ description, signal: controller.signal })
+            .fetcher({ description, signal: controller.signal, count })
             .then((value) => {
               if (controller.signal.aborted) {
                 resolve(null);
                 return;
               }
-              options.cache?.set(description, value);
+              options.cache?.set(description, value, count);
               resolve(value);
             })
             .catch((err) => {

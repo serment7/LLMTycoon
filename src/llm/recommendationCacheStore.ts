@@ -22,8 +22,17 @@ export interface RecommendationCacheEntry {
 }
 
 export interface RecommendationCacheStore {
-  readonly get: (description: string, locale: string) => AgentTeamRecommendation | null;
-  readonly set: (description: string, locale: string, value: AgentTeamRecommendation) => void;
+  readonly get: (
+    description: string,
+    locale: string,
+    count?: number,
+  ) => AgentTeamRecommendation | null;
+  readonly set: (
+    description: string,
+    locale: string,
+    value: AgentTeamRecommendation,
+    count?: number,
+  ) => void;
   readonly invalidateAll: () => void;
   readonly invalidatePrefix: (locale?: string) => void;
   readonly size: () => number;
@@ -49,8 +58,13 @@ function normalize(raw: string): string {
   return raw.trim().replace(/\s+/g, ' ');
 }
 
-function keyFor(description: string, locale: string): string {
-  return `${locale}|${hashDescription(normalize(description))}`;
+function keyFor(description: string, locale: string, count?: number): string {
+  // 지시 #797538d6 — count 가 주어진 경우 키 끝에 `|n=N` 을 붙여 동일 설명·다른 인원수
+  // 가 충돌하지 않도록 한다. count 미주입은 기존 키 형태를 유지해 후방 호환을 보장한다.
+  const base = `${locale}|${hashDescription(normalize(description))}`;
+  return typeof count === 'number' && Number.isFinite(count)
+    ? `${base}|n=${Math.round(count)}`
+    : base;
 }
 
 export function createRecommendationCacheStore(
@@ -67,20 +81,20 @@ export function createRecommendationCacheStore(
   }
 
   return {
-    get(description, locale) {
+    get(description, locale, count) {
       const at = now();
       purgeExpired(at);
-      const entry = map.get(keyFor(description, locale));
+      const entry = map.get(keyFor(description, locale, count));
       if (!entry) return null;
       if (entry.expiresAt <= at) {
-        map.delete(keyFor(description, locale));
+        map.delete(keyFor(description, locale, count));
         return null;
       }
       return entry.value;
     },
-    set(description, locale, value) {
+    set(description, locale, value, count) {
       const at = now();
-      map.set(keyFor(description, locale), {
+      map.set(keyFor(description, locale, count), {
         value,
         storedAt: at,
         expiresAt: at + ttl,

@@ -58,6 +58,8 @@
       "seedOnCreate": "Seed on create",
       "seedCount": "Seed {count} on create",
       "pendingSeed": "Pending",
+      "countLabel": "Team size: {count} (default 5)",
+      "countAriaLabel": "Recommended team size (2–5)",
       "source": {
         "heuristic": "Heuristic fallback",
         "claude": "Recommended by Claude",
@@ -80,7 +82,9 @@
         "label": "Project description",
         "placeholder": "e.g., Payment module hardening — PCI audit + token encryption",
         "hint": "Describe scope and goals. Recommendations update as you type.",
-        "requestButton": "Request recommendation"
+        "requestButton": "Request recommendation",
+        "countLabel": "Team size: {count} (default 5)",
+        "countAriaLabel": "Recommended team size (2–5)"
       },
       "review": {
         "title": "Recommended team",

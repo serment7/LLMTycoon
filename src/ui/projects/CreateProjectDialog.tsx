@@ -35,6 +35,12 @@ import {
   type RecommenderFetcher,
 } from '../../project/recommendationClient';
 import { translate, useLocale, type Locale } from '../../i18n';
+import {
+  MAX_RECOMMEND_COUNT,
+  MIN_RECOMMEND_COUNT,
+  clampRecommendCount,
+  useRecommendCount,
+} from '../../stores/recommendCountStore';
 
 // ────────────────────────────────────────────────────────────────────────────
 // 공용 유틸
@@ -47,9 +53,10 @@ function interpolate(template: string, params: Record<string, string | number>):
 }
 
 function fallbackFetcher(locale: RecommendationLocale): RecommenderFetcher {
-  return async ({ description, signal }) => {
+  // 지시 #797538d6 — count 가 디바운서에서 흘러 오면 LLM 호출에 그대로 전달.
+  return async ({ description, signal, count }) => {
     if (signal?.aborted) throw new Error('aborted');
-    return recommendAgentTeam(description, { locale });
+    return recommendAgentTeam(description, { locale, count });
   };
 }
 
@@ -122,6 +129,9 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
   const t = useCallback((key: string) => translate(key, locale), [locale]);
 
   const [state, setState] = useState<DialogState>(INITIAL_STATE);
+  // 지시 #797538d6 — 추천 인원수 영속 스토어. 마지막 선택값을 localStorage 에서 복원하고,
+  // 변경 시 다음 세션에도 유지된다. 디바운서·캐시 키 모두 본 값에 의존한다.
+  const { count: recommendCount, setCount: setRecommendCount } = useRecommendCount();
 
   const cache = useMemo<RecommendationCache>(
     () => props.cache ?? createRecommendationCache(8),
@@ -147,7 +157,7 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
   }, []);
 
   const triggerRecommendation = useCallback(
-    (description: string) => {
+    (description: string, count: number) => {
       const recommender = recommenderRef.current;
       if (!recommender) return;
       if (description.trim().length === 0) {
@@ -156,7 +166,7 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
       }
       setState((prev) => ({ ...prev, status: 'loading', errorMessage: undefined }));
       recommender
-        .request(description)
+        .request(description, count)
         .then((team) => {
           if (team === null) return;
           setState((prev) => ({ ...prev, status: 'ready', team }));
@@ -176,9 +186,22 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const value = e.target.value;
       setState((prev) => ({ ...prev, description: value }));
-      triggerRecommendation(value);
+      triggerRecommendation(value, recommendCount);
     },
-    [triggerRecommendation],
+    [triggerRecommendation, recommendCount],
+  );
+
+  // 인원수 변경 핸들러 — 디바운스는 createDebouncedRecommender 내부에서 잡혀 있으므로,
+  // 여기서는 상태만 갱신하고 즉시 재요청을 트리거한다(설명이 비어 있으면 no-op).
+  const onRecommendCountChange = useCallback(
+    (next: number) => {
+      const clamped = clampRecommendCount(next);
+      setRecommendCount(clamped);
+      if (state.description.trim().length > 0) {
+        triggerRecommendation(state.description, clamped);
+      }
+    },
+    [setRecommendCount, state.description, triggerRecommendation],
   );
 
   // "팀에 바로 추가" — existingProjectId 가 있으면 즉시 apply, 없으면 seedQueue 에 누적.
@@ -231,8 +254,8 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
 
   const regenerate = useCallback(() => {
     cache.clear();
-    triggerRecommendation(state.description);
-  }, [cache, state.description, triggerRecommendation]);
+    triggerRecommendation(state.description, recommendCount);
+  }, [cache, state.description, recommendCount, triggerRecommendation]);
 
   const canSubmit =
     state.name.trim().length > 0 && !state.submitting;
@@ -319,7 +342,7 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
             <button
               type="button"
               className="cpd-cta-primary"
-              onClick={() => triggerRecommendation(state.description)}
+              onClick={() => triggerRecommendation(state.description, recommendCount)}
               disabled={
                 state.description.trim().length === 0 || state.status === 'loading'
               }
@@ -329,6 +352,24 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
             <small id="cpd-recommend-cta-hint" className="cpd-cta-hint">
               {t('projects.recommend.ctaHint')}
             </small>
+            <label className="cpd-count-field">
+              <span>
+                {interpolate(t('projects.recommend.countLabel'), { count: recommendCount })}
+              </span>
+              <input
+                type="range"
+                className="cpd-count-slider"
+                min={MIN_RECOMMEND_COUNT}
+                max={MAX_RECOMMEND_COUNT}
+                step={1}
+                value={recommendCount}
+                onChange={(e) => onRecommendCountChange(Number(e.target.value))}
+                aria-label={t('projects.recommend.countAriaLabel')}
+                aria-valuemin={MIN_RECOMMEND_COUNT}
+                aria-valuemax={MAX_RECOMMEND_COUNT}
+                aria-valuenow={recommendCount}
+              />
+            </label>
           </div>
           <label className="cpd-field">
             <span>{t('projects.create.workspacePath')}</span>
@@ -348,14 +389,29 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
           </header>
 
           {state.status === 'loading' && (
-            <p role="status" className="cpd-recommend-loading">
-              {t('projects.recommend.loading')}
-            </p>
+            <>
+              <p role="status" className="cpd-recommend-loading">
+                {t('projects.recommend.loading')}
+              </p>
+              {/* 지시 #797538d6 — 응답 도착 전에 인원수만큼 빈 슬롯을 미리 그려 둔다.
+                  레이아웃 점프를 줄이고, 사용자가 "몇 명이 올 예정인지" 한눈에 알 수 있게 한다. */}
+              <ul className="cpd-cards cpd-cards-skeleton" role="list" aria-hidden="true">
+                {Array.from({ length: recommendCount }, (_, idx) => (
+                  <li key={`skeleton-${idx}`} className="cpd-card cpd-card-skeleton" data-card-status="loading">
+                    <div className="cpd-card-body">
+                      <span className="cpd-skeleton-line cpd-skeleton-role" />
+                      <span className="cpd-skeleton-line cpd-skeleton-name" />
+                      <span className="cpd-skeleton-line cpd-skeleton-rationale" />
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
           {state.status === 'error' && (
             <p role="alert" className="cpd-recommend-error">
               {state.errorMessage ?? t('projects.recommend.error')}
-              <button type="button" onClick={() => triggerRecommendation(state.description)}>
+              <button type="button" onClick={() => triggerRecommendation(state.description, recommendCount)}>
                 {t('projects.recommend.retry')}
               </button>
             </p>
