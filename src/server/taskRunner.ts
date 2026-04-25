@@ -403,7 +403,12 @@ export class TaskRunner {
       } catch {
         codeRules = null;
       }
-      prompt = buildTaskPrompt({ agent, task, project, candidateFile, peer, codeRules });
+      // 로컬 LLM(ollama/vllm) 경로에서만 "도구 응답 풀어쓰기 금지" 블록을 추가
+      // 주입하기 위해 현재 프로바이더를 함께 넘긴다. claude-cli 는 영향 없음.
+      prompt = buildTaskPrompt({
+        agent, task, project, candidateFile, peer, codeRules,
+        provider: readLLMEnv().provider,
+      });
     }
 
     try {

@@ -7,8 +7,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import type { Agent } from '../types';
-import { buildSystemPrompt } from './prompts';
+import type { Agent, Task, Project } from '../types';
+import { buildSystemPrompt, buildTaskPrompt } from './prompts';
 
 const agent: Agent = {
   id: 'a-1',
@@ -17,6 +17,23 @@ const agent: Agent = {
   status: 'idle',
   persona: '',
 } as Agent;
+
+const task: Task = {
+  id: '01234567-89ab-cdef-0123-456789abcdef',
+  projectId: 'p-1',
+  assignedTo: agent.id,
+  description: '프로젝트 생성 시 설명 기반 최적 팀 추천 + 바로 추가 기능 구현',
+  status: 'in-progress',
+} as Task;
+
+const project: Project = {
+  id: 'p-1',
+  name: 'LLMTycoon',
+  description: '에이전트 시뮬레이션',
+  workspacePath: '/tmp/ws',
+  agents: [agent.id],
+  status: 'active',
+} as Project;
 
 describe('buildSystemPrompt', () => {
   it('claude-cli 경로는 빌트인 도구(Read/Write/Edit/Bash) 블록을 그대로 포함한다', () => {
@@ -102,5 +119,50 @@ describe('buildSystemPrompt', () => {
     const vllm = buildSystemPrompt(agent, { provider: 'vllm' });
     // 분기 자체가 isLocal 하나로 통합돼 있어 두 출력이 동일해야 한다.
     assert.equal(ollama, vllm);
+  });
+});
+
+// 배경: llama3.1:8b 가 list_files_fs 결과를 받으면 후속 도구 호출 대신
+// "This is a text file containing a list of files..." 같은 영문 풀어쓰기로 빠지는
+// 회귀가 실제로 관측됐다(taskId=cb6fdf69, korean ratio 0.00). 시스템 프롬프트의
+// localChecklist 에 같은 규칙이 이미 있지만 8B 모델이 무시해 한 번 더 task 프롬프트
+// 말미에 못박는다. 본 테스트는 그 블록의 존재·내용·프로바이더 분기를 보장한다.
+describe('buildTaskPrompt — 도구 응답 풀어쓰기 금지 블록', () => {
+  it('ollama 경로는 "도구 응답 처리 — 절대 규칙" 블록을 포함한다', () => {
+    const text = buildTaskPrompt({ agent, task, project, provider: 'ollama' });
+    assert.match(text, /\[도구 응답 처리 — 절대 규칙\]/);
+    // 실제 회귀 phrase 가 명시돼 있어야 한다(샘플 매칭으로 모델 attention 강화).
+    assert.match(text, /This is a/);
+    assert.match(text, /Here's a breakdown/);
+    // 후속 도구 호출 강제 문구.
+    assert.match(text, /(곧바로|즉시).*(read_file|edit_file|write_file)/);
+    // content 비우고 tool_calls 만 돌려주라는 지시.
+    assert.match(text, /content.*비우고.*tool_calls/);
+  });
+
+  it('vllm 경로도 동일하게 절대 규칙 블록을 포함한다', () => {
+    const text = buildTaskPrompt({ agent, task, project, provider: 'vllm' });
+    assert.match(text, /\[도구 응답 처리 — 절대 규칙\]/);
+  });
+
+  it('claude-cli 경로는 절대 규칙 블록을 추가하지 않는다(CLI 는 회귀 없음)', () => {
+    const text = buildTaskPrompt({ agent, task, project, provider: 'claude-cli' });
+    assert.doesNotMatch(text, /\[도구 응답 처리 — 절대 규칙\]/);
+  });
+
+  it('provider 미지정시 claude-cli 와 동일하게 절대 규칙 블록을 넣지 않는다', () => {
+    const text = buildTaskPrompt({ agent, task, project });
+    assert.doesNotMatch(text, /\[도구 응답 처리 — 절대 규칙\]/);
+  });
+
+  it('블록은 체크리스트 안내 문구 직전(말미) 에 위치해 모델 attention 끝쪽에 놓인다', () => {
+    const text = buildTaskPrompt({ agent, task, project, provider: 'ollama' });
+    const blockIdx = text.indexOf('[도구 응답 처리 — 절대 규칙]');
+    const checklistIdx = text.indexOf('체크리스트 1~7');
+    assert.ok(blockIdx >= 0 && checklistIdx >= 0, '두 블록 모두 존재해야 함');
+    assert.ok(blockIdx < checklistIdx, '절대 규칙 블록이 체크리스트 안내 앞에 있어야 함');
+    // 그리고 절대 규칙 블록은 [새 지시 #...] 보다는 뒤에 와야 한다.
+    const directiveIdx = text.indexOf('[새 지시 #');
+    assert.ok(directiveIdx < blockIdx, '절대 규칙 블록은 새 지시 블록 뒤에 와야 함');
   });
 });

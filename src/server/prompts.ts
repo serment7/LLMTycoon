@@ -195,10 +195,19 @@ interface TaskPromptInput {
   peer?: Agent | null;
   /** 지시 #87cbd107 — 로컬/전역 코드 컨벤션 블록. 디스패처가 조달해 주입. */
   codeRules?: CodeRulesForPrompt | null;
+  /**
+   * 현재 LLM 프로바이더. 로컬 모델(ollama/vllm) 일 때만 "도구 응답 처리 — 절대 규칙"
+   * 블록을 프롬프트 말미에 한 번 더 못박아, list_files_fs 결과를 영문으로 설명만
+   * 늘어놓고 후속 도구 호출을 안 하는 8B급 회귀(실사례: llama3.1:8b 가
+   * "This is a text file containing a list of files..." 만 출력) 를 차단한다.
+   * 미지정·claude-cli 일 때는 추가 블록을 넣지 않는다(CLI 는 이 회귀가 없음).
+   */
+  provider?: LLMProviderName;
 }
 
 export function buildTaskPrompt(input: TaskPromptInput): string {
-  const { agent, task, project, candidateFile, peer, codeRules } = input;
+  const { agent, task, project, candidateFile, peer, codeRules, provider } = input;
+  const isLocal = provider === 'ollama' || provider === 'vllm';
   const lines: string[] = [];
   lines.push('[언어 규칙 — 최우선]');
   lines.push('반드시 한국어(한글)로만 응답한다. 코드·식별자·파일명을 제외하고 영어 단어를 섞어 쓰지 않는다. 기술 용어는 가능하면 한국어로 번역하거나 괄호 병기한다.');
@@ -212,6 +221,13 @@ export function buildTaskPrompt(input: TaskPromptInput): string {
     lines.push(`완료 후 소통 대상: ${translateRole(peer.role)} "${peer.name}" (id: ${peer.id})`);
   }
   lines.push('');
+  if (isLocal) {
+    lines.push('[도구 응답 처리 — 절대 규칙]');
+    lines.push('list_files / list_files_fs / read_file / grep_files 가 결과를 돌려주면, 그 결과를 한국어든 영어든 설명·요약·재구성하지 말고 곧바로 다음 도구(read_file / edit_file / write_file 등) 를 호출하라.');
+    lines.push('"This is a ...", "Here\'s a breakdown ...", "The data consists of ...", "이 파일은 ... 입니다" 같은 도구 결과 풀어쓰기 문장이 본문에 등장하면 그 자체로 실패 신호다 — 그 시점에 즉시 후속 도구 호출로 전환하라.');
+    lines.push('content(본문) 는 모든 도구 호출이 끝난 뒤 동료에게 전할 한국어 한 줄에만 쓴다. 중간 단계에서는 content 를 비우고 tool_calls 만 돌려준다.');
+    lines.push('');
+  }
   lines.push('시스템 프롬프트의 체크리스트 1~7 순서를 그대로 따라 작업하라.');
   lines.push('특히 5) "그래프 동기화" 단계에서 이번 턴에 건드린 모든 파일에 add_file 을, import/require 관계에는 add_dependency 를 빠짐없이 호출하라.');
   lines.push('최종 메시지는 반드시 한국어로 한 줄만 출력한다(영어 금지).');
