@@ -1909,9 +1909,26 @@ async function startServer() {
         // stderr 만 보면 원인이 빈 문자열로 남아 디버깅 불가 → r.error.message 를 로그에 합친다.
         const ok = r.status === 0 && !r.error;
         const stderrRaw = (r.stderr || '') + (r.error ? `\nspawn error: ${r.error.message}` : '');
+        const stdoutRaw = r.stdout || '';
+        // commit/pr 의 stdout 은 SHA·PR URL 파싱 계약이 있어 step 에 보존한다. 그 외 단계도
+        // 실패 시 stdout 으로 원인이 흘러가는 케이스(pre-commit 훅이 stdout 에 오류를 찍는 등)
+        // 가 있어 진단용 로그에는 항상 포함시킨다.
         const stdout = label === 'commit' || label === 'pr'
-          ? (r.stdout || '').slice(0, 400)
+          ? stdoutRaw.slice(0, 400)
           : undefined;
+        // stderr 가 비어 있으면 stdout 헤드를 합성해 step.stderr 에 채운다 — `git commit` 이
+        // "nothing to commit, working tree clean" 을 stdout 으로만 뱉는 케이스, 그리고 한글
+        // Windows 콘솔(CP949)에서 utf8 디코딩 누락으로 stderr 가 빈 사례를 동일 경로로 살린다.
+        const stderrForStep = (() => {
+          if (ok) return undefined;
+          const trimmedStderr = stderrRaw.trim();
+          if (trimmedStderr) return redactRemoteUrl(stderrRaw).slice(0, 400);
+          const trimmedStdout = stdoutRaw.trim();
+          if (trimmedStdout) {
+            return `(empty stderr; stdout) ${redactRemoteUrl(trimmedStdout)}`.slice(0, 400);
+          }
+          return `(empty stderr/stdout; exit=${r.status ?? 'null'})`;
+        })();
         // 원격 URL 에 토큰이 인라인 주입된 상태라면, 실패 stderr 에 자격증명이 그대로
         // 박힌 채 로그·소켓 페이로드로 흘러갈 위험이 있다. redactRemoteUrl 을 항상
         // 통과시켜 `user:***@host` 로 마스킹한 뒤에만 외부에 노출한다.
@@ -1919,13 +1936,18 @@ async function startServer() {
           label,
           ok,
           code: r.status,
-          stderr: ok ? undefined : redactRemoteUrl(stderrRaw).slice(0, 400),
+          stderr: stderrForStep,
           stdout: stdout ? redactRemoteUrl(stdout) : undefined,
         };
         results.push(step);
         if (!ok) {
+          // stdout 도 함께 남겨, "code=1, stderr 빈" 케이스(특히 commit 단계)에서 원인을
+          // 즉시 식별할 수 있도록 한다. 200자 캡으로 페이로드 폭주를 방지.
+          const stdoutLog = stdoutRaw.trim()
+            ? ` stdout=${redactRemoteUrl(stdoutRaw).slice(0, 200)}`
+            : '';
           console.error(
-            `[git-automation] step=${label} failed project=${projectId} branch=${branch} code=${r.status ?? 'null'} stderr=${(step.stderr || '').slice(0, 200)}`,
+            `[git-automation] step=${label} failed project=${projectId} branch=${branch} code=${r.status ?? 'null'} stderr=${(step.stderr || '').slice(0, 200)}${stdoutLog}`,
           );
         }
         return ok;
@@ -1959,25 +1981,76 @@ async function startServer() {
           });
           return p.status === 0 ? (p.stdout || '').trim() : undefined;
         };
-        const headBefore = probeHead();
-        const committed = runStep('commit', ['git', '-C', cwd, 'commit', '-m', commitMessage]);
-        if (!committed) {
-          const headAfter = probeHead();
-          const idx = results.length - 1;
-          const reconciled = reconcileCommitOutcome({
-            step: results[idx],
-            headBefore,
-            headAfter,
+
+        // commit pre-flight: stderr 가 빈 채 code=1 로 떨어지는 모호 실패를 사전 차단한다.
+        //   1) user.email/user.name 미설정: 일부 로컬화 git 빌드는 stderr 가 비고 종료.
+        //   2) .git/index.lock 잔존: 다른 git 프로세스 충돌·이전 실행 강제종료의 잔여 파일.
+        //   3) 스테이징된 변경 없음(--allow-empty 미사용 정책): 메시지가 stdout 으로만 가
+        //      현재 로깅에서는 빈 stderr 로 보였다. 사전 감지 후 noop 로 단축해, 자동화
+        //      스케줄러가 같은 done 구간에서 "실패 → 재시도" 토큰을 더 태우지 않게 한다.
+        const probeConfig = (key: string): string => {
+          const c = spawnSync('git', ['-C', cwd, 'config', '--get', key], {
+            encoding: 'utf8', windowsHide: true,
           });
-          if (reconciled !== results[idx]) {
-            results[idx] = reconciled;
-            if (reconciled.ok) {
-              console.warn(
-                `[git-automation] commit step reconciled to ok project=${projectId} branch=${branch} HEAD ${(headBefore || '').slice(0, 7)} → ${(headAfter || '').slice(0, 7)} despite exit=${reconciled.code ?? 'null'}`,
-              );
-            }
+          return (c.stdout || '').trim();
+        };
+        const userEmail = probeConfig('user.email');
+        const userName = probeConfig('user.name');
+        if (!userEmail || !userName) {
+          const missing = !userEmail && !userName ? 'user.email/user.name' : !userEmail ? 'user.email' : 'user.name';
+          const reason = `git ${missing} 미설정 — \`git -C <repo> config ${missing} <value>\` 로 지정 필요`;
+          results.push({ label: 'commit', ok: false, code: 1, stderr: `preflight: ${reason}` });
+          console.error(`[git-automation] commit preflight failed project=${projectId} branch=${branch} reason=${reason}`);
+          return finalize(false);
+        }
+        try {
+          const lockPath = path.join(cwd, '.git', 'index.lock');
+          if (existsSync(lockPath)) {
+            const reason = '.git/index.lock 잔존 — 다른 git 프로세스가 잠금 중이거나 이전 실행의 잔여 파일. 안전 확인 후 수동 삭제 필요';
+            results.push({ label: 'commit', ok: false, code: 1, stderr: `preflight: ${reason}` });
+            console.error(`[git-automation] commit preflight failed project=${projectId} branch=${branch} reason=${reason}`);
+            return finalize(false);
           }
-          if (!reconciled.ok) return finalize(false);
+        } catch {
+          // fs 접근 자체가 실패하면 commit 단계의 spawn 에서 다시 드러난다 — pre-flight 는
+          // 폴백 없이 그대로 통과시켜 정상 경로의 진단 로그가 원인을 잡게 한다.
+        }
+        // diff --cached --quiet: exit 0 = 변경 없음, exit 1 = 스테이징된 diff 있음.
+        // exit 0 이면 commit 을 건너뛰고 noop 결과를 push 해 파이프라인을 정상 마감한다.
+        const stagedProbe = spawnSync('git', ['-C', cwd, 'diff', '--cached', '--quiet'], {
+          encoding: 'utf8', windowsHide: true,
+        });
+        if (stagedProbe.status === 0 && !stagedProbe.error) {
+          console.warn(
+            `[git-automation] commit 단계 noop project=${projectId} branch=${branch} — 스테이징된 변경 없음 (add -A 후에도 추적 변경 0건)`,
+          );
+          results.push({
+            label: 'commit',
+            ok: true,
+            code: 0,
+            stdout: '[noop] nothing to commit, working tree clean',
+          });
+        } else {
+          const headBefore = probeHead();
+          const committed = runStep('commit', ['git', '-C', cwd, 'commit', '-m', commitMessage]);
+          if (!committed) {
+            const headAfter = probeHead();
+            const idx = results.length - 1;
+            const reconciled = reconcileCommitOutcome({
+              step: results[idx],
+              headBefore,
+              headAfter,
+            });
+            if (reconciled !== results[idx]) {
+              results[idx] = reconciled;
+              if (reconciled.ok) {
+                console.warn(
+                  `[git-automation] commit step reconciled to ok project=${projectId} branch=${branch} HEAD ${(headBefore || '').slice(0, 7)} → ${(headAfter || '').slice(0, 7)} despite exit=${reconciled.code ?? 'null'}`,
+                );
+              }
+            }
+            if (!reconciled.ok) return finalize(false);
+          }
         }
       }
 

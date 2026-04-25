@@ -10,7 +10,7 @@
  * 리더-중심 트리거 모델(server.ts `executeGitAutomation`)과도 어긋났다.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { GitCommit, GitBranch, GitPullRequest, RotateCcw, Save, AlertTriangle, Info, Power, CheckCircle2, Clock3, Check, Square, Loader2, XCircle, Upload, Hash, X } from 'lucide-react';
+import { GitCommit, GitBranch, GitPullRequest, RotateCcw, Save, AlertTriangle, Info, Power, CheckCircle2, Clock3, Check, Square, Loader2, XCircle, Upload, Hash } from 'lucide-react';
 import { useReducedMotion } from '../utils/useReducedMotion';
 import type { BranchStrategy, CommitStrategy } from '../types';
 import {
@@ -19,6 +19,8 @@ import {
   COMMIT_STRATEGY_LABEL,
   DEFAULT_TASK_BOUNDARY_COMMIT_CONFIG,
 } from '../types';
+import type { GitAutomationStepResult } from '../utils/gitAutomation';
+import { GitAutomationFailureNotice } from './GitAutomationFailureNotice';
 
 // 태스크 경계 커밋 옵션별 "UI 전용 힌트". types.ts 의 COMMIT_STRATEGY_LABEL 은 요약
 // 라벨만 담당하고, 상세 설명은 컴포넌트 수준에서 관리한다(시안 문구 변경 시 types.ts
@@ -279,6 +281,10 @@ export interface GitAutomationPanelProps {
   // 디자이너: 가장 최근 실행에서 발생한 에러 메시지. 비어 있으면 토스트는 숨김.
   // 닫기 버튼으로 해제 가능해야 하므로 onDismissError 핸들러를 함께 받는다.
   lastError?: string | null;
+  // 가장 최근 실패 단계의 원본 결과(label/code/stderr/stdout). 전달되면 lastError 자리에
+  // 풍부한 진단 패널을 그려 사용자가 stderr 가 비어 있는 spawn 실패도 추정 사유와
+  // 함께 식별할 수 있다(#55bb8822). 미전달 시 기존 lastError 단순 배너로 폴백한다.
+  lastFailure?: GitAutomationStepResult | null;
   onDismissError?: () => void;
   // 디자이너: 저장 후 "실제로 스케줄러/서버에 반영됐다"는 신호. onSave 가 단순 setState
   // 라면 호출 측에서 save 완료 후 true 로 끌어올리고, "적용됨" 배지를 영구 표시해
@@ -414,7 +420,7 @@ export function shortCommitHash(hash: string | null | undefined): string {
 export function GitAutomationPanel({
   initial, onSave, onLog, sample, lastRunAt, lastRunFlow,
   commitStatus = 'idle', pushStatus = 'idle',
-  lastCommitHash, lastPushAt, lastError, onDismissError, appliedAt,
+  lastCommitHash, lastPushAt, lastError, lastFailure, onDismissError, appliedAt,
   activeBranch, branchStrategy,
 }: GitAutomationPanelProps) {
   // 활성 토글의 글로우 펄스를 prefers-reduced-motion 사용자에게 끈다 — 색은 유지.
@@ -810,29 +816,16 @@ export function GitAutomationPanel({
 
       {/* 디자이너: 에러 토스트 — 패널 상단에 고정되는 인-패널 배너 형태. 전역 토스트로
           뺄 수도 있지만, "어느 설정에 문제가 생겼는지"를 맥락과 함께 보여주려면 패널
-          안에 두는 편이 원인-결과 연결을 짧게 유지한다. role=alert 로 스크린리더에 즉시 알림. */}
-      {lastError && (
-        <div
-          role="alert"
-          className="flex items-start gap-2 px-3 py-2 border-2 border-red-400 bg-red-500/15 text-red-100"
-        >
-          <XCircle size={14} className="shrink-0 mt-0.5 text-red-300" />
-          <div className="flex-1 min-w-0">
-            <div className="text-[10px] uppercase tracking-wider text-red-200/80 font-bold">자동화 실패</div>
-            <div className="text-[11px] font-mono break-words">{lastError}</div>
-          </div>
-          {onDismissError && (
-            <button
-              type="button"
-              onClick={onDismissError}
-              aria-label="에러 메시지 닫기"
-              title="닫기"
-              className={`shrink-0 p-1 border-2 border-red-400/50 text-red-200 hover:bg-red-500/25 hover:text-white transition-colors ${focusRing}`}
-            >
-              <X size={12} />
-            </button>
-          )}
-        </div>
+          안에 두는 편이 원인-결과 연결을 짧게 유지한다. role=alert 로 스크린리더에 즉시 알림.
+          lastFailure 가 있으면 step/code/stderr/stdout 을 분리 표기하는 풍부 알림으로
+          승격되고, 없으면 lastError 문자열만 가지고 단순 표기로 폴백한다. */}
+      {(lastFailure || lastError) && (
+        <GitAutomationFailureNotice
+          failure={lastFailure}
+          message={lastError}
+          branch={activeBranch}
+          onDismiss={onDismissError}
+        />
       )}
 
       <fieldset className="grid grid-cols-1 md:grid-cols-3 gap-2" aria-label="자동화 흐름 수준 선택">

@@ -145,6 +145,21 @@
       }
     }
   },
+  "gitAutomation": {
+    "failure": {
+      "title": "자동화 실패",
+      "step": "단계",
+      "exitCode": "종료 코드",
+      "branch": "브랜치",
+      "stderrLabel": "오류 출력",
+      "stdoutLabel": "표준 출력",
+      "noStderr": "(비어 있음)",
+      "emptyStderrFallback": "stderr 가 비어 있습니다 — 변경 사항이 없을 가능성이 높습니다.",
+      "spawnFailure": "git 실행 파일을 시작하지 못했습니다.",
+      "dismiss": "닫기",
+      "fallbackMessage": "자동화가 실패했지만 진단 출력이 수집되지 않았습니다."
+    }
+  },
   "tokenUsage": {
     "indicator": {
       "label": "토큰",

@@ -145,6 +145,21 @@
       }
     }
   },
+  "gitAutomation": {
+    "failure": {
+      "title": "Automation failed",
+      "step": "Step",
+      "exitCode": "Exit code",
+      "branch": "Branch",
+      "stderrLabel": "Error output",
+      "stdoutLabel": "Standard output",
+      "noStderr": "(empty)",
+      "emptyStderrFallback": "stderr is empty — likely no changes to commit.",
+      "spawnFailure": "Failed to launch the git binary.",
+      "dismiss": "Dismiss",
+      "fallbackMessage": "Automation reported a failure but no diagnostic output was captured."
+    }
+  },
   "tokenUsage": {
     "indicator": {
       "label": "Tokens",
