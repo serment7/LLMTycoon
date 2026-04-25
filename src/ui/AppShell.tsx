@@ -17,7 +17,7 @@
 //   · 다이얼로그 오픈 시 `inert` 속성을 shell 의 형제 컨테이너에 부여해 Tab 키가
 //     다이얼로그 밖으로 빠져나가지 않는다. 다이얼로그 닫히면 inert 제거.
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { ToastProvider } from '../components/ToastProvider';
 import { TokenUsageIndicator, type UsageSource } from './TokenUsageIndicator';
@@ -28,6 +28,7 @@ import {
 } from './onboarding/onboardingPrefs';
 import { I18nProvider, type Locale } from '../i18n';
 import { LanguageToggle } from './LanguageToggle';
+import { useOverflowMenu, type OverflowMenuItem } from '../hooks/useOverflowMenu';
 
 export interface AppShellProps {
   readonly children?: React.ReactNode;
@@ -58,16 +59,56 @@ export function AppShell(props: AppShellProps): React.ReactElement {
     setShowTour(false);
   }, []);
 
+  // 반응형 액션 바(#0c066697). 디자이너 가이드:
+  //   · flex 컨테이너에 min-width:0 + 자식 flex-shrink 적용 → 라벨이 절대 wrap 되지 않음.
+  //   · 라벨은 white-space:nowrap + text-overflow:ellipsis 로 한 줄 유지.
+  //   · 보조 액션(언어 토글)은 컨테이너 폭 < 720 일 때 useOverflowMenu 가 더보기로 분류.
+  //   · 1280/960/720 브레이크포인트는 CSS 미디어 쿼리와 동일 축으로 className 토글에 사용.
+  // 측정-너비는 ResizeObserver 가 채우므로 호출자는 추정 너비만 잡아 두면 된다.
+  const overflowItems = useMemo<OverflowMenuItem[]>(() => [
+    { id: 'language', label: '언어 설정', width: 132, hideBelowPx: 720 },
+  ], []);
+  const {
+    containerRef: actionBarRef,
+    visibleItems,
+    overflowItems: hiddenActions,
+    activeBreakpoint,
+  } = useOverflowMenu({ items: overflowItems, overflowTriggerWidth: 40 });
+  const isLanguageVisible = visibleItems.some(it => it.id === 'language');
+  const hasHiddenActions = hiddenActions.length > 0;
+
   return (
     <I18nProvider initialLocale={props.initialLocale}>
       <ToastProvider>
         <div className="app-shell">
           <header
-            className="app-shell-header"
-            style={{ position: 'relative', zIndex: 30, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+            ref={actionBarRef as React.RefObject<HTMLElement>}
+            className={`app-shell-header app-shell-header--bp-${activeBreakpoint}`}
           >
-            <TokenUsageIndicator usageSource={props.usageSource} />
-            <LanguageToggle onPersist={props.onLocalePersist} />
+            <div className="app-shell-header__primary">
+              <TokenUsageIndicator usageSource={props.usageSource} />
+            </div>
+            <div className="app-shell-header__actions">
+              {isLanguageVisible && (
+                <span className="app-shell-header__action" data-action-id="language">
+                  <LanguageToggle onPersist={props.onLocalePersist} />
+                </span>
+              )}
+              {hasHiddenActions && (
+                // 좁은 폭에서 보조 액션을 모아 두는 더보기 트리거. 펼침 UI 는 후속
+                // 배선이지만 a11y 계약(aria-haspopup·aria-label) 은 지금부터 잠궈
+                // 외부 회귀가 위치만 바꿔도 깨지지 않게 한다.
+                <button
+                  type="button"
+                  className="app-shell-header__more"
+                  aria-haspopup="menu"
+                  aria-label={`보조 액션 더보기 (${hiddenActions.length}개)`}
+                  data-testid="app-shell-header-more"
+                >
+                  더보기
+                </button>
+              )}
+            </div>
           </header>
           <main className="app-shell-main" aria-hidden={showTour || undefined}>
             {props.children}
