@@ -58,6 +58,7 @@ import { TokenUsageIndicator } from './components/TokenUsageIndicator';
 import { LanguageToggle } from './ui/LanguageToggle';
 import { updateMyLanguagePreference } from './server/api/userPreferences';
 import { useLocale as useI18nLocale } from './i18n';
+import { StatsIndicator } from './components/StatsIndicator';
 import { CreateProjectDialog, type CreateProjectDialogSubmit, type CreateProjectDialogResult } from './ui/projects/CreateProjectDialog';
 import { applyRecommendedTeam } from './project/api';
 import { ConversationSearch } from './components/ConversationSearch';
@@ -629,15 +630,6 @@ function App() {
     if (silentAgents > 0) parts.push(`침묵 ${silentAgents}명`);
     if (topSender) parts.push(`최다 발화 ${topSender.name}(${topSender.count})`);
     return parts.join(' · ');
-  }, [collaborationStats]);
-
-  // 헤더 칩에 한 눈에 띄는 숫자를 고른다.
-  // 메시지가 없으면 "-" 를 보여 "0%" 와 "데이터 없음" 을 혼동하지 않게 한다.
-  // 참여율은 "지금 팀이 서로 말을 하고 있는가" 를 가장 빠르게 답하는 지표라
-  // 대표값으로 선택했다. 자세한 분해는 툴팁(collaborationLabel)에서 본다.
-  const collaborationBadge = useMemo(() => {
-    if (collaborationStats.messageCount === 0) return '-';
-    return `${collaborationStats.participationRate}%`;
   }, [collaborationStats]);
 
   useEffect(() => {
@@ -1793,48 +1785,27 @@ function App() {
               <Wand2 size={14} aria-hidden="true" />
             </button>
           </div>
-          <div
-            className="app-header-metrics__chip app-header-metrics__chip--accent"
-            style={{ borderLeftColor: getMetricTierColor(workspaceInsights.coveragePercent) }}
-            role="status"
-            aria-label={`의존성 커버리지 ${workspaceInsights.coveragePercent} 퍼센트${
-              workspaceInsights.isolatedFiles.length > 0
-                ? `, 고립 파일 ${workspaceInsights.isolatedFiles.length} 건`
-                : ''
-            }`}
-            title={workspaceInsights.isolatedFiles.length > 0
-              ? `커버리지 ${workspaceInsights.coveragePercent}% · 고립 파일: ${workspaceInsights.isolatedFiles.join(', ')}`
-              : `커버리지 ${workspaceInsights.coveragePercent}% (의존성이 연결되지 않은 파일 없음)`}
-            data-testid="header-metric-coverage"
-          >
-            <span className="app-header-metrics__label-full">커버리지: </span>
-            <span className="app-header-metrics__label-short" aria-hidden="true">커 </span>
-            {workspaceInsights.coveragePercent}%
-          </div>
-          <div
-            className="app-header-metrics__chip app-header-metrics__chip--accent"
-            style={{ borderLeftColor: getMetricTierColor(agentActivity.total === 0 ? null : agentActivity.ratio) }}
-            role="status"
-            aria-label={`에이전트 활성률 ${agentActivity.ratio} 퍼센트`}
-            title={`활성률 ${agentActivity.ratio}% — ${activityBreakdownLabel}`}
-            data-testid="header-metric-activity"
-          >
-            <span className="app-header-metrics__label-full">활성률: </span>
-            <span className="app-header-metrics__label-short" aria-hidden="true">활 </span>
-            {agentActivity.ratio}%
-          </div>
-          <div
-            className="app-header-metrics__chip app-header-metrics__chip--accent"
-            style={{ borderLeftColor: getMetricTierColor(collaborationStats.messageCount === 0 ? null : collaborationStats.participationRate) }}
-            role="status"
-            aria-label={`협업 지표 ${collaborationBadge}`}
-            title={`협업 ${collaborationBadge} — ${collaborationLabel}`}
-            data-testid="header-metric-collaboration"
-          >
-            <span className="app-header-metrics__label-full">협업: </span>
-            <span className="app-header-metrics__label-short" aria-hidden="true">협 </span>
-            {collaborationBadge}
-          </div>
+          {/* 지시 #4a9402f3 · 종전 커버리지/활성률/협업 칩 3개 → 단일 StatsIndicator.
+              헤더 한 줄 유지(Thanos 작업) 와 충돌 없이 동일 정보를 popover 로 노출. */}
+          <StatsIndicator
+            coverage={{
+              percent: workspaceInsights.coveragePercent,
+              isolatedFiles: workspaceInsights.isolatedFiles,
+            }}
+            activity={{
+              percent: agentActivity.ratio,
+              active: agentActivity.active,
+              total: agentActivity.total,
+              breakdown: activityBreakdownLabel,
+            }}
+            collaboration={{
+              percent: collaborationStats.messageCount === 0
+                ? null
+                : collaborationStats.participationRate,
+              messageCount: collaborationStats.messageCount,
+              detail: collaborationLabel,
+            }}
+          />
           {!online && (
             <div
               role="status"
