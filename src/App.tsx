@@ -1820,9 +1820,9 @@ function App() {
               aria-live="polite"
               data-testid="offline-banner"
               className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border-2 border-amber-400 text-amber-300 bg-amber-500/10 whitespace-nowrap"
-              title="네트워크가 복구되면 대기 중이던 요청이 자동으로 전송됩니다."
+              title={i18nT('header.offlineBadgeTooltip')}
             >
-              오프라인
+              {i18nT('header.offlineBadge')}
             </div>
           )}
           <TokenUsageIndicator />
@@ -1838,7 +1838,7 @@ function App() {
             type="button"
             onClick={() => setSettingsOpen(true)}
             data-testid="topbar-settings-button"
-            aria-label="설정 열기"
+            aria-label={i18nT('header.settingsAria')}
             className="px-2 py-1 border-2 border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)]"
             style={{ background: 'var(--color-surface)' }}
           >
