@@ -323,6 +323,95 @@
       "spawnFailure": "Failed to launch the git binary.",
       "dismiss": "Dismiss",
       "fallbackMessage": "Automation reported a failure but no diagnostic output was captured."
+    },
+    "errors": {
+      "disabled": "Git automation is disabled",
+      "noProject": "No git repository or project found",
+      "skipped": "Pipeline was skipped ({reason})",
+      "unknown": "Unknown error during automation run",
+      "notRepo": "Not a git repository",
+      "authFailed": "Git authentication failed — check your credentials",
+      "remoteUnreachable": "Cannot reach the remote repository"
+    },
+    "logs": {
+      "stepError": "[{label}] exit={code}{body}",
+      "stageStarted": "{stage} stage started",
+      "stageSucceeded": "{stage} stage succeeded",
+      "stageFailed": "{stage} stage failed",
+      "stageSkipped": "{stage} stage skipped"
+    },
+    "stage": {
+      "commit": "Auto commit",
+      "push": "Remote push",
+      "pr": "Open PR"
+    },
+    "state": {
+      "idle": "Idle",
+      "running": "Running",
+      "success": "Success",
+      "failed": "Failed"
+    },
+    "autoFlow": {
+      "aria": "Auto-dev loop progress",
+      "stepAria": "Step {step} {label} {state}",
+      "stage": {
+        "report": "Report progress",
+        "redistribute": "Leader redistribute",
+        "complete": "All complete",
+        "git": "Trigger Git automation"
+      },
+      "state": {
+        "idle": "Idle",
+        "running": "Running",
+        "done": "Done",
+        "failed": "Failed"
+      }
+    },
+    "tooltip": {
+      "errorPrefix": "Error: {message}",
+      "branchPrefix": "Branch: {branch}",
+      "commitPrefix": "Commit: {sha}",
+      "prPrefix": "PR: {url}",
+      "lastRunPrefix": "Last run: {timestamp} UTC"
+    },
+    "panel": {
+      "regionAria": "Git automation settings",
+      "title": "Git automation panel",
+      "riskAria": "Current risk: {label}",
+      "savedJustNowAria": "Settings saved",
+      "savedJustNowTitle": "Saved · {time}",
+      "savedJustNowLabel": "Saved",
+      "savedSteadyTitle": "Current settings match the saved state",
+      "savedSteadyLabel": "In sync",
+      "appliedTitle": "Applied at {datetime}",
+      "appliedLabel": "Applied · {relative}",
+      "dirtyTitle": "Changes not yet saved",
+      "dirtyLabel": "Unsaved",
+      "toggle": {
+        "ariaToEnable": "Enable automation",
+        "ariaToDisable": "Disable automation",
+        "titleEnabled": "Automation running — click to pause",
+        "titleDisabled": "Automation paused — click to resume",
+        "labelEnabled": "Active",
+        "labelDisabled": "Paused"
+      }
+    },
+    "panelLog": {
+      "settingsReset": "Git automation settings reset",
+      "settingsSaved": "Git automation saved: {flowLabel} ({riskLabel}) · {strategyLabel}{branchSuffix}{enabledSuffix}",
+      "savedFailed": "Git automation save failed: {message}",
+      "enabledTransitionUnsaved": "Git automation {transition} (unsaved)",
+      "transitionEnabled": "enabled",
+      "transitionDisabled": "disabled",
+      "branchSuffix": " · {branch}",
+      "disabledSuffix": " · inactive"
+    },
+    "lastRun": {
+      "never": "Never run",
+      "justNow": "Just now",
+      "minutesAgo": "{minutes} min ago",
+      "hoursAgo": "{hours} h ago",
+      "daysAgo": "{days} d ago"
     }
   },
   "tokenUsage": {

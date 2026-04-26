@@ -23,18 +23,15 @@
 
 import React from 'react';
 import type { GitAutomationLogEntry, GitAutomationLogOutcome } from '../types';
+import { useI18n } from '../i18n';
 
 // 4상태 뱃지 축. GitAutomationLogEntry.outcome 과 다른 층의 개념이라(스킵은
 // UI 상 "대기" 와 동치로 접는다) 별도 alias 로 유지한다.
 export type GitAutomationBadgeState = 'idle' | 'running' | 'success' | 'failed';
 export type GitAutomationBadgeStage = GitAutomationLogEntry['stage'];
 
-const STAGE_LABEL: Record<GitAutomationBadgeStage, string> = {
-  commit: '자동 커밋',
-  push: '원격 푸시',
-  pr: 'PR 생성',
-};
-
+// 지시 #47288e5d — 라벨을 i18n 으로 옮기고, 모듈-레벨 한국어 디폴트는 헬퍼가 t 함수를
+// 받아 동적으로 조회하도록 변경. 글리프는 ASCII/심볼이라 번역 대상이 아니다.
 const STATE_GLYPH: Record<GitAutomationBadgeState, string> = {
   idle: '○',
   running: '◔',
@@ -42,11 +39,17 @@ const STATE_GLYPH: Record<GitAutomationBadgeState, string> = {
   failed: '✕',
 };
 
-const STATE_LABEL: Record<GitAutomationBadgeState, string> = {
-  idle: '대기',
-  running: '실행중',
-  success: '성공',
-  failed: '실패',
+const STAGE_KEY: Record<GitAutomationBadgeStage, string> = {
+  commit: 'gitAutomation.stage.commit',
+  push: 'gitAutomation.stage.push',
+  pr: 'gitAutomation.stage.pr',
+};
+
+const STATE_KEY: Record<GitAutomationBadgeState, string> = {
+  idle: 'gitAutomation.state.idle',
+  running: 'gitAutomation.state.running',
+  success: 'gitAutomation.state.success',
+  failed: 'gitAutomation.state.failed',
 };
 
 // outcome → state 매핑. 'skipped' 는 "이번 실행에서 해당 단계를 건너뜀" 이라
@@ -65,12 +68,14 @@ export function deriveBadgeStateFromLog(
   return OUTCOME_TO_STATE[entry.outcome] ?? 'idle';
 }
 
-export function getGitAutomationStageLabel(stage: GitAutomationBadgeStage): string {
-  return STAGE_LABEL[stage];
+type Translator = (key: string) => string;
+
+export function getGitAutomationStageLabel(stage: GitAutomationBadgeStage, t: Translator): string {
+  return t(STAGE_KEY[stage]);
 }
 
-export function getGitAutomationBadgeStateLabel(state: GitAutomationBadgeState): string {
-  return STATE_LABEL[state];
+export function getGitAutomationBadgeStateLabel(state: GitAutomationBadgeState, t: Translator): string {
+  return t(STATE_KEY[state]);
 }
 
 export function getGitAutomationBadgeGlyph(state: GitAutomationBadgeState): string {
@@ -97,22 +102,24 @@ export function pickLatestByStage(
 export function formatGitAutomationTooltip(args: {
   stage: GitAutomationBadgeStage;
   state: GitAutomationBadgeState;
+  t: Translator;
   recent?: GitAutomationLogEntry;
   detail?: string;
   errorMessage?: string;
 }): string {
-  const lines = [`${STAGE_LABEL[args.stage]} · ${STATE_LABEL[args.state]}`];
+  const t = args.t;
+  const lines = [`${t(STAGE_KEY[args.stage])} · ${t(STATE_KEY[args.state])}`];
   const err = args.errorMessage ?? args.recent?.errorMessage;
-  if (err) lines.push(`오류: ${err}`);
+  if (err) lines.push(t('gitAutomation.tooltip.errorPrefix').replace('{message}', err));
   if (args.detail) lines.push(args.detail);
-  if (args.recent?.branch) lines.push(`브랜치: ${args.recent.branch}`);
-  if (args.recent?.commitSha) lines.push(`커밋: ${args.recent.commitSha}`);
-  if (args.recent?.prUrl) lines.push(`PR: ${args.recent.prUrl}`);
+  if (args.recent?.branch) lines.push(t('gitAutomation.tooltip.branchPrefix').replace('{branch}', args.recent.branch));
+  if (args.recent?.commitSha) lines.push(t('gitAutomation.tooltip.commitPrefix').replace('{sha}', args.recent.commitSha));
+  if (args.recent?.prUrl) lines.push(t('gitAutomation.tooltip.prPrefix').replace('{url}', args.recent.prUrl));
   if (args.recent?.at && Number.isFinite(args.recent.at)) {
     // epoch ms → "YYYY-MM-DD HH:mm:ss UTC". 서버/클라이언트 타임존 차이가 감사에서
     // 문제되지 않도록 일관성 있게 UTC 로 표기한다.
     const iso = new Date(args.recent.at).toISOString().replace('T', ' ').slice(0, 19);
-    lines.push(`최근 실행: ${iso} UTC`);
+    lines.push(t('gitAutomation.tooltip.lastRunPrefix').replace('{timestamp}', iso));
   }
   return lines.join('\n');
 }
@@ -141,11 +148,13 @@ export function GitAutomationStageBadge({
   className,
   compact,
 }: Props) {
-  const stageLabel = label ?? STAGE_LABEL[stage];
-  const stateLabel = STATE_LABEL[state];
+  const { t } = useI18n();
+  const stageLabel = label ?? t(STAGE_KEY[stage]);
+  const stateLabel = t(STATE_KEY[state]);
   const tooltip = formatGitAutomationTooltip({
     stage,
     state,
+    t,
     recent,
     detail,
     errorMessage,
@@ -195,11 +204,11 @@ export const AUTO_FLOW_STAGE_ORDER: ReadonlyArray<AutoFlowStageKey> = [
   'git',
 ];
 
-const AUTO_FLOW_STAGE_LABEL: Record<AutoFlowStageKey, string> = {
-  report: '개선 보고',
-  redistribute: '리더 재분배',
-  complete: '전원 완료',
-  git: 'Git 자동화 발동',
+const AUTO_FLOW_STAGE_KEY: Record<AutoFlowStageKey, string> = {
+  report: 'gitAutomation.autoFlow.stage.report',
+  redistribute: 'gitAutomation.autoFlow.stage.redistribute',
+  complete: 'gitAutomation.autoFlow.stage.complete',
+  git: 'gitAutomation.autoFlow.stage.git',
 };
 
 const AUTO_FLOW_STAGE_GLYPH: Record<AutoFlowStageKey, string> = {
@@ -209,19 +218,19 @@ const AUTO_FLOW_STAGE_GLYPH: Record<AutoFlowStageKey, string> = {
   git: '⚙',
 };
 
-const AUTO_FLOW_STATE_LABEL: Record<AutoFlowStageState, string> = {
-  idle: '대기',
-  running: '진행중',
-  done: '완료',
-  failed: '실패',
+const AUTO_FLOW_STATE_KEY: Record<AutoFlowStageState, string> = {
+  idle: 'gitAutomation.autoFlow.state.idle',
+  running: 'gitAutomation.autoFlow.state.running',
+  done: 'gitAutomation.autoFlow.state.done',
+  failed: 'gitAutomation.autoFlow.state.failed',
 };
 
-export function getAutoFlowStageLabel(stage: AutoFlowStageKey): string {
-  return AUTO_FLOW_STAGE_LABEL[stage];
+export function getAutoFlowStageLabel(stage: AutoFlowStageKey, t: Translator): string {
+  return t(AUTO_FLOW_STAGE_KEY[stage]);
 }
 
-export function getAutoFlowStateLabel(state: AutoFlowStageState): string {
-  return AUTO_FLOW_STATE_LABEL[state];
+export function getAutoFlowStateLabel(state: AutoFlowStageState, t: Translator): string {
+  return t(AUTO_FLOW_STATE_KEY[state]);
 }
 
 // GitAutomationDigest 의 commit/push/pr 상태만 있을 때 4단계 메타 상태를
@@ -278,6 +287,7 @@ export function AutoFlowProgressBar({
   className,
   ariaLabel,
 }: AutoFlowProgressBarProps) {
+  const { t } = useI18n();
   const allDone = AUTO_FLOW_STAGE_ORDER.every(key => stages[key] === 'done');
   const anyFailed = AUTO_FLOW_STAGE_ORDER.some(key => stages[key] === 'failed');
   const gitActivated =
@@ -297,12 +307,12 @@ export function AutoFlowProgressBar({
       data-all-done={allDone ? 'true' : undefined}
       data-any-failed={anyFailed ? 'true' : undefined}
       data-git-activated={gitActivated ? 'true' : undefined}
-      aria-label={ariaLabel ?? '자동 개발 루프 진행 상태'}
+      aria-label={ariaLabel ?? t('gitAutomation.autoFlow.aria')}
     >
       {AUTO_FLOW_STAGE_ORDER.map((key, idx) => {
         const state = stages[key];
-        const label = AUTO_FLOW_STAGE_LABEL[key];
-        const stateLabel = AUTO_FLOW_STATE_LABEL[state];
+        const label = t(AUTO_FLOW_STAGE_KEY[key]);
+        const stateLabel = t(AUTO_FLOW_STATE_KEY[state]);
         const glyph = AUTO_FLOW_STAGE_GLYPH[key];
         const prevKey = idx > 0 ? AUTO_FLOW_STAGE_ORDER[idx - 1] : null;
         const prevState = prevKey ? stages[prevKey] : null;
@@ -312,7 +322,10 @@ export function AutoFlowProgressBar({
             className="auto-flow-progress__step"
             data-stage={key}
             data-state={state}
-            aria-label={`${idx + 1}단계 ${label} ${stateLabel}`}
+            aria-label={t('gitAutomation.autoFlow.stepAria')
+              .replace('{step}', String(idx + 1))
+              .replace('{label}', label)
+              .replace('{state}', stateLabel)}
             title={`${label} · ${stateLabel}`}
           >
             {prevState && (

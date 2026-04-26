@@ -13,6 +13,8 @@ import {
   deriveBadgeStateFromLog,
   pickLatestByStage,
 } from './GitAutomationStageBadge';
+import { resolveLogEntryMessage } from '../utils/gitAutomationI18n';
+import { useI18n } from '../i18n';
 
 export type AgentLogLine = {
   id: string;
@@ -110,6 +112,8 @@ export function AgentContextBubble({
   gitAutomation,
 }: Props) {
   const reducedMotion = useReducedMotion();
+  // 지시 #a933c3c9 — 백엔드가 채운 errorKey 를 현재 locale 로 풀어 노출.
+  const { t } = useI18n();
   const relevant = useMemo(
     () => filterLogsForAgent(agent, logs, maxLines),
     [agent, logs, maxLines],
@@ -233,7 +237,7 @@ export function AgentContextBubble({
           role="alert"
           data-tone="failure"
           aria-label={`Git 자동화 ${failedStageLabelKr[firstFailedStripKey]} 단계 실패`}
-          title={firstFailedStripEntry.errorMessage || '자세한 내용은 패널에서 확인하세요'}
+          title={resolveLogEntryMessage(firstFailedStripEntry, t) || '자세한 내용은 패널에서 확인하세요'}
         >
           <span className="git-auto-alert__icon" aria-hidden>✕</span>
           <span className="git-auto-alert__title">

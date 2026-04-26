@@ -597,15 +597,29 @@ export function buildGitAutomationLogEntries(
 
   // 설정 비활성·프로젝트 누락: 단일 skipped 엔트리로 요약해 UI 가 "자동화가 돌지 않음"
   // 을 한눈에 구분할 수 있게 한다.
+  // 지시 #a933c3c9 — errorMessage 는 하위 호환을 위해 유지하되, 백엔드는 errorKey 를
+  // 함께 채워 UI 단에서 t() 로 번역할 수 있게 한다.
   if (run.skipped) {
+    const isDisabled = run.skipped === 'disabled';
+    const isNoProject = run.skipped === 'no-project';
+    const errorKey = isDisabled
+      ? 'gitAutomation.errors.disabled'
+      : isNoProject
+        ? 'gitAutomation.errors.noProject'
+        : 'gitAutomation.errors.skipped';
+    const errorParams = !isDisabled && !isNoProject
+      ? { reason: String(run.skipped) }
+      : undefined;
     return [{
       ...base,
       stage: 'commit',
       outcome: 'skipped',
       at: now(),
-      errorMessage: run.skipped === 'disabled'
+      errorMessage: isDisabled
         ? 'Git 자동화가 비활성 상태입니다'
         : `파이프라인이 스킵되었습니다 (${run.skipped})`,
+      errorKey,
+      ...(errorParams ? { errorParams } : {}),
     }];
   }
 
@@ -632,6 +646,8 @@ export function buildGitAutomationLogEntries(
           at: failAt,
           exitCode: step.code,
           errorMessage: formatStepError(step),
+          errorKey: 'gitAutomation.logs.stepError',
+          errorParams: stepErrorParams(step),
         });
         break;
       }
@@ -660,6 +676,8 @@ export function buildGitAutomationLogEntries(
         at: endAt,
         exitCode: step.code,
         errorMessage: formatStepError(step),
+        errorKey: 'gitAutomation.logs.stepError',
+        errorParams: stepErrorParams(step),
       });
       break;
     }
@@ -668,12 +686,16 @@ export function buildGitAutomationLogEntries(
   // run 이 전반적으로 실패했는데 results 가 비어 있는 방어 경로(예: executeGitAutomation
   // 자체가 try/catch 로 error 만 채움). 최소한의 failed 엔트리를 한 건 남겨 UI 침묵을 막는다.
   if (!run.ok && !run.skipped && entries.length === 0) {
+    const hasRawError = !!run.error;
     entries.push({
       ...base,
       stage: 'commit',
       outcome: 'failed',
       at: now(),
       errorMessage: run.error || '자동화 실행 중 알 수 없는 오류가 발생했습니다',
+      // 서버 측 raw error 가 있으면 그 문자열을 그대로 노출(개발자 메시지) — 키 부여 생략.
+      // 비어 있을 때만 i18n 키로 폴백한다.
+      ...(hasRawError ? {} : { errorKey: 'gitAutomation.errors.unknown' }),
     });
   }
   // pendingStage 는 디버그용으로 남겨도 되지만, 외부 소비자에게 노출할 필요는 없다.
@@ -686,6 +708,15 @@ function formatStepError(step: GitAutomationStepResult): string {
   const stderr = step.stderr?.trim();
   const body = stderr ? ` — ${stderr}` : '';
   return `[${step.label}] exit=${code}${body}`.slice(0, 400);
+}
+
+// 지시 #a933c3c9 — formatStepError 와 동일 정보를 i18n placeholder 형태로 노출.
+// UI 가 t('gitAutomation.logs.stepError', params) 로 자체 번역할 수 있게 한다.
+function stepErrorParams(step: GitAutomationStepResult): Record<string, string | number> {
+  const code = step.code === null || step.code === undefined ? '?' : String(step.code);
+  const stderr = step.stderr?.trim();
+  const body = stderr ? ` — ${stderr}` : '';
+  return { label: step.label, code, body };
 }
 
 // 설정값을 저장하기 전 최소한의 정합성을 검증한다. 빈 템플릿/잘못된 flowLevel

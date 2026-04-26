@@ -21,6 +21,7 @@ import {
 } from '../types';
 import type { GitAutomationStepResult } from '../utils/gitAutomation';
 import { GitAutomationFailureNotice } from './GitAutomationFailureNotice';
+import { useI18n } from '../i18n';
 
 // 태스크 경계 커밋 옵션별 "UI 전용 힌트". types.ts 의 COMMIT_STRATEGY_LABEL 은 요약
 // 라벨만 담당하고, 상세 설명은 컴포넌트 수준에서 관리한다(시안 문구 변경 시 types.ts
@@ -423,6 +424,7 @@ export function GitAutomationPanel({
   lastCommitHash, lastPushAt, lastError, lastFailure, onDismissError, appliedAt,
   activeBranch, branchStrategy,
 }: GitAutomationPanelProps) {
+  const { t } = useI18n();
   // 활성 토글의 글로우 펄스를 prefers-reduced-motion 사용자에게 끈다 — 색은 유지.
   const reducedMotion = useReducedMotion();
   const baseline = useMemo<GitAutomationSettings>(() => ({ ...DEFAULT_AUTOMATION, ...(initial ?? {}) }), [initial]);
@@ -519,13 +521,13 @@ export function GitAutomationPanel({
     setCommitMessagePrefix(baseline.commitMessagePrefix);
     setBranchModeSketch(baseline.branchMode);
     setBranchNameSketch(baseline.branchModeNewName);
-    onLog?.('Git 자동화 설정 초기화');
+    onLog?.(t('gitAutomation.panelLog.settingsReset'));
   };
 
   const save = () => {
     if (needsNewBranchInput && !newBranchValidation.ok) {
       // 저장 버튼이 disabled 여도 Enter 키나 폼 submit 경로로 들어오는 경우를 방어한다.
-      onLog?.(`Git 자동화 저장 실패: ${newBranchValidation.message}`);
+      onLog?.(t('gitAutomation.panelLog.savedFailed').replace('{message}', newBranchValidation.message));
       return;
     }
     const next: GitAutomationSettings = {
@@ -548,8 +550,18 @@ export function GitAutomationPanel({
     };
     onSave?.(next);
     const strategyLabel = BRANCH_STRATEGY_LABEL[branchStrategyChoice]?.label ?? branchStrategyChoice;
-    const branchSuffix = needsNewBranchInput ? ` · ${next.newBranchName}` : '';
-    onLog?.(`Git 자동화 저장: ${FLOW_OPTIONS.find(o => o.key === flow)?.label} (${risk.label}) · ${strategyLabel}${branchSuffix}${enabled ? '' : ' · 비활성'}`);
+    const branchSuffix = needsNewBranchInput
+      ? t('gitAutomation.panelLog.branchSuffix').replace('{branch}', next.newBranchName)
+      : '';
+    const enabledSuffix = enabled ? '' : t('gitAutomation.panelLog.disabledSuffix');
+    onLog?.(
+      t('gitAutomation.panelLog.settingsSaved')
+        .replace('{flowLabel}', FLOW_OPTIONS.find(o => o.key === flow)?.label ?? '')
+        .replace('{riskLabel}', risk.label)
+        .replace('{strategyLabel}', strategyLabel)
+        .replace('{branchSuffix}', branchSuffix)
+        .replace('{enabledSuffix}', enabledSuffix),
+    );
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
     setJustSaved(Date.now());
     savedTimerRef.current = setTimeout(() => setJustSaved(null), 2800);
@@ -558,7 +570,10 @@ export function GitAutomationPanel({
   const toggleEnabled = () => {
     const nv = !enabled;
     setEnabled(nv);
-    onLog?.(`Git 자동화 ${nv ? '활성화' : '비활성화'} (미저장)`);
+    const transition = nv
+      ? t('gitAutomation.panelLog.transitionEnabled')
+      : t('gitAutomation.panelLog.transitionDisabled');
+    onLog?.(t('gitAutomation.panelLog.enabledTransitionUnsaved').replace('{transition}', transition));
   };
 
   const optionSummary = useMemo(() => deriveAutomationOptions({ flow, enabled }), [flow, enabled]);
@@ -577,13 +592,13 @@ export function GitAutomationPanel({
   return (
     <section
       role="region"
-      aria-label="Git 자동화 설정"
+      aria-label={t('gitAutomation.panel.regionAria')}
       className="mb-4 bg-[#0f3460] border-2 border-[var(--pixel-border)] p-4 space-y-4"
     >
       <header className="flex items-center gap-2 flex-wrap">
         <GitBranch size={16} className="text-[var(--pixel-accent)]" />
-        <h3 className="text-sm font-bold text-[var(--pixel-accent)] uppercase tracking-wider">Git 자동화 패널</h3>
-        <span className={`px-2 py-0.5 text-[10px] font-bold uppercase border-2 tabular-nums ${risk.chip}`} aria-label={`현재 위험도 ${risk.label}`}>
+        <h3 className="text-sm font-bold text-[var(--pixel-accent)] uppercase tracking-wider">{t('gitAutomation.panel.title')}</h3>
+        <span className={`px-2 py-0.5 text-[10px] font-bold uppercase border-2 tabular-nums ${risk.chip}`} aria-label={t('gitAutomation.panel.riskAria').replace('{label}', risk.label)}>
           <span className={`inline-block w-1.5 h-1.5 mr-1 align-middle ${risk.dot}`} />
           {risk.label}
         </span>
@@ -596,18 +611,18 @@ export function GitAutomationPanel({
             <span
               role="status"
               className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border-2 border-emerald-400 bg-emerald-500/25 text-emerald-100 animate-[pulse_1.2s_ease-in-out_1]"
-              aria-label="설정이 저장되었습니다"
-              title={`저장됨 · ${new Date(justSaved).toLocaleTimeString('ko-KR')}`}
+              aria-label={t('gitAutomation.panel.savedJustNowAria')}
+              title={t('gitAutomation.panel.savedJustNowTitle').replace('{time}', new Date(justSaved).toLocaleTimeString('ko-KR'))}
             >
-              <CheckCircle2 size={10} /> 저장됨
+              <CheckCircle2 size={10} /> {t('gitAutomation.panel.savedJustNowLabel')}
             </span>
           )}
           {!justSaved && !dirty && (
             <span
               className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border-2 border-emerald-500/40 bg-emerald-500/10 text-emerald-300/90"
-              title="현재 설정이 저장된 상태와 일치합니다"
+              title={t('gitAutomation.panel.savedSteadyTitle')}
             >
-              <CheckCircle2 size={10} /> 저장된 상태
+              <CheckCircle2 size={10} /> {t('gitAutomation.panel.savedSteadyLabel')}
             </span>
           )}
           {/* 디자이너: "적용됨" 배지 — onSave 이후 호출 측이 appliedAt 을 채워주면
@@ -616,17 +631,17 @@ export function GitAutomationPanel({
           {!dirty && appliedAt && (
             <span
               className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border-2 border-cyan-400/70 bg-cyan-500/15 text-cyan-100"
-              title={`${new Date(appliedAt).toLocaleString('ko-KR')}에 실제 적용됨`}
+              title={t('gitAutomation.panel.appliedTitle').replace('{datetime}', new Date(appliedAt).toLocaleString('ko-KR'))}
             >
-              <CheckCircle2 size={10} /> 적용됨 · {formatRelativeTime(appliedAt)}
+              <CheckCircle2 size={10} /> {t('gitAutomation.panel.appliedLabel').replace('{relative}', formatRelativeTime(appliedAt))}
             </span>
           )}
           {!justSaved && dirty && (
             <span
               className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border-2 border-amber-400/70 bg-amber-500/15 text-amber-200"
-              title="변경 사항이 아직 저장되지 않았습니다"
+              title={t('gitAutomation.panel.dirtyTitle')}
             >
-              <AlertTriangle size={10} /> 미저장
+              <AlertTriangle size={10} /> {t('gitAutomation.panel.dirtyLabel')}
             </span>
           )}
         </div>
@@ -638,9 +653,9 @@ export function GitAutomationPanel({
           type="button"
           role="switch"
           aria-checked={enabled}
-          aria-label={`자동화 ${enabled ? '비활성화' : '활성화'}`}
+          aria-label={enabled ? t('gitAutomation.panel.toggle.ariaToDisable') : t('gitAutomation.panel.toggle.ariaToEnable')}
           onClick={toggleEnabled}
-          title={enabled ? '자동화 동작 중 — 클릭하면 일시 중지' : '자동화 일시 중지됨 — 클릭하면 재개'}
+          title={enabled ? t('gitAutomation.panel.toggle.titleEnabled') : t('gitAutomation.panel.toggle.titleDisabled')}
           className={`ml-auto inline-flex items-center gap-2 px-2 py-1 text-[10px] font-bold uppercase tracking-wider border-2 transition-colors ${focusRing} ${
             enabled
               ? 'border-emerald-400 bg-emerald-500/15 text-emerald-200 hover:bg-emerald-500/25'
@@ -656,7 +671,7 @@ export function GitAutomationPanel({
             }`}
           />
           <Power size={10} />
-          {enabled ? '활성' : '일시 중지'}
+          {enabled ? t('gitAutomation.panel.toggle.labelEnabled') : t('gitAutomation.panel.toggle.labelDisabled')}
           {/* 디자이너: 미니 토글 트랙 — 활성 여부를 색+위치 두 축으로 동시에 표현해 색각 이상 사용자도 즉시 인지. */}
           <span
             aria-hidden="true"

@@ -240,6 +240,11 @@ export interface GitAutomationLogEntry {
   // 로 그대로 노출하고, 'skipped' 일 때는 스킵 원인(disabled/no-project)을 담는다.
   // 페이로드 비용을 막기 위해 400자 상한으로 잘라 서버가 채운다.
   errorMessage?: string;
+  // 지시 #a933c3c9 — 백엔드는 키만 채우고 UI 가 t() 로 번역하는 i18n 경로.
+  // errorMessage 는 하위 호환을 위해 유지되며, errorKey 가 있으면 UI 가 우선해 번역한다.
+  // errorParams 는 {status}, {reason}, {label}, {code}, {body} 같은 placeholder 치환 값.
+  errorKey?: string;
+  errorParams?: Record<string, string | number>;
 }
 
 // MCP `trigger_git_automation` / GET `get_git_automation_settings` 단에서만 쓰이는
