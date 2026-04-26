@@ -92,6 +92,12 @@ export interface ReadFileResult {
   end_line: number;         // 0-based exclusive — end_line-1 이 마지막 반환 줄
   total_lines: number;
   has_more: boolean;
+  /**
+   * has_more=true 일 때 다음 호출에 그대로 넘기면 이어읽기가 되는 offset 값.
+   * 8B 급 로컬 모델이 end_line 으로부터 next offset 을 산술 계산하지 못하는 회귀가
+   * 있어, 명시 필드로 노출한다. has_more=false 면 null.
+   */
+  next_offset: number | null;
 }
 
 const DEFAULT_READ_LIMIT = 1000;
@@ -124,12 +130,14 @@ export async function readFileChunk(
   }
   const total = lineNo;
   const endLineExclusive = Math.min(offset + effectiveLimit, total);
+  const hasMore = endLineExclusive < total;
   return {
     content: lines.join('\n'),
     start_line: offset,
     end_line: endLineExclusive,
     total_lines: total,
-    has_more: endLineExclusive < total,
+    has_more: hasMore,
+    next_offset: hasMore ? endLineExclusive : null,
   };
 }
 
@@ -386,28 +394,39 @@ const DEFAULT_EXCLUDE_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '
  * dir(기본 루트) 하위를 재귀 탐색해 상대경로 리스트를 돌려준다. 노이즈 디렉터리는
  * 자동 제외. glob 매칭은 간단한 `*.ext` / prefix 필터만 지원한다(본격 glob 엔진은
  * 과함 — 모델이 필요하면 grep_files 로 우회).
+ *
+ * maxDepth: dir 기준 깊이 상한(0 = dir 자체 직속만, 1 = 한 단계 하위까지). 기본은
+ * Infinity(전체 재귀). LLMTycoon 같은 200+ 파일 프로젝트에서 모델에게 한 번에
+ * 전체 트리를 던지면 토큰이 폭발하므로, 첫 호출은 maxDepth=1~2 로 좁히는 것이 좋다.
  */
 export async function listFiles(
   workspacePath: string,
   dir = '.',
   globPattern?: string,
+  maxDepth: number = Number.POSITIVE_INFINITY,
 ): Promise<ListEntry[]> {
   const rootAbs = resolveSafePath(workspacePath, dir);
   const results: ListEntry[] = [];
-  const stack: string[] = [rootAbs];
+  // depth 를 함께 들고 다닌다. base(dir) 의 직속 자식이 depth 0.
+  const stack: { abs: string; depth: number }[] = [{ abs: rootAbs, depth: 0 }];
   while (stack.length > 0 && results.length < LIST_MAX_ENTRIES) {
-    const current = stack.pop()!;
+    const cur = stack.pop()!;
     let entries: string[];
-    try { entries = readdirSync(current); } catch { continue; }
+    try { entries = readdirSync(cur.abs); } catch { continue; }
     for (const name of entries) {
       if (results.length >= LIST_MAX_ENTRIES) break;
       if (DEFAULT_EXCLUDE_DIRS.has(name)) continue;
-      const abs = path.join(current, name);
+      const abs = path.join(cur.abs, name);
       const rel = path.relative(path.resolve(workspacePath), abs).split(path.sep).join('/');
       let st: ReturnType<typeof statSync>;
       try { st = statSync(abs); } catch { continue; }
       if (st.isDirectory()) {
-        stack.push(abs);
+        // 현재 깊이에서 이 디렉터리는 항상 결과에 노출(glob 미지정시). 더 들어갈지는
+        // depth + 1 < maxDepth 인지로 결정 — maxDepth=1 이면 dir 직속(depth 0)
+        // 디렉터리는 보이지만 그 안으로 내려가진 않는다.
+        if (cur.depth + 1 < maxDepth) {
+          stack.push({ abs, depth: cur.depth + 1 });
+        }
         if (!globPattern) results.push({ path: rel, type: 'dir' });
       } else if (st.isFile()) {
         if (globPattern && !matchSimpleGlob(rel, globPattern)) continue;

@@ -14,6 +14,8 @@ import {
   listFiles as listFilesFs,
   readFileChunk,
   writeFileContent,
+  type ListEntry,
+  type ReadFileResult,
 } from './workspace-fs';
 
 export interface LocalToolContext {
@@ -110,14 +112,14 @@ export const WORKSPACE_FILE_TOOL_DEFINITIONS: readonly ToolDefinition[] = [
   {
     name: 'read_file',
     description:
-      '워크스페이스 파일의 줄 범위를 읽습니다. 대용량 파일(수십만 줄)도 전체를 한 번에 가져오지 말고 offset/limit 으로 필요한 창만 요청하세요. 응답에 포함된 total_lines/has_more 로 이어읽기 여부를 판단합니다.',
+      '워크스페이스 파일의 줄 범위를 읽습니다. 대용량 파일(수십만 줄)도 전체를 한 번에 가져오지 말고 offset/limit 으로 필요한 창만 요청하세요. 응답은 한 줄 메타 헤더(start/end/total/next_offset) + 빈 줄 + 원문(JSON 비포장) 입니다. 다음 청크를 이어 읽으려면 응답의 next_offset 값을 그대로 다음 호출의 offset 으로 넘기세요(has_more=false 면 next_offset=null).',
     parameters: {
       type: 'object',
       required: ['path'],
       properties: {
         path: { type: 'string', description: '워크스페이스 기준 상대경로' },
         offset: { type: 'integer', minimum: 0, description: '시작 줄 번호(0-based). 기본 0.' },
-        limit: { type: 'integer', minimum: 1, maximum: 10000, description: '가져올 줄 수. 기본 1000, 최대 10000.' },
+        limit: { type: 'integer', minimum: 1, maximum: 10000, description: '가져올 줄 수. 기본 200(로컬 LLM 컨텍스트 보호), 최대 10000.' },
       },
     },
   },
@@ -154,12 +156,13 @@ export const WORKSPACE_FILE_TOOL_DEFINITIONS: readonly ToolDefinition[] = [
   {
     name: 'list_files_fs',
     description:
-      '워크스페이스 파일 트리를 조회합니다. `.git` / `node_modules` / `dist` / `build` 등 노이즈 디렉터리는 자동 제외됩니다. 코드 그래프가 아니라 실제 파일 시스템입니다 — 코드 그래프 노드 조회는 list_files 를 쓰세요.',
+      '워크스페이스 파일 트리를 조회합니다. `.git` / `node_modules` / `dist` / `build` 등 노이즈 디렉터리는 자동 제외됩니다. 코드 그래프가 아니라 실제 파일 시스템입니다 — 코드 그래프 노드 조회는 list_files 를 쓰세요. 응답은 들여쓰기 텍스트 트리(JSON 아님)이며, 처음 호출은 max_depth=1 또는 2 로 좁혀 시작하고 필요한 디렉터리를 식별한 뒤 dir 인자로 좁혀 들어가세요.',
     parameters: {
       type: 'object',
       properties: {
         dir: { type: 'string', description: '탐색 시작 디렉터리. 기본 워크스페이스 루트.' },
         glob: { type: 'string', description: '파일 매칭 패턴 (예: `src/**/*.ts`, `*.md`).' },
+        max_depth: { type: 'integer', minimum: 0, description: '탐색 깊이 상한. 0=dir 직속만, 1=한 단계 더, ... 기본 1(로컬 LLM 토큰 절약). 전체를 보고 싶으면 큰 값(예: 100) 명시.' },
       },
     },
   },
@@ -299,9 +302,14 @@ export async function executeLocalTool(
       if (name === 'read_file') {
         const p = requireString(args.path, 'path');
         const offset = toNonNegInt(args.offset);
-        const limit = args.limit === undefined ? undefined : toPosInt(args.limit);
+        // 로컬 LLM 컨텍스트 보호 — 모델이 limit 을 생략하면 1000줄(JSON wrap 시 수천
+        // 토큰) 이 한꺼번에 떨어져 8B 급 모델이 처리·요약을 못 하고 영문 풀어쓰기로
+        // 빠지는 회귀가 있다. 첫 호출 디폴트를 보수적으로 200줄로 낮추고, 모델이
+        // 의도적으로 더 보고 싶으면 limit 을 명시하도록 한다.
+        const LOCAL_DEFAULT_READ_LIMIT = 200;
+        const limit = args.limit === undefined ? LOCAL_DEFAULT_READ_LIMIT : toPosInt(args.limit);
         const r = await readFileChunk(ctx.workspacePath, p, offset, limit);
-        return JSON.stringify(r);
+        return formatReadFileResult(p, r);
       }
       if (name === 'write_file') {
         const p = requireString(args.path, 'path');
@@ -322,8 +330,15 @@ export async function executeLocalTool(
       if (name === 'list_files_fs') {
         const dir = typeof args.dir === 'string' && args.dir ? args.dir : '.';
         const glob = typeof args.glob === 'string' && args.glob ? args.glob : undefined;
-        const entries = await listFilesFs(ctx.workspacePath, dir, glob);
-        return JSON.stringify(entries);
+        // 로컬 LLM 토큰 보호 — 디폴트 max_depth=1 로 좁혀 첫 호출에서 평탄
+        // 200+ 엔트리 JSON 이 떨어지지 않게 한다. 모델이 의도적으로 더 깊이 보려면
+        // max_depth 를 명시해 호출.
+        const LOCAL_DEFAULT_MAX_DEPTH = 1;
+        const maxDepth = args.max_depth === undefined
+          ? LOCAL_DEFAULT_MAX_DEPTH
+          : toNonNegInt(args.max_depth);
+        const entries = await listFilesFs(ctx.workspacePath, dir, glob, maxDepth);
+        return formatListFilesAsTree(dir, entries);
       }
       if (name === 'grep_files') {
         const pattern = requireString(args.pattern, 'pattern');
@@ -357,4 +372,60 @@ function toPosInt(v: unknown): number {
   const n = Number(v);
   if (!Number.isFinite(n) || n < 1 || !Number.isInteger(n)) throw new Error('limit 은 양의 정수');
   return n;
+}
+
+// ─── 모델 응답 포맷터 ────────────────────────────────────────────────────────
+// 두 헬퍼 모두 "JSON.stringify 비포장 + 헤더 한 줄 + 본문 raw" 원칙. 8B 급 로컬
+// 모델에서 JSON wrap 응답이 유발하던 회귀(content 의 \n→\\n 부풀림 + 영문
+// 풀어쓰기 환각) 를 동시에 차단하기 위함.
+
+/**
+ * read_file 결과를 모델용 텍스트로 직렬화. 메타 두 줄 + `---` 구분선 + 원문(raw) .
+ * has_more=false 면 (complete), true 면 (has_more=true, next_offset=N) 를 표기해
+ * 모델이 산술 계산 없이 다음 호출의 offset 을 그대로 베껴 쓸 수 있게 한다.
+ */
+export function formatReadFileResult(filePath: string, r: ReadFileResult): string {
+  const status = r.has_more
+    ? `has_more=true, next_offset=${r.next_offset}`
+    : 'complete';
+  return [
+    `read_file: ${filePath}`,
+    `range: lines ${r.start_line}-${r.end_line} of ${r.total_lines} (${status})`,
+    '---',
+    r.content,
+  ].join('\n');
+}
+
+// listFiles 가 반환하는 최대 entry 수. workspace-fs.ts 의 LIST_MAX_ENTRIES 와 동기화.
+// (값을 export 해 import 하기보다, 절단 감지 휴리스틱으로 hardcode — 500 보다 작은
+// 결과는 절단이 아님이 보장되고, 500 일 때만 안내가 붙는다.)
+const LIST_MAX_ENTRIES_HEURISTIC = 500;
+
+/**
+ * list_files_fs 결과를 모델용 텍스트 트리로 직렬화. 정렬 규칙: 디렉터리 먼저(알파벳),
+ * 그 다음 파일(알파벳). 디렉터리는 trailing `/`, 파일은 `path\tsize` 형식. 평탄
+ * 경로(들여쓰기 없음) 라 어떤 깊이에서도 path 자체로 위치를 식별할 수 있다.
+ *
+ * entries.length 가 500(= LIST_MAX_ENTRIES) 에 도달하면 "절단됐을 수 있음 — dir/glob/
+ * max_depth 로 좁혀라" 안내를 헤더에 첨부.
+ */
+export function formatListFilesAsTree(dir: string, entries: ListEntry[]): string {
+  const sorted = [...entries].sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+    return a.path.localeCompare(b.path);
+  });
+  const truncationNote = entries.length >= LIST_MAX_ENTRIES_HEURISTIC
+    ? ' (절단됐을 수 있음 — dir/glob/max_depth 로 좁혀 재호출 권장)'
+    : '';
+  const lines: string[] = [
+    `list_files_fs: ${dir} (${sorted.length} entries)${truncationNote}`,
+  ];
+  for (const e of sorted) {
+    if (e.type === 'dir') {
+      lines.push(`${e.path}/`);
+    } else {
+      lines.push(e.size !== undefined ? `${e.path}\t${e.size}b` : e.path);
+    }
+  }
+  return lines.join('\n');
 }
