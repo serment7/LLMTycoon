@@ -45,15 +45,15 @@
       },
       "passwordMatch": "Passwords match.",
       "passwordMismatch": "Passwords don't match.",
-      "oauthIntro": "Signing up with your {provider} account. The account is created automatically on first login.",
+      "oauthIntro": "Sign up with your {provider} account. We'll create one automatically on first sign-in.",
       "oauthCta": "Sign up with {provider}",
       "errors": {
         "usernameTooShort": "Username must be at least 3 characters.",
-        "usernameCharset": "Username may only contain letters, digits, and ._- characters.",
-        "emailInvalid": "Email format is invalid.",
+        "usernameCharset": "Username may only contain letters, digits, and the characters . _ -",
+        "emailInvalid": "Enter a valid email address.",
         "passwordTooShort": "Password must be at least 8 characters.",
         "passwordCharset": "Password must include both letters and digits.",
-        "passwordMismatch": "Password confirmation doesn't match."
+        "passwordMismatch": "Passwords don't match."
       }
     }
   },
@@ -106,8 +106,8 @@
       "addAll": "Add all",
       "addedBadge": "Added",
       "failedBadge": "Failed to add",
-      "seedOnCreate": "Seed on create",
-      "seedCount": "Seed {count} on create",
+      "seedOnCreate": "Add when project is created",
+      "seedCount": "Add {count} when project is created",
       "pendingSeed": "Pending",
       "countLabel": "Team size: {count} (default 5)",
       "countAriaLabel": "Recommended team size (2–5)",
@@ -115,7 +115,7 @@
         "heuristic": "Heuristic fallback",
         "claude": "Recommended by Claude",
         "cache": "Cached",
-        "translated": "Translated"
+        "translated": "Re-translated"
       }
     }
   },
@@ -168,6 +168,17 @@
         "failBadge": "Couldn't add this teammate.",
         "retry": "Retry"
       }
+    },
+    "applyTeam": {
+      "errors": {
+        "fetchMissing": "fetch is not available — inject options.fetch.",
+        "invalidProjectId": "projectId must be a non-empty string.",
+        "invalidDescription": "description must be a non-empty string.",
+        "hireFailed": "hire failed ({status})",
+        "hireMissingId": "Hire response is missing an id.",
+        "attachFailed": "attach failed ({status})",
+        "unknown": "Unknown error"
+      }
     }
   },
   "multimedia": {
@@ -193,14 +204,14 @@
     "steps": {
       "locale": {
         "title": "Choose your language",
-        "body": "You can switch anytime from the settings. The interface and Claude recommendations follow your choice."
+        "body": "You can switch anytime in Settings. The interface and Claude recommendations follow your choice."
       },
       "mcp": {
         "title": "Pick an MCP transport",
         "body": "Use stdio for local tools and streamable HTTP for remote services. You can change it per project later."
       },
       "recommend": {
-        "title": "Get a team recommended",
+        "title": "Get a team recommendation",
         "body": "Describe your project — Claude suggests a starter team. Here's a preview:",
         "demoDescription": "Payment module hardening — PCI audit + token encryption"
       },
@@ -218,6 +229,85 @@
       "language": "Language",
       "more": "More",
       "moreAria": "More actions menu ({count})"
+    },
+    "metrics": {
+      "zoom": {
+        "label": "Zoom: ",
+        "aria": "Zoom {percent} percent",
+        "title": "Zoom {percent}%"
+      },
+      "agents": {
+        "label": "Agents: ",
+        "aria": "Total agents: {count}",
+        "title": "Total agents: {count}"
+      },
+      "totalProjects": {
+        "label": "Total projects: ",
+        "aria": "Total projects under management: {count}",
+        "title": "Total projects: {count}"
+      }
+    },
+    "workspaceActions": {
+      "requireProject": "Select a project first",
+      "openInFileManager": {
+        "title": "Open this project's workspace folder in Explorer/Finder",
+        "aria": "Open workspace folder in the system file manager"
+      },
+      "openInVscode": {
+        "title": "Open this workspace in Visual Studio Code (requires `code` in PATH)",
+        "aria": "Open workspace folder in Visual Studio Code"
+      },
+      "openInCursor": {
+        "title": "Open this workspace in Cursor (requires `cursor` in PATH)",
+        "aria": "Open workspace folder in Cursor"
+      }
+    }
+  },
+  "sidebar": {
+    "title": "Workspace",
+    "currentProject": {
+      "label": "Current project",
+      "unselectedTitle": "No project selected",
+      "unselectedAria": "No project is selected",
+      "unselectedName": "Not selected",
+      "aria": "Current project: {name}"
+    },
+    "nav": {
+      "game": {
+        "label": "Office floor",
+        "subtitle": "Realtime view"
+      },
+      "projects": {
+        "label": "Projects",
+        "subtitle": "Manage"
+      },
+      "tasks": {
+        "label": "Tasks",
+        "subtitle": "Queue"
+      },
+      "agents": {
+        "label": "Staff",
+        "subtitle": "Roster"
+      },
+      "projectManagement": {
+        "label": "Project management",
+        "subtitle": "GitHub · GitLab"
+      },
+      "multimedia": {
+        "label": "Multimedia",
+        "subtitle": "PDF · PPT · Search · Research · Video · QA"
+      }
+    },
+    "actions": {
+      "hire": "Hire agent",
+      "resetGraph": {
+        "label": "Reset graph",
+        "title": "Reset this project's code graph (file nodes and dependency edges) to initial state"
+      },
+      "emergencyStop": {
+        "label": "Emergency stop",
+        "title": "Immediately stop all agent work and return unfinished tasks to the queue"
+      }
     }
   },
   "gitAutomation": {
@@ -259,7 +349,7 @@
       "ariaLabel": "Token usage thresholds",
       "title": "Threshold settings",
       "close": "Close",
-      "intro": "When the cumulative total (input + output tokens) or the rough cost (USD) crosses either threshold, the top badge switches to that severity color. Empty means \"unset\".",
+      "intro": "When the cumulative total (input + output tokens) or the estimated cost (USD) crosses either threshold, the top badge changes to that severity color. Empty means \"unset\".",
       "cautionLegend": "Caution",
       "warningLegend": "Warning",
       "tokensLabel": "Token total ≥",
@@ -274,7 +364,7 @@
       "rangeWeek": "Last 7 days",
       "rangeAll": "All",
       "clearAll": "Clear all",
-      "resetToday": "Reset today",
+      "resetToday": "Reset today's data",
       "save": "Save",
       "saveError": "Save failed — browser storage is full or unavailable. Try again or use a different browser."
     }
@@ -336,7 +426,7 @@
     "title": "Shared goal",
     "intro": "The shared goal that the leader agent will distribute to teammates. Auto-development can begin only after the goal is saved.",
     "loadingTitle": "Loading shared goal…",
-    "loadingDescription": "One moment please. A saved goal will be prefilled if found.",
+    "loadingDescription": "One moment. If a saved goal exists, it will be prefilled.",
     "loadErrorTitle": "Failed to load the shared goal",
     "loadErrorDescription": "Try again later or check your network.",
     "noProjectTitle": "Pick a project first",

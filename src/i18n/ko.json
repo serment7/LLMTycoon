@@ -168,6 +168,17 @@
         "failBadge": "이 팀원을 추가하지 못했습니다.",
         "retry": "재시도"
       }
+    },
+    "applyTeam": {
+      "errors": {
+        "fetchMissing": "fetch 가 환경에 없습니다. options.fetch 로 주입하세요.",
+        "invalidProjectId": "projectId 는 비어 있지 않은 문자열이어야 합니다.",
+        "invalidDescription": "description 은 비어 있지 않은 문자열이어야 합니다.",
+        "hireFailed": "hire 실패({status})",
+        "hireMissingId": "hire 응답에 id 가 없습니다.",
+        "attachFailed": "attach 실패({status})",
+        "unknown": "알 수 없는 오류"
+      }
     }
   },
   "multimedia": {
@@ -218,6 +229,85 @@
       "language": "언어 설정",
       "more": "더보기",
       "moreAria": "보조 액션 더보기 ({count}개)"
+    },
+    "metrics": {
+      "zoom": {
+        "label": "확대: ",
+        "aria": "확대 {percent} 퍼센트",
+        "title": "확대 {percent}%"
+      },
+      "agents": {
+        "label": "에이전트: ",
+        "aria": "전체 에이전트 {count} 명",
+        "title": "전체 에이전트 {count}명"
+      },
+      "totalProjects": {
+        "label": "전체 프로젝트: ",
+        "aria": "관리 중인 전체 프로젝트 {count} 개",
+        "title": "관리 중인 전체 프로젝트 {count}개"
+      }
+    },
+    "workspaceActions": {
+      "requireProject": "프로젝트를 먼저 선택하세요",
+      "openInFileManager": {
+        "title": "탐색기·Finder에서 이 프로젝트 워크스페이스 폴더 열기",
+        "aria": "워크스페이스 폴더를 시스템 파일 관리자에서 열기"
+      },
+      "openInVscode": {
+        "title": "Visual Studio Code로 이 워크스페이스 열기 (PATH에 code 필요)",
+        "aria": "Visual Studio Code로 워크스페이스 폴더 열기"
+      },
+      "openInCursor": {
+        "title": "Cursor로 이 워크스페이스 열기 (PATH에 cursor 필요)",
+        "aria": "Cursor로 워크스페이스 폴더 열기"
+      }
+    }
+  },
+  "sidebar": {
+    "title": "워크스페이스",
+    "currentProject": {
+      "label": "현재 프로젝트",
+      "unselectedTitle": "프로젝트 미선택",
+      "unselectedAria": "프로젝트가 선택되지 않았습니다",
+      "unselectedName": "선택되지 않음",
+      "aria": "현재 프로젝트: {name}"
+    },
+    "nav": {
+      "game": {
+        "label": "오피스 플로어",
+        "subtitle": "실시간 뷰"
+      },
+      "projects": {
+        "label": "프로젝트",
+        "subtitle": "관리"
+      },
+      "tasks": {
+        "label": "작업",
+        "subtitle": "대기열"
+      },
+      "agents": {
+        "label": "직원 목록",
+        "subtitle": "직원 명단"
+      },
+      "projectManagement": {
+        "label": "프로젝트 관리",
+        "subtitle": "GitHub · GitLab"
+      },
+      "multimedia": {
+        "label": "멀티미디어",
+        "subtitle": "PDF · PPT · 검색 · 리서치 · 영상 · QA"
+      }
+    },
+    "actions": {
+      "hire": "에이전트 고용",
+      "resetGraph": {
+        "label": "그래프 초기화",
+        "title": "현재 프로젝트의 코드 그래프(파일 노드·의존성 엣지)를 초기 상태로 되돌립니다"
+      },
+      "emergencyStop": {
+        "label": "긴급중단",
+        "title": "모든 에이전트 작업을 즉시 중단하고 미완료 작업을 대기 상태로 되돌립니다"
+      }
     }
   },
   "gitAutomation": {

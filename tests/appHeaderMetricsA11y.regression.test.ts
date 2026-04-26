@@ -33,24 +33,34 @@ test('상단 메트릭 묶음에 role="group" + aria-label="상단 요약 지표
 });
 
 test('확대 칩 — role="status" + aria-label + data-testid 가 모두 붙어 있다', () => {
-  assert.match(SRC, /aria-label=\{`확대 \$\{Math\.round\(zoom \* 100\)\} 퍼센트`\}/);
+  // 지시 #3a13408d — 라벨이 i18n 키 호출(`header.metrics.zoom.aria`)로 치환됐다.
+  // 정규식은 키 호출 + {percent} 보간 자리를 함께 잠근다.
+  assert.match(
+    SRC,
+    /aria-label=\{i18nT\('header\.metrics\.zoom\.aria'\)\.replace\('\{percent\}', String\(Math\.round\(zoom \* 100\)\)\)\}/,
+  );
   assert.match(SRC, /data-testid="header-metric-zoom"/);
 });
 
 test('전체 에이전트 칩 — aria-label 에 인원 수가 그대로 반영된다', () => {
-  assert.match(SRC, /aria-label=\{`전체 에이전트 \$\{gameState\.agents\.length\} 명`\}/);
+  assert.match(
+    SRC,
+    /aria-label=\{i18nT\('header\.metrics\.agents\.aria'\)\.replace\('\{count\}', String\(gameState\.agents\.length\)\)\}/,
+  );
   assert.match(SRC, /data-testid="header-metric-agents"/);
 });
 
 test('전체 프로젝트 개수 칩 — 시각 라벨과 aria-label 이 CurrentProjectBadge 와 구분된다', () => {
-  // 시각 라벨은 "전체 프로젝트:" 로 "현재 프로젝트:" (CurrentProjectBadge) 와 분리된다.
-  // 반응형 라벨 분할(#ed0f0ebb) 이후 마크업이 풀라벨 span + 약어 span + 값으로
-  // 쪼개졌으므로 정규식은 풀라벨 span 을 잠그고 값 보간은 별도로 잠근다.
-  assert.match(SRC, />\s*전체 프로젝트:\s*<\/span>/,
-    '시각 풀라벨 span 이 "전체 프로젝트:" 텍스트를 그대로 가져야 한다');
+  // 시각 라벨은 i18n 키 `header.metrics.totalProjects.label` 로 분리됐다(ko=전체 프로젝트:).
+  // CurrentProjectBadge 의 "현재 프로젝트:" 배지와 키 자체가 분화되어 라벨 충돌이 차단된다.
+  assert.match(SRC, /\{i18nT\('header\.metrics\.totalProjects\.label'\)\}<\/span>/,
+    '시각 풀라벨 span 이 i18n 키 호출로 잠겨 있어야 한다');
   assert.match(SRC, /\{gameState\.projects\.length\}/,
     '시각 라벨 옆에 프로젝트 개수 보간이 함께 렌더되어야 한다');
-  assert.match(SRC, /aria-label=\{`관리 중인 전체 프로젝트 \$\{gameState\.projects\.length\} 개`\}/);
+  assert.match(
+    SRC,
+    /aria-label=\{i18nT\('header\.metrics\.totalProjects\.aria'\)\.replace\('\{count\}', String\(gameState\.projects\.length\)\)\}/,
+  );
   assert.match(SRC, /data-testid="header-metric-projects"/);
   // 이전 라벨(접두어 없이 "프로젝트: N")로 회귀하지 않도록 잠근다.
   assert.doesNotMatch(SRC, />\s*프로젝트: \{gameState\.projects\.length\}\s*</,

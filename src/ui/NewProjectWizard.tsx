@@ -299,7 +299,11 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
       if (picks.length === 0) return;
       setState((prev) => ({ ...prev, status: 'applying' }));
       try {
-        const result = await applyRecommendedTeam(props.projectId, picks, props.applyOptions);
+        // 지시 #bf8ed192 — 적용 단계 사용자 가시 에러는 현재 locale 로 표기.
+        const result = await applyRecommendedTeam(props.projectId, picks, {
+          ...props.applyOptions,
+          locale: props.applyOptions?.locale ?? locale,
+        });
         setState((prev) => ({ ...prev, status: 'ready', applied: result }));
         props.onApplied?.(result);
       } catch (err) {
@@ -318,7 +322,10 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
     async (rec: AgentRecommendation) => {
       setState((prev) => ({ ...prev, status: 'applying' }));
       try {
-        const next = await applyRecommendedTeam(props.projectId, [rec], props.applyOptions);
+        const next = await applyRecommendedTeam(props.projectId, [rec], {
+          ...props.applyOptions,
+          locale: props.applyOptions?.locale ?? locale,
+        });
         setState((prev) => {
           const base = prev.applied;
           if (!base) return { ...prev, status: 'ready', applied: next };
@@ -342,7 +349,7 @@ export function NewProjectWizard(props: NewProjectWizardProps): React.ReactEleme
         setState((prev) => ({ ...prev, status: 'ready' }));
       }
     },
-    [props.projectId, props.applyOptions],
+    [props.projectId, props.applyOptions, locale],
   );
 
   // ── 렌더 ──────────────────────────────────────────────────────────────────

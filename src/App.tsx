@@ -1716,22 +1716,22 @@ function App() {
           <div
             className="app-header-metrics__chip text-[var(--pixel-accent)]"
             role="status"
-            aria-label={`확대 ${Math.round(zoom * 100)} 퍼센트`}
-            title={`확대 ${Math.round(zoom * 100)}%`}
+            aria-label={i18nT('header.metrics.zoom.aria').replace('{percent}', String(Math.round(zoom * 100)))}
+            title={i18nT('header.metrics.zoom.title').replace('{percent}', String(Math.round(zoom * 100)))}
             data-testid="header-metric-zoom"
           >
-            <span className="app-header-metrics__label-full">확대: </span>
+            <span className="app-header-metrics__label-full">{i18nT('header.metrics.zoom.label')}</span>
             <span className="app-header-metrics__label-short" aria-hidden="true">🔍 </span>
             {Math.round(zoom * 100)}%
           </div>
           <div
             className="app-header-metrics__chip"
             role="status"
-            aria-label={`전체 에이전트 ${gameState.agents.length} 명`}
-            title={`전체 에이전트 ${gameState.agents.length}명`}
+            aria-label={i18nT('header.metrics.agents.aria').replace('{count}', String(gameState.agents.length))}
+            title={i18nT('header.metrics.agents.title').replace('{count}', String(gameState.agents.length))}
             data-testid="header-metric-agents"
           >
-            <span className="app-header-metrics__label-full">에이전트: </span>
+            <span className="app-header-metrics__label-full">{i18nT('header.metrics.agents.label')}</span>
             <span className="app-header-metrics__label-short" aria-hidden="true">AG </span>
             {gameState.agents.length}
           </div>
@@ -1744,11 +1744,11 @@ function App() {
           <div
             className="app-header-metrics__chip"
             role="status"
-            aria-label={`관리 중인 전체 프로젝트 ${gameState.projects.length} 개`}
-            title={`관리 중인 전체 프로젝트 ${gameState.projects.length}개`}
+            aria-label={i18nT('header.metrics.totalProjects.aria').replace('{count}', String(gameState.projects.length))}
+            title={i18nT('header.metrics.totalProjects.title').replace('{count}', String(gameState.projects.length))}
             data-testid="header-metric-projects"
           >
-            <span className="app-header-metrics__label-full">전체 프로젝트: </span>
+            <span className="app-header-metrics__label-full">{i18nT('header.metrics.totalProjects.label')}</span>
             <span className="app-header-metrics__label-short" aria-hidden="true">PJ </span>
             {gameState.projects.length}
           </div>
@@ -1759,8 +1759,8 @@ function App() {
               data-testid="header-open-workspace-button"
               disabled={!project}
               onClick={() => { void openProjectWorkspaceInFileManager(); }}
-              title={project ? '탐색기·Finder에서 이 프로젝트 워크스페이스 폴더 열기' : '프로젝트를 먼저 선택하세요'}
-              aria-label="워크스페이스 폴더를 시스템 파일 관리자에서 열기"
+              title={project ? i18nT('header.workspaceActions.openInFileManager.title') : i18nT('header.workspaceActions.requireProject')}
+              aria-label={i18nT('header.workspaceActions.openInFileManager.aria')}
               className="shrink-0 px-2 py-1 border-2 border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--color-border)]"
               style={{ background: 'var(--color-surface)' }}
             >
@@ -1771,8 +1771,8 @@ function App() {
               data-testid="header-open-vscode-button"
               disabled={!project}
               onClick={() => { void openProjectWorkspaceInIde('code'); }}
-              title={project ? 'Visual Studio Code로 이 워크스페이스 열기 (PATH에 code 필요)' : '프로젝트를 먼저 선택하세요'}
-              aria-label="Visual Studio Code로 워크스페이스 폴더 열기"
+              title={project ? i18nT('header.workspaceActions.openInVscode.title') : i18nT('header.workspaceActions.requireProject')}
+              aria-label={i18nT('header.workspaceActions.openInVscode.aria')}
               className="shrink-0 px-2 py-1 border-2 border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--color-border)]"
               style={{ background: 'var(--color-surface)' }}
             >
@@ -1783,8 +1783,8 @@ function App() {
               data-testid="header-open-cursor-button"
               disabled={!project}
               onClick={() => { void openProjectWorkspaceInIde('cursor'); }}
-              title={project ? 'Cursor로 이 워크스페이스 열기 (PATH에 cursor 필요)' : '프로젝트를 먼저 선택하세요'}
-              aria-label="Cursor로 워크스페이스 폴더 열기"
+              title={project ? i18nT('header.workspaceActions.openInCursor.title') : i18nT('header.workspaceActions.requireProject')}
+              aria-label={i18nT('header.workspaceActions.openInCursor.aria')}
               className="shrink-0 px-2 py-1 border-2 border-[var(--color-border)] text-[var(--color-text)] hover:border-[var(--color-accent)] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--color-border)]"
               style={{ background: 'var(--color-surface)' }}
             >
@@ -1848,7 +1848,7 @@ function App() {
       <div className="flex-1 flex overflow-hidden">
         {/* Sidebar */}
         <aside className="w-[220px] bg-[var(--pixel-card)] border-r-4 border-[var(--pixel-border)] flex flex-col p-4">
-          <div className="text-[12px] text-[var(--pixel-accent)] mb-3 uppercase tracking-wider">워크스페이스</div>
+          <div className="text-[12px] text-[var(--pixel-accent)] mb-3 uppercase tracking-wider">{i18nT('sidebar.title')}</div>
 
           {/* 현재 프로젝트 — 오피스 플로어 사이드바의 "어디에 있는가" 앵커.
               .sidebar-project 스펙은 src/index.css 주석 참조. 프로젝트명이 길면
@@ -1856,64 +1856,64 @@ function App() {
           <div
             className="sidebar-project"
             data-state={project ? 'active' : 'empty'}
-            title={project ? project.name : '프로젝트 미선택'}
-            aria-label={project ? `현재 프로젝트: ${project.name}` : '프로젝트가 선택되지 않았습니다'}
+            title={project ? project.name : i18nT('sidebar.currentProject.unselectedTitle')}
+            aria-label={project ? i18nT('sidebar.currentProject.aria').replace('{name}', project.name) : i18nT('sidebar.currentProject.unselectedAria')}
           >
             <Briefcase className="sidebar-project__icon" aria-hidden />
             <div className="sidebar-project__body">
-              <span className="sidebar-project__label">현재 프로젝트</span>
+              <span className="sidebar-project__label">{i18nT('sidebar.currentProject.label')}</span>
               <span className="sidebar-project__name">
-                {project ? project.name : '선택되지 않음'}
+                {project ? project.name : i18nT('sidebar.currentProject.unselectedName')}
               </span>
             </div>
           </div>
 
           <nav className="flex-1 space-y-3 overflow-y-auto">
-            <button 
+            <button
               onClick={() => setActiveTab('game')}
               className={`w-full text-left p-3 border-2 transition-all ${activeTab === 'game' ? 'border-[var(--pixel-accent)] bg-[var(--pixel-bg)]' : 'border-[var(--pixel-border)] bg-[#0f3460] hover:bg-[#1a1a2e]'}`}
             >
-              <span className="text-sm font-bold block">오피스 플로어</span>
-              <span className="text-[10px] opacity-70">실시간 뷰</span>
+              <span className="text-sm font-bold block">{i18nT('sidebar.nav.game.label')}</span>
+              <span className="text-[10px] opacity-70">{i18nT('sidebar.nav.game.subtitle')}</span>
             </button>
-            
+
             <div className="h-px bg-[var(--pixel-border)] my-2" />
-            
-            <button 
+
+            <button
               onClick={() => setActiveTab('projects')}
               className={`w-full text-left p-3 border-2 transition-all ${activeTab === 'projects' ? 'border-[var(--pixel-accent)] bg-[var(--pixel-bg)]' : 'border-[var(--pixel-border)] bg-[#0f3460] hover:bg-[#1a1a2e]'}`}
             >
-              <span className="text-sm font-bold block">프로젝트</span>
-              <span className="text-[10px] opacity-70">관리</span>
+              <span className="text-sm font-bold block">{i18nT('sidebar.nav.projects.label')}</span>
+              <span className="text-[10px] opacity-70">{i18nT('sidebar.nav.projects.subtitle')}</span>
             </button>
-            <button 
+            <button
               onClick={() => setActiveTab('tasks')}
               className={`w-full text-left p-3 border-2 transition-all ${activeTab === 'tasks' ? 'border-[var(--pixel-accent)] bg-[var(--pixel-bg)]' : 'border-[var(--pixel-border)] bg-[#0f3460] hover:bg-[#1a1a2e]'}`}
             >
-              <span className="text-sm font-bold block">작업</span>
-              <span className="text-[10px] opacity-70">대기열</span>
+              <span className="text-sm font-bold block">{i18nT('sidebar.nav.tasks.label')}</span>
+              <span className="text-[10px] opacity-70">{i18nT('sidebar.nav.tasks.subtitle')}</span>
             </button>
             <button
               onClick={() => setActiveTab('agents')}
               className={`w-full text-left p-3 border-2 transition-all ${activeTab === 'agents' ? 'border-[var(--pixel-accent)] bg-[var(--pixel-bg)]' : 'border-[var(--pixel-border)] bg-[#0f3460] hover:bg-[#1a1a2e]'}`}
             >
-              <span className="text-sm font-bold block">직원 목록</span>
-              <span className="text-[10px] opacity-70">직원 명단</span>
+              <span className="text-sm font-bold block">{i18nT('sidebar.nav.agents.label')}</span>
+              <span className="text-[10px] opacity-70">{i18nT('sidebar.nav.agents.subtitle')}</span>
             </button>
             <button
               onClick={() => setActiveTab('project-management')}
               className={`w-full text-left p-3 border-2 transition-all ${activeTab === 'project-management' ? 'border-[var(--pixel-accent)] bg-[var(--pixel-bg)]' : 'border-[var(--pixel-border)] bg-[#0f3460] hover:bg-[#1a1a2e]'}`}
             >
-              <span className="text-sm font-bold block">프로젝트 관리</span>
-              <span className="text-[10px] opacity-70">GitHub · GitLab</span>
+              <span className="text-sm font-bold block">{i18nT('sidebar.nav.projectManagement.label')}</span>
+              <span className="text-[10px] opacity-70">{i18nT('sidebar.nav.projectManagement.subtitle')}</span>
             </button>
             <button
               onClick={() => setActiveTab('multimedia')}
               data-testid="sidebar-nav-multimedia"
               className={`w-full text-left p-3 border-2 transition-all ${activeTab === 'multimedia' ? 'border-[var(--pixel-accent)] bg-[var(--pixel-bg)]' : 'border-[var(--pixel-border)] bg-[#0f3460] hover:bg-[#1a1a2e]'}`}
             >
-              <span className="text-sm font-bold block">멀티미디어</span>
-              <span className="text-[10px] opacity-70">PDF · PPT · 검색 · 리서치 · 영상 · QA</span>
+              <span className="text-sm font-bold block">{i18nT('sidebar.nav.multimedia.label')}</span>
+              <span className="text-[10px] opacity-70">{i18nT('sidebar.nav.multimedia.subtitle')}</span>
             </button>
           </nav>
 
@@ -1922,21 +1922,21 @@ function App() {
               onClick={() => setShowHireModal(true)}
               className="w-full bg-[var(--pixel-accent)] text-black py-3 font-bold uppercase border-b-4 border-[#0099cc] hover:brightness-110 transition-all"
             >
-              에이전트 고용
+              {i18nT('sidebar.actions.hire')}
             </button>
             <button
               onClick={resetGraph}
-              title="현재 프로젝트의 코드 그래프(파일 노드·의존성 엣지)를 초기 상태로 되돌립니다"
+              title={i18nT('sidebar.actions.resetGraph.title')}
               className="w-full bg-[#f4a261] text-black py-3 font-bold uppercase border-b-4 border-[#a45a1c] hover:brightness-110 transition-all"
             >
-              그래프 초기화
+              {i18nT('sidebar.actions.resetGraph.label')}
             </button>
             <button
               onClick={emergencyStop}
-              title="모든 에이전트 작업을 즉시 중단하고 미완료 작업을 대기 상태로 되돌립니다"
+              title={i18nT('sidebar.actions.emergencyStop.title')}
               className="w-full bg-[#c23b4a] text-white py-3 font-bold uppercase border-b-4 border-[#7a1a25] hover:brightness-110 transition-all"
             >
-              긴급중단
+              {i18nT('sidebar.actions.emergencyStop.label')}
             </button>
           </div>
         </aside>

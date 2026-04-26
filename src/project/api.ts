@@ -15,6 +15,7 @@
 
 import type { AgentRole } from '../types';
 import type { AgentRecommendation } from './recommendAgentTeam';
+import { translate, type Locale } from '../i18n';
 
 export interface ApplyRecommendedTeamOptions {
   /** 테스트 주입 용. 기본 globalThis.fetch. */
@@ -26,6 +27,17 @@ export interface ApplyRecommendedTeamOptions {
    * 서버는 spriteTemplate 문자열을 그대로 저장만 하므로 빈 문자열이어도 허용.
    */
   readonly spriteTemplateFor?: (role: AgentRole) => string;
+  /**
+   * 사용자 가시 에러 문구의 locale. UI 컴포넌트가 useLocale().locale 을 그대로 넘긴다.
+   * 미주입 시 i18n 모듈의 currentLocale(기본 'en') 을 쓴다.
+   */
+  readonly locale?: Locale;
+}
+
+function fillTemplate(template: string, params: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (_, k: string) =>
+    k in params ? String(params[k]) : `{${k}}`,
+  );
 }
 
 /** 단일 추천 항목의 적용 결과. */
@@ -55,7 +67,7 @@ const DEFAULT_SPRITE_TEMPLATE: Record<AgentRole, string> = {
 function resolveFetch(opts: ApplyRecommendedTeamOptions): typeof globalThis.fetch {
   const f = opts.fetch ?? globalThis.fetch;
   if (!f) {
-    throw new Error('fetch 가 환경에 없습니다. options.fetch 로 주입하세요.');
+    throw new Error(translate('project.applyTeam.errors.fetchMissing', opts.locale));
   }
   return f;
 }
@@ -65,6 +77,7 @@ async function hireAgent(
   baseUrl: string,
   rec: AgentRecommendation,
   spriteTemplate: string,
+  locale: Locale | undefined,
 ): Promise<string> {
   const res = await fetchImpl(`${baseUrl}/api/agents/hire`, {
     method: 'POST',
@@ -77,11 +90,15 @@ async function hireAgent(
     }),
   });
   if (!res.ok) {
-    throw new Error(`hire 실패(${res.status})`);
+    throw new Error(
+      fillTemplate(translate('project.applyTeam.errors.hireFailed', locale), {
+        status: res.status,
+      }),
+    );
   }
   const body = (await res.json()) as { id?: string };
   if (!body || typeof body.id !== 'string' || body.id.length === 0) {
-    throw new Error('hire 응답에 id 가 없습니다.');
+    throw new Error(translate('project.applyTeam.errors.hireMissingId', locale));
   }
   return body.id;
 }
@@ -91,6 +108,7 @@ async function attachAgent(
   baseUrl: string,
   projectId: string,
   agentId: string,
+  locale: Locale | undefined,
 ): Promise<void> {
   const res = await fetchImpl(`${baseUrl}/api/projects/${encodeURIComponent(projectId)}/agents`, {
     method: 'POST',
@@ -98,7 +116,11 @@ async function attachAgent(
     body: JSON.stringify({ agentId }),
   });
   if (!res.ok) {
-    throw new Error(`attach 실패(${res.status})`);
+    throw new Error(
+      fillTemplate(translate('project.applyTeam.errors.attachFailed', locale), {
+        status: res.status,
+      }),
+    );
   }
 }
 
@@ -113,7 +135,7 @@ export async function applyRecommendedTeam(
   options: ApplyRecommendedTeamOptions = {},
 ): Promise<AppliedTeamResult> {
   if (typeof projectId !== 'string' || projectId.trim().length === 0) {
-    throw new Error('projectId 는 비어 있지 않은 문자열이어야 합니다.');
+    throw new Error(translate('project.applyTeam.errors.invalidProjectId', options.locale));
   }
   if (!Array.isArray(recommendations) || recommendations.length === 0) {
     return { projectId, items: [], appliedCount: 0 };
@@ -127,15 +149,17 @@ export async function applyRecommendedTeam(
   let appliedCount = 0;
   for (const rec of recommendations) {
     try {
-      const agentId = await hireAgent(fetchImpl, baseUrl, rec, spriteFor(rec.role));
-      await attachAgent(fetchImpl, baseUrl, projectId, agentId);
+      const agentId = await hireAgent(fetchImpl, baseUrl, rec, spriteFor(rec.role), options.locale);
+      await attachAgent(fetchImpl, baseUrl, projectId, agentId, options.locale);
       items.push({ recommendation: rec, agentId, ok: true });
       appliedCount += 1;
     } catch (err) {
       items.push({
         recommendation: rec,
         ok: false,
-        error: err instanceof Error ? err.message : '알 수 없는 오류',
+        error: err instanceof Error
+          ? err.message
+          : translate('project.applyTeam.errors.unknown', options.locale),
       });
     }
   }

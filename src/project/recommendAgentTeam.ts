@@ -19,6 +19,7 @@
 import { messagesWithCache } from '../server/llm/messagesWithCache';
 import type { CacheableClaudeMessages } from '../server/claudeClient';
 import type { AgentRole } from '../types';
+import { translate } from '../i18n';
 import {
   analyzeDescription,
   buildReason,
@@ -402,7 +403,7 @@ export async function recommendAgentTeam(
   options: RecommendAgentTeamOptions = {},
 ): Promise<AgentTeamRecommendation> {
   if (typeof description !== 'string' || description.trim().length === 0) {
-    throw new Error('description 은 비어 있지 않은 문자열이어야 합니다.');
+    throw new Error(translate('project.applyTeam.errors.invalidDescription', options.locale));
   }
   const locale = options.locale ?? DEFAULT_RECOMMENDATION_LOCALE;
   const count = clampRecommendationCount(options.count ?? DEFAULT_RECOMMENDATION_COUNT);
