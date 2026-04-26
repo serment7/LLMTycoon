@@ -5,6 +5,8 @@
  */
 
 import React, { useState } from 'react';
+import { useI18n } from '../i18n';
+import { LanguageToggle } from '../ui/LanguageToggle';
 
 export interface SignupFormProps {
   onPremise: boolean;
@@ -16,6 +18,7 @@ export interface SignupFormProps {
 }
 
 export function SignupForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToLogin, error }: SignupFormProps) {
+  const { t } = useI18n();
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -30,14 +33,15 @@ export function SignupForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToL
   const pwHasLetter = /[A-Za-z]/.test(password);
   const pwHasDigit = /[0-9]/.test(password);
   const pwMatches = password.length > 0 && password === passwordConfirm;
+  const providerLabel = provider === 'gitlab' ? 'GitLab' : 'GitHub';
 
   const validate = (): string | null => {
-    if (normalizedUsername.length < 3) return '아이디는 3자 이상이어야 합니다.';
-    if (!/^[a-zA-Z0-9._-]+$/.test(normalizedUsername)) return '아이디는 영문/숫자/._- 만 사용할 수 있습니다.';
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return '이메일 형식이 올바르지 않습니다.';
-    if (!pwHasLength) return '비밀번호는 8자 이상이어야 합니다.';
-    if (!pwHasLetter || !pwHasDigit) return '비밀번호는 영문과 숫자를 모두 포함해야 합니다.';
-    if (!pwMatches) return '비밀번호 확인이 일치하지 않습니다.';
+    if (normalizedUsername.length < 3) return t('auth.signup.errors.usernameTooShort');
+    if (!/^[a-zA-Z0-9._-]+$/.test(normalizedUsername)) return t('auth.signup.errors.usernameCharset');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return t('auth.signup.errors.emailInvalid');
+    if (!pwHasLength) return t('auth.signup.errors.passwordTooShort');
+    if (!pwHasLetter || !pwHasDigit) return t('auth.signup.errors.passwordCharset');
+    if (!pwMatches) return t('auth.signup.errors.passwordMismatch');
     return null;
   };
 
@@ -60,7 +64,11 @@ export function SignupForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToL
 
   return (
     <div className="auth-card">
-      <h1>회원가입</h1>
+      {/* 지시 #75cac73a — 회원가입 화면 자체에서도 언어 전환 가능하도록 토글 노출. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <LanguageToggle />
+      </div>
+      <h1>{t('auth.signup.title')}</h1>
       {(localError || error) && (
         <div className="auth-error" role="alert" aria-live="polite">
           {localError || error}
@@ -69,7 +77,7 @@ export function SignupForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToL
       {onPremise ? (
         <form onSubmit={submit} noValidate aria-busy={submitting}>
           <label>
-            아이디
+            {t('auth.signup.username')}
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -80,7 +88,7 @@ export function SignupForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToL
             />
           </label>
           <label>
-            이메일
+            {t('auth.signup.email')}
             <input
               type="email"
               value={email}
@@ -91,7 +99,7 @@ export function SignupForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToL
             />
           </label>
           <label>
-            비밀번호
+            {t('auth.signup.password')}
             <input
               type="password"
               value={password}
@@ -105,12 +113,12 @@ export function SignupForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToL
           </label>
           {password.length > 0 && (
             <ul id="signup-pw-hint" className="auth-hint" aria-live="polite">
-              <li data-ok={pwHasLength}>8자 이상</li>
-              <li data-ok={pwHasLetter && pwHasDigit}>영문과 숫자 포함</li>
+              <li data-ok={pwHasLength}>{t('auth.signup.passwordHint.minLength')}</li>
+              <li data-ok={pwHasLetter && pwHasDigit}>{t('auth.signup.passwordHint.letterAndDigit')}</li>
             </ul>
           )}
           <label>
-            비밀번호 확인
+            {t('auth.signup.passwordConfirm')}
             <input
               type="password"
               value={passwordConfirm}
@@ -124,24 +132,24 @@ export function SignupForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToL
           </label>
           {passwordConfirm.length > 0 && (
             <p id="signup-pw-match" className="auth-hint" data-ok={pwMatches} aria-live="polite">
-              {pwMatches ? '비밀번호가 일치합니다.' : '비밀번호가 일치하지 않습니다.'}
+              {pwMatches ? t('auth.signup.passwordMatch') : t('auth.signup.passwordMismatch')}
             </p>
           )}
           <button type="submit" disabled={submitting}>
-            {submitting ? '가입 중…' : '계정 만들기'}
+            {submitting ? t('auth.signup.submitting') : t('auth.signup.submit')}
           </button>
           <button type="button" className="link" onClick={onSwitchToLogin} disabled={submitting}>
-            이미 계정이 있어요
+            {t('auth.signup.switchToLogin')}
           </button>
         </form>
       ) : (
         <div className="oauth-panel">
-          <p>{provider === 'gitlab' ? 'GitLab' : 'GitHub'} 계정으로 가입합니다. 최초 로그인 시 자동으로 계정이 만들어집니다.</p>
+          <p>{t('auth.signup.oauthIntro').replace('{provider}', providerLabel)}</p>
           <button type="button" onClick={onOAuth}>
-            {provider === 'gitlab' ? 'GitLab' : 'GitHub'} 로 가입
+            {t('auth.signup.oauthCta').replace('{provider}', providerLabel)}
           </button>
           <button type="button" className="link" onClick={onSwitchToLogin}>
-            로그인으로 돌아가기
+            {t('auth.signup.backToLogin')}
           </button>
         </div>
       )}

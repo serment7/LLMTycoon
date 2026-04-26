@@ -196,12 +196,24 @@ export interface I18nProviderProps {
 }
 
 export function I18nProvider(props: I18nProviderProps): React.ReactElement {
-  // initialLocale 이 주어지면 마운트 시 한 번 동기. 이후에는 useSyncExternalStore 가
-  // 전역 상태 변화를 Context 값에 반영한다.
-  const bootstrapped = React.useRef(false);
-  if (!bootstrapped.current && props.initialLocale && props.initialLocale !== currentLocale) {
-    setLocale(props.initialLocale, props.storage ?? undefined);
-    bootstrapped.current = true;
+  // initialLocale prop 동기 — 동일 prop 이 유지되는 동안에는 단 한 번만 발사.
+  //
+  // 회귀 #75cac73a — 이전 구현은 `if (initialLocale && initialLocale !== currentLocale)`
+  // 조건만으로 매 렌더마다 발사를 결정했고, bootstrapped 플래그도 if 본문 안에서만
+  // true 로 찍었다. 그래서 첫 렌더에 initialLocale === currentLocale 이면 ref 가
+  // false 로 남고, 이후 사용자가 토글을 눌러 currentLocale 가 바뀌면 비로소 if 가
+  // true 가 되어 initialLocale 로 강제 원복 → 토글이 안 먹는 것처럼 보인다.
+  //
+  // 새 규칙: "직전 렌더의 initialLocale 값" 을 ref 에 보관해 prop 자체가 바뀐 경우에만
+  // 동기 setLocale 을 발사한다. setLocale 으로 인한 재렌더에서는 prop 이 그대로이므로
+  // 다시 끼어들지 않는다(토글 정상 작동). prop 이 'en' → 'ko' 로 바뀐 경우는 새 마운트
+  // 의도와 동일하게 한 번 동기한다(L1 회귀 호환).
+  const lastInitialLocaleRef = React.useRef<Locale | undefined>(undefined);
+  if (lastInitialLocaleRef.current !== props.initialLocale) {
+    if (props.initialLocale && props.initialLocale !== currentLocale) {
+      setLocale(props.initialLocale, props.storage ?? undefined);
+    }
+    lastInitialLocaleRef.current = props.initialLocale;
   }
   const locale = useSyncExternalStore(subscribe, getLocale, getLocale);
   const setLocaleCb = useCallback((next: Locale) => setLocale(next, props.storage ?? undefined), [props.storage]);

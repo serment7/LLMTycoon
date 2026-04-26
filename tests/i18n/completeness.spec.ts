@@ -197,6 +197,28 @@ const NAMESPACE_SNAPSHOTS = {
     'tokenUsage.panel.empty',
     'tokenUsage.panel.savedTokens',
     'tokenUsage.toast.compacted',
+    // 지시 #a4392236 — TokenUsageSettingsPanel 의 임계값/내보내기 다이얼로그 키 도입.
+    'tokenUsage.settings.ariaLabel',
+    'tokenUsage.settings.title',
+    'tokenUsage.settings.close',
+    'tokenUsage.settings.intro',
+    'tokenUsage.settings.cautionLegend',
+    'tokenUsage.settings.warningLegend',
+    'tokenUsage.settings.tokensLabel',
+    'tokenUsage.settings.usdLabel',
+    'tokenUsage.settings.tokensCautionPlaceholder',
+    'tokenUsage.settings.usdCautionPlaceholder',
+    'tokenUsage.settings.tokensWarningPlaceholder',
+    'tokenUsage.settings.usdWarningPlaceholder',
+    'tokenUsage.settings.exportLegend',
+    'tokenUsage.settings.exportRangeAria',
+    'tokenUsage.settings.rangeToday',
+    'tokenUsage.settings.rangeWeek',
+    'tokenUsage.settings.rangeAll',
+    'tokenUsage.settings.clearAll',
+    'tokenUsage.settings.resetToday',
+    'tokenUsage.settings.save',
+    'tokenUsage.settings.saveError',
   ] as readonly string[],
   'mcp.transport': [
     // 현재 미도입 — mcp.transport.stdio / http / streamable-http 같은 라벨 예약.
@@ -338,4 +360,176 @@ test('S5-2. extractParams 자체 검증 — 단일/중복/공백 처리', () => 
   assert.deepEqual([...extractParams('Hello {name}, you have {count} msgs')].sort(), ['count', 'name']);
   assert.deepEqual([...extractParams('{count}개 중 {count}번째')], ['count'], '중복은 1회만');
   assert.deepEqual([...extractParams('no params here')], []);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// S6. 다중 화면 핵심 키(언어 토글 회귀) — 지시 #f269b2dc
+//
+// 헤더 LanguageToggle 클릭이 SettingsDrawer · SharedGoalForm · TokenUsageSettingsPanel
+// · LoginForm 4개 화면을 한꺼번에 갈리게 해야 한다. 본 검증은 그 전제 — "각 화면이
+// 의존하는 핵심 키가 en·ko 양쪽에 존재하고 서로 다른 문자열이다" 를 사전 레이어에서
+// 잠근다. 통합 spec(multiScreenLanguageToggle.regression.test.tsx) 는 런타임 갱신을,
+// 본 스펙은 사전 표면을 각각 책임진다.
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 4개 화면이 토글 회귀에서 동시에 의존하는 핵심 키. 화면별로 헤더 1 + 보조 라벨 1~2개를
+ * 골라, 컨슈머 컴포넌트가 부분 갱신되었는지 사전에서 빠르게 진단할 수 있게 한다.
+ */
+const MULTI_SCREEN_TOGGLE_KEYS = {
+  toggle: ['header.actions.language', 'locale.label', 'locale.en', 'locale.ko'],
+  login: [
+    'auth.login.title',
+    'auth.login.username',
+    'auth.login.password',
+    'auth.login.submit',
+  ],
+  settingsDrawer: [
+    'settings.drawer.title',
+    'settings.drawer.motionSection',
+    'settings.drawer.onboardingSection',
+    'settings.drawer.shortcutsSection',
+  ],
+  sharedGoal: [
+    'sharedGoal.title',
+    'sharedGoal.intro',
+    'sharedGoal.titleLabel',
+    'sharedGoal.descriptionLabel',
+    'sharedGoal.save',
+    'sharedGoal.noProjectTitle',
+  ],
+  tokenSettings: [
+    'tokenUsage.settings.title',
+    'tokenUsage.settings.intro',
+    'tokenUsage.settings.cautionLegend',
+    'tokenUsage.settings.warningLegend',
+    'tokenUsage.settings.save',
+  ],
+} as const;
+
+test('S6-1. 다중 화면 토글 핵심 키가 en·ko 양쪽 사전에 모두 존재(런타임에 key 원문이 노출되지 않음)', () => {
+  const missing: string[] = [];
+  for (const group of Object.values(MULTI_SCREEN_TOGGLE_KEYS)) {
+    for (const k of group) {
+      if (translate(k, 'en') === k) missing.push(`en:${k}`);
+      if (translate(k, 'ko') === k) missing.push(`ko:${k}`);
+    }
+  }
+  assert.equal(
+    missing.length,
+    0,
+    '\n[다중 화면 토글 핵심 키 누락]\n' + missing.map((m) => `  - ${m}`).join('\n'),
+  );
+});
+
+test('S6-2. 다중 화면 토글 핵심 키 — en/ko 가 모두 서로 다른 문자열(번역 누락 회귀 차단)', () => {
+  const sameAsEnglish: string[] = [];
+  for (const group of Object.values(MULTI_SCREEN_TOGGLE_KEYS)) {
+    for (const k of group) {
+      const enVal = translate(k, 'en');
+      const koVal = translate(k, 'ko');
+      if (enVal === koVal) sameAsEnglish.push(`${k} = "${enVal}"`);
+    }
+  }
+  assert.equal(
+    sameAsEnglish.length,
+    0,
+    '\n[en==ko 동일 — 토글 후에도 화면 라벨이 안 갈리는 회귀]\n' +
+      sameAsEnglish.map((m) => `  - ${m}`).join('\n'),
+  );
+});
+
+test('S6-3. 다중 화면 핵심 키의 ko 값이 한글 음절을 한 글자라도 포함(영문 문자열 잔존 차단)', () => {
+  // ko 사전이 en 과 다른 문자열을 가지더라도 영문 단어/숫자만으로 채우면 번역으로
+  // 보긴 어렵다. 핵심 라벨은 한글 음절(가~힣) 이 최소 1자 이상이어야 한다.
+  const HANGUL_SYLLABLE = /[가-힣]/;
+  const noHangul: string[] = [];
+  for (const group of Object.values(MULTI_SCREEN_TOGGLE_KEYS)) {
+    for (const k of group) {
+      const koVal = translate(k, 'ko');
+      // 'locale.en' 은 의도적으로 영문 표기("English") 을 그대로 두는 경우가 있을 수 있어
+      // 예외 처리 — locale.* 만 면제.
+      if (k.startsWith('locale.')) continue;
+      if (!HANGUL_SYLLABLE.test(koVal)) noHangul.push(`${k} = "${koVal}"`);
+    }
+  }
+  assert.equal(
+    noHangul.length,
+    0,
+    '\n[ko 사전에 한글 음절이 없음 — 번역 누락 의심]\n' +
+      noHangul.map((m) => `  - ${m}`).join('\n'),
+  );
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// S7. 사전 사본 정합 — locales/{en,ko}.json (외부 번역가 사본) 과
+// src/i18n/{en,ko}.json (런타임 번들) 의 leaf 경로 집합이 동일해야 한다.
+// 두 위치는 지시 #ba58ad2d 로 "동일 내용 유지" 가 명문화돼 있어, 한쪽만 수정되면
+// 빌드는 통과해도 외부 번역가 워크플로우 또는 런타임 표면 중 하나가 어긋난다.
+// ────────────────────────────────────────────────────────────────────────────
+
+import enRuntime from '../../src/i18n/en.json' with { type: 'json' };
+import koRuntime from '../../src/i18n/ko.json' with { type: 'json' };
+
+test('S7-1. locales/en.json 과 src/i18n/en.json 의 leaf 경로 집합이 동일', () => {
+  const a = collectLeafPaths(en as LocaleTree);
+  const b = collectLeafPaths(enRuntime as LocaleTree);
+  const onlyInLocales: string[] = [];
+  const onlyInRuntime: string[] = [];
+  for (const p of a.keys()) if (!b.has(p)) onlyInLocales.push(p);
+  for (const p of b.keys()) if (!a.has(p)) onlyInRuntime.push(p);
+  assert.equal(
+    onlyInLocales.length + onlyInRuntime.length,
+    0,
+    '\n[en 사본 드리프트]\n' +
+      (onlyInLocales.length > 0
+        ? '  locales 에만 있음: ' + onlyInLocales.join(', ') + '\n'
+        : '') +
+      (onlyInRuntime.length > 0
+        ? '  src/i18n 에만 있음: ' + onlyInRuntime.join(', ')
+        : ''),
+  );
+});
+
+test('S7-2. locales/ko.json 과 src/i18n/ko.json 의 leaf 경로 집합이 동일', () => {
+  const a = collectLeafPaths(ko as LocaleTree);
+  const b = collectLeafPaths(koRuntime as LocaleTree);
+  const onlyInLocales: string[] = [];
+  const onlyInRuntime: string[] = [];
+  for (const p of a.keys()) if (!b.has(p)) onlyInLocales.push(p);
+  for (const p of b.keys()) if (!a.has(p)) onlyInRuntime.push(p);
+  assert.equal(
+    onlyInLocales.length + onlyInRuntime.length,
+    0,
+    '\n[ko 사본 드리프트]\n' +
+      (onlyInLocales.length > 0
+        ? '  locales 에만 있음: ' + onlyInLocales.join(', ') + '\n'
+        : '') +
+      (onlyInRuntime.length > 0
+        ? '  src/i18n 에만 있음: ' + onlyInRuntime.join(', ')
+        : ''),
+  );
+});
+
+test('S7-3. locales/{en,ko}.json 과 src/i18n/{en,ko}.json 의 다중 화면 핵심 키 값이 byte-for-byte 일치', () => {
+  const enLocales = collectLeafPaths(en as LocaleTree);
+  const enRunmap = collectLeafPaths(enRuntime as LocaleTree);
+  const koLocales = collectLeafPaths(ko as LocaleTree);
+  const koRunmap = collectLeafPaths(koRuntime as LocaleTree);
+  const mismatches: string[] = [];
+  for (const group of Object.values(MULTI_SCREEN_TOGGLE_KEYS)) {
+    for (const k of group) {
+      if (enLocales.get(k) !== enRunmap.get(k)) {
+        mismatches.push(`en:${k} — locales="${enLocales.get(k)}" / src="${enRunmap.get(k)}"`);
+      }
+      if (koLocales.get(k) !== koRunmap.get(k)) {
+        mismatches.push(`ko:${k} — locales="${koLocales.get(k)}" / src="${koRunmap.get(k)}"`);
+      }
+    }
+  }
+  assert.equal(
+    mismatches.length,
+    0,
+    '\n[다중 화면 핵심 키 사본 드리프트]\n' + mismatches.map((m) => `  - ${m}`).join('\n'),
+  );
 });

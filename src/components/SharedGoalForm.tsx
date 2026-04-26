@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Target, Save, Lock, Check, AlertTriangle } from 'lucide-react';
 import type { SharedGoal, SharedGoalPriority } from '../types';
 import { EmptyState } from './EmptyState';
 import { ErrorState } from './ErrorState';
+import { useI18n } from '../i18n';
 
 // 공동 목표(SharedGoal) 입력 폼. ProjectManagement 화면에서 항상 렌더되어
 // 자동 개발 ON 의 전제조건(= 활성 목표 1건) 을 사용자가 "보고 입력" 할 수 있도록
@@ -32,11 +33,12 @@ interface Props {
 
 type LoadState = 'loading' | 'ready' | 'error';
 
-const PRIORITY_OPTIONS: { value: SharedGoalPriority; label: string; token: string }[] = [
-  { value: 'high',   label: 'P1-긴급', token: 'var(--shared-goal-priority-p1)' },
-  { value: 'normal', label: 'P2-중요', token: 'var(--shared-goal-priority-p2)' },
-  { value: 'low',    label: 'P3-일반', token: 'var(--shared-goal-priority-p3)' },
-];
+const PRIORITY_TOKENS: Record<SharedGoalPriority, { token: string; labelKey: string }> = {
+  high:   { token: 'var(--shared-goal-priority-p1)', labelKey: 'sharedGoal.priorityHigh' },
+  normal: { token: 'var(--shared-goal-priority-p2)', labelKey: 'sharedGoal.priorityNormal' },
+  low:    { token: 'var(--shared-goal-priority-p3)', labelKey: 'sharedGoal.priorityLow' },
+};
+const PRIORITY_VALUES: ReadonlyArray<SharedGoalPriority> = ['high', 'normal', 'low'];
 
 const TITLE_MIN = 4;
 const TITLE_MAX = 80;
@@ -51,6 +53,15 @@ function toInputDate(iso: string | undefined): string {
 }
 
 export function SharedGoalForm({ projectId, onLog, readOnlyMode }: Props) {
+  const { t } = useI18n();
+  const priorityOptions = useMemo(
+    () => PRIORITY_VALUES.map(value => ({
+      value,
+      token: PRIORITY_TOKENS[value].token,
+      label: t(PRIORITY_TOKENS[value].labelKey),
+    })),
+    [t],
+  );
   const [loadState, setLoadState] = useState<LoadState>(projectId ? 'loading' : 'ready');
   const [savedGoal, setSavedGoal] = useState<SharedGoal | null>(null);
   const [title, setTitle] = useState('');
@@ -129,8 +140,8 @@ export function SharedGoalForm({ projectId, onLog, readOnlyMode }: Props) {
     // 저장이 성공하면 서버 측이 자동 개발 루프를 돌릴 근거로 삼으므로, 사용자가 실수로
     // 비활성 버튼을 우회해 form submit 을 전송하더라도 네트워크 호출 전에 멈춘다.
     if (readOnlyMode) {
-      setSaveError('세션 토큰이 소진되어 저장이 잠시 중단되었습니다. 구독 상태 복구 후 다시 시도하세요.');
-      onLog('세션 토큰 소진으로 공동 목표 저장이 차단되었습니다');
+      setSaveError(t('sharedGoal.errors.readOnlyBlocked'));
+      onLog(t('sharedGoal.log.readOnlyBlocked'));
       return;
     }
     setSaving(true);
@@ -149,19 +160,19 @@ export function SharedGoalForm({ projectId, onLog, readOnlyMode }: Props) {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        const msg = (body as { error?: string }).error || `저장 실패 (HTTP ${res.status})`;
+        const msg = (body as { error?: string }).error || t('sharedGoal.errors.saveHttp').replace('{status}', String(res.status));
         setSaveError(msg);
-        onLog(`공동 목표 저장 실패: ${msg}`);
+        onLog(t('sharedGoal.log.saveFailed').replace('{message}', msg));
         return;
       }
       const saved = (await res.json()) as SharedGoal;
       setSavedGoal(saved);
       setDirty(false);
-      onLog(`공동 목표를 저장했습니다: ${saved.title}`);
+      onLog(t('sharedGoal.log.saved').replace('{title}', saved.title));
     } catch (err) {
-      const msg = (err as Error).message || '알 수 없는 오류';
+      const msg = (err as Error).message || t('sharedGoal.errors.unknown');
       setSaveError(msg);
-      onLog(`공동 목표 저장 실패: ${msg}`);
+      onLog(t('sharedGoal.log.saveFailed').replace('{message}', msg));
     } finally {
       setSaving(false);
     }
@@ -187,20 +198,20 @@ export function SharedGoalForm({ projectId, onLog, readOnlyMode }: Props) {
         <div className="flex items-center gap-2">
           <Target size={14} className="text-[var(--pixel-accent)]" />
           <h3 id={headingId} className="text-[12px] font-bold tracking-wider text-white uppercase">
-            공동 목표
+            {t('sharedGoal.title')}
           </h3>
         </div>
-        <StatusBadge state={state} />
+        <StatusBadge state={state} t={t} />
       </div>
       <p className="text-[11px]" style={{ color: 'var(--shared-goal-hint-fg)' }}>
-        리더 에이전트가 동료들에게 분배할 공동 목표. 저장 후에만 자동 개발을 시작할 수 있습니다.
+        {t('sharedGoal.intro')}
       </p>
 
       {loadState === 'loading' && (
         <EmptyState
           variant="loading"
-          title="공동 목표를 불러오는 중…"
-          description="잠시만 기다려 주세요. 저장된 목표가 있다면 곧 프리필됩니다."
+          title={t('sharedGoal.loadingTitle')}
+          description={t('sharedGoal.loadingDescription')}
           fillMinHeight={false}
           testId="shared-goal-form-loading"
         />
@@ -208,8 +219,8 @@ export function SharedGoalForm({ projectId, onLog, readOnlyMode }: Props) {
 
       {loadState === 'error' && (
         <ErrorState
-          title="공동 목표를 불러오지 못했습니다"
-          description="잠시 후 다시 시도하거나 네트워크 상태를 확인해 주세요."
+          title={t('sharedGoal.loadErrorTitle')}
+          description={t('sharedGoal.loadErrorDescription')}
           testId="shared-goal-form-load-error"
         />
       )}
@@ -218,8 +229,8 @@ export function SharedGoalForm({ projectId, onLog, readOnlyMode }: Props) {
         <EmptyState
           variant="empty"
           icon={<Lock size={24} style={{ color: 'var(--empty-state-icon-fg)' }} />}
-          title="프로젝트를 먼저 선택하세요"
-          description="프로젝트를 선택하면 이 자리에 공동 목표 입력 폼이 표시됩니다."
+          title={t('sharedGoal.noProjectTitle')}
+          description={t('sharedGoal.noProjectDescription')}
           fillMinHeight={false}
           testId="shared-goal-form-no-project"
         />
@@ -229,7 +240,7 @@ export function SharedGoalForm({ projectId, onLog, readOnlyMode }: Props) {
         <form className="space-y-3" onSubmit={submit} noValidate>
           <label className="block">
             <span className="text-[11px] text-white/70">
-              목표 제목 <span className="text-[var(--shared-goal-priority-p1)]">*</span>
+              {t('sharedGoal.titleLabel')} <span className="text-[var(--shared-goal-priority-p1)]">*</span>
               <span className="ml-2 text-white/40">{trimmedTitle.length}/{TITLE_MAX}</span>
             </span>
             <input
@@ -241,19 +252,19 @@ export function SharedGoalForm({ projectId, onLog, readOnlyMode }: Props) {
               aria-required="true"
               aria-invalid={title.length > 0 && !titleValid}
               data-testid="shared-goal-title"
-              placeholder="예) 결제 모듈 보안 강화"
+              placeholder={t('sharedGoal.titlePlaceholder')}
               className="mt-1 w-full bg-black/30 border-2 border-[var(--pixel-border)] text-[12px] text-white px-2 py-1 focus:outline-none focus:border-[var(--pixel-accent)]"
             />
             {title.length > 0 && !titleValid && (
               <span className="text-[10px] text-red-300 block mt-1">
-                {TITLE_MIN}자 이상 {TITLE_MAX}자 이하로 입력해주세요.
+                {t('sharedGoal.titleRange').replace('{min}', String(TITLE_MIN)).replace('{max}', String(TITLE_MAX))}
               </span>
             )}
           </label>
 
           <label className="block">
             <span className="text-[11px] text-white/70">
-              상세 설명 <span className="text-[var(--shared-goal-priority-p1)]">*</span>
+              {t('sharedGoal.descriptionLabel')} <span className="text-[var(--shared-goal-priority-p1)]">*</span>
               <span className="ml-2 text-white/40">{trimmedDesc.length}/{DESC_MAX}</span>
             </span>
             <textarea
@@ -265,20 +276,20 @@ export function SharedGoalForm({ projectId, onLog, readOnlyMode }: Props) {
               aria-invalid={description.length > 0 && !descValid}
               rows={4}
               data-testid="shared-goal-description"
-              placeholder="예) 토큰 검증·AES 암호화·PCI 감사로그 추가 — 리더가 분배할 맥락을 20자 이상으로 적어주세요."
+              placeholder={t('sharedGoal.descriptionPlaceholder')}
               className="mt-1 w-full bg-black/30 border-2 border-[var(--pixel-border)] text-[12px] text-white px-2 py-1 focus:outline-none focus:border-[var(--pixel-accent)]"
             />
             {description.length > 0 && !descValid && (
               <span className="text-[10px] text-red-300 block mt-1">
-                {DESC_MIN}자 이상 {DESC_MAX}자 이하로 입력해주세요.
+                {t('sharedGoal.descriptionRange').replace('{min}', String(DESC_MIN)).replace('{max}', String(DESC_MAX))}
               </span>
             )}
           </label>
 
           <div className="flex flex-wrap items-center gap-4">
-            <fieldset className="flex items-center gap-3" role="radiogroup" aria-label="우선순위">
-              <legend className="text-[11px] text-white/70 mr-1">우선순위</legend>
-              {PRIORITY_OPTIONS.map(opt => (
+            <fieldset className="flex items-center gap-3" role="radiogroup" aria-label={t('sharedGoal.priorityAria')}>
+              <legend className="text-[11px] text-white/70 mr-1">{t('sharedGoal.priorityLegend')}</legend>
+              {priorityOptions.map(opt => (
                 <label key={opt.value} className="flex items-center gap-1 text-[11px] text-white/80 cursor-pointer">
                   <input
                     type="radio"
@@ -295,7 +306,7 @@ export function SharedGoalForm({ projectId, onLog, readOnlyMode }: Props) {
             </fieldset>
 
             <label className="flex items-center gap-2 text-[11px] text-white/70">
-              기한
+              {t('sharedGoal.deadline')}
               <input
                 type="date"
                 value={deadline}
@@ -322,11 +333,11 @@ export function SharedGoalForm({ projectId, onLog, readOnlyMode }: Props) {
               disabled={!isValid || saving || !!readOnlyMode}
               data-testid="shared-goal-save"
               data-read-only={readOnlyMode ? 'true' : 'false'}
-              aria-label={readOnlyMode ? '목표 저장 (읽기 전용 모드에서는 저장 불가)' : undefined}
-              title={readOnlyMode ? '토큰이 소진되어 저장이 잠시 중단되었습니다' : undefined}
+              aria-label={readOnlyMode ? t('sharedGoal.readOnlySaveAria') : undefined}
+              title={readOnlyMode ? t('sharedGoal.readOnlyTitle') : undefined}
               className="inline-flex items-center gap-1 px-3 py-1 border-2 border-[var(--pixel-accent)] bg-[var(--pixel-accent)]/20 text-[11px] text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--pixel-accent)]/30"
             >
-              <Save size={12} /> {saving ? '저장 중…' : '목표 저장'}
+              <Save size={12} /> {saving ? t('sharedGoal.saving') : t('sharedGoal.save')}
             </button>
           </div>
         </form>
@@ -335,7 +346,7 @@ export function SharedGoalForm({ projectId, onLog, readOnlyMode }: Props) {
   );
 }
 
-function StatusBadge({ state }: { state: 'empty' | 'editing' | 'saved' }) {
+function StatusBadge({ state, t }: { state: 'empty' | 'editing' | 'saved'; t: (key: string) => string }) {
   if (state === 'saved') {
     return (
       <span
@@ -345,7 +356,7 @@ function StatusBadge({ state }: { state: 'empty' | 'editing' | 'saved' }) {
         className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider"
         style={{ color: 'var(--shared-goal-border-saved)' }}
       >
-        <Check size={10} /> 저장됨
+        <Check size={10} /> {t('sharedGoal.savedBadge')}
       </span>
     );
   }
@@ -357,7 +368,7 @@ function StatusBadge({ state }: { state: 'empty' | 'editing' | 'saved' }) {
         className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider"
         style={{ color: 'var(--shared-goal-border-editing)' }}
       >
-        <AlertTriangle size={10} /> 미저장
+        <AlertTriangle size={10} /> {t('sharedGoal.editingBadge')}
       </span>
     );
   }
@@ -368,7 +379,7 @@ function StatusBadge({ state }: { state: 'empty' | 'editing' | 'saved' }) {
       className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider"
       style={{ color: 'var(--shared-goal-lock-fg)' }}
     >
-      <Lock size={10} /> 목표 미입력
+      <Lock size={10} /> {t('sharedGoal.emptyBadge')}
     </span>
   );
 }

@@ -17,6 +17,7 @@ import React, { useState } from 'react';
 import { GitBranch, Save, Trash2, Github, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
 import type { SourceProvider } from '../types';
 import { useGitCredentials } from '../utils/useGitCredentials';
+import { useI18n } from '../i18n';
 
 interface Props {
   projectId: string;
@@ -33,6 +34,7 @@ const MASKED = '••••••••';
 const focusRing = 'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--pixel-accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-black';
 
 export function GitCredentialsSection({ projectId, onLog }: Props) {
+  const { t, locale } = useI18n();
   const { data, loading, saving, error, save, remove } = useGitCredentials(projectId);
   const [provider, setProvider] = useState<SourceProvider>('github');
   const [username, setUsername] = useState<string>('');
@@ -51,15 +53,19 @@ export function GitCredentialsSection({ projectId, onLog }: Props) {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!username.trim() || !token.trim()) {
-      onLog?.('사용자명과 토큰을 모두 입력하세요');
+      onLog?.(t('gitCredentials.errors.missingFields'));
       return;
     }
     try {
       await save({ provider, username: username.trim(), token: token.trim() });
       setToken('');
-      onLog?.(`Git 자격증명 저장: ${provider} · ${username.trim()}`);
+      onLog?.(
+        t('gitCredentials.log.saved')
+          .replace('{provider}', provider)
+          .replace('{username}', username.trim()),
+      );
     } catch (err) {
-      onLog?.(`자격증명 저장 실패: ${(err as Error).message}`);
+      onLog?.(t('gitCredentials.errors.saveFailed').replace('{message}', (err as Error).message));
     }
   };
 
@@ -68,9 +74,9 @@ export function GitCredentialsSection({ projectId, onLog }: Props) {
       await remove();
       setUsername('');
       setToken('');
-      onLog?.('Git 자격증명 삭제');
+      onLog?.(t('gitCredentials.log.deleted'));
     } catch (err) {
-      onLog?.(`자격증명 삭제 실패: ${(err as Error).message}`);
+      onLog?.(t('gitCredentials.errors.deleteFailed').replace('{message}', (err as Error).message));
     }
   };
 
@@ -79,30 +85,31 @@ export function GitCredentialsSection({ projectId, onLog }: Props) {
   return (
     <section
       role="region"
-      aria-label="Git 자격증명"
+      aria-label={t('gitCredentials.sectionAria')}
       className="mb-4 bg-[#0f3460] border-2 border-[var(--pixel-border)] p-4 space-y-3"
     >
       <header className="flex items-center gap-2 flex-wrap">
         <GitBranch size={16} className="text-[var(--pixel-accent)]" />
-        <h3 className="text-sm font-bold text-[var(--pixel-accent)] uppercase tracking-wider">Git 자격증명</h3>
+        <h3 className="text-sm font-bold text-[var(--pixel-accent)] uppercase tracking-wider">{t('gitCredentials.sectionTitle')}</h3>
         {loading && (
           <span className="inline-flex items-center gap-1 text-[10px] text-white/60">
-            <Loader2 size={10} className="animate-spin" /> 불러오는 중
+            <Loader2 size={10} className="animate-spin" /> {t('gitCredentials.loading')}
           </span>
         )}
         {hasStored && !loading && (
           <span
             className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border-2 border-emerald-400/70 bg-emerald-500/15 text-emerald-100"
-            title={data?.updatedAt ? `마지막 저장: ${new Date(data.updatedAt).toLocaleString('ko-KR')}` : undefined}
+            title={data?.updatedAt
+              ? t('gitCredentials.lastSaved').replace('{datetime}', new Date(data.updatedAt).toLocaleString(locale === 'ko' ? 'ko-KR' : 'en-US'))
+              : undefined}
           >
-            <CheckCircle2 size={10} /> 저장됨
+            <CheckCircle2 size={10} /> {t('gitCredentials.saved')}
           </span>
         )}
       </header>
 
       <p className="text-[10px] text-white/60 leading-relaxed">
-        personal access token 은 서버에만 보관되며 브라우저 저장소(localStorage)에는 남지 않습니다.
-        저장 후에는 마스킹 표기(<code className="font-mono">{MASKED}</code>)로만 노출됩니다.
+        {t('gitCredentials.intro').replace('{mask}', MASKED)}
       </p>
 
       {error && (
@@ -118,13 +125,13 @@ export function GitCredentialsSection({ projectId, onLog }: Props) {
       <form onSubmit={submit} className="space-y-3">
         <label className="block">
           <span className="flex items-center gap-2 text-[10px] font-bold text-[var(--pixel-accent)] uppercase tracking-wider mb-1">
-            <Github size={10} /> provider
+            <Github size={10} /> {t('gitCredentials.providerLabel')}
           </span>
           <select
             value={provider}
             onChange={e => setProvider(e.target.value as SourceProvider)}
             className={`w-full bg-black/40 border-2 border-[var(--pixel-border)] px-3 py-2 text-sm text-white font-mono focus:border-[var(--pixel-accent)] ${focusRing}`}
-            aria-label="Git 공급자"
+            aria-label={t('gitCredentials.providerSelectAria')}
           >
             {PROVIDER_OPTIONS.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -134,13 +141,13 @@ export function GitCredentialsSection({ projectId, onLog }: Props) {
 
         <label className="block">
           <span className="text-[10px] font-bold text-[var(--pixel-accent)] uppercase tracking-wider mb-1 block">
-            username
+            {t('gitCredentials.usernameLabel')}
           </span>
           <input
             type="text"
             value={username}
             onChange={e => setUsername(e.target.value)}
-            placeholder="예: serment7"
+            placeholder={t('gitCredentials.usernamePlaceholder')}
             autoComplete="username"
             className={`w-full bg-black/40 border-2 border-[var(--pixel-border)] px-3 py-2 text-sm text-white font-mono placeholder:text-white/30 focus:border-[var(--pixel-accent)] ${focusRing}`}
           />
@@ -149,13 +156,13 @@ export function GitCredentialsSection({ projectId, onLog }: Props) {
         <label className="block">
           <span className="flex items-center justify-between mb-1">
             <span className="text-[10px] font-bold text-[var(--pixel-accent)] uppercase tracking-wider">
-              personal access token
+              {t('gitCredentials.tokenLabel')}
             </span>
             {hasStored && (
               <span
                 className="text-[10px] font-mono text-emerald-300"
-                aria-label="저장된 토큰 — 마스킹 표시"
-                title="서버에 저장된 토큰은 원문으로 다시 내려오지 않습니다"
+                aria-label={t('gitCredentials.tokenMaskAria')}
+                title={t('gitCredentials.tokenMaskTitle')}
               >
                 {MASKED}
               </span>
@@ -165,7 +172,7 @@ export function GitCredentialsSection({ projectId, onLog }: Props) {
             type="password"
             value={token}
             onChange={e => setToken(e.target.value)}
-            placeholder={hasStored ? '다시 발급받은 새 토큰으로 교체하려면 입력' : 'ghp_... 또는 glpat-...'}
+            placeholder={hasStored ? t('gitCredentials.tokenPlaceholderReplace') : t('gitCredentials.tokenPlaceholderEmpty')}
             autoComplete="off"
             spellCheck={false}
             className={`w-full bg-black/40 border-2 border-[var(--pixel-border)] px-3 py-2 text-sm text-white font-mono placeholder:text-white/30 focus:border-[var(--pixel-accent)] ${focusRing}`}
@@ -177,18 +184,18 @@ export function GitCredentialsSection({ projectId, onLog }: Props) {
             type="button"
             onClick={discard}
             disabled={!hasStored || saving}
-            aria-label="Git 자격증명 삭제"
+            aria-label={t('gitCredentials.deleteAria')}
             className={`px-3 py-1.5 bg-black/30 border-2 border-[var(--pixel-border)] text-[11px] font-bold uppercase tracking-wider text-white/80 hover:border-red-400 hover:text-red-200 flex items-center gap-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${focusRing}`}
           >
-            <Trash2 size={12} /> 삭제
+            <Trash2 size={12} /> {t('gitCredentials.deleteButton')}
           </button>
           <button
             type="submit"
             disabled={saving || !username.trim() || !token.trim()}
-            aria-label="Git 자격증명 저장"
+            aria-label={t('gitCredentials.saveAria')}
             className={`ml-auto px-4 py-1.5 bg-emerald-500 border-b-2 border-b-emerald-700 text-black text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 hover:brightness-110 active:translate-y-px disabled:opacity-40 disabled:cursor-not-allowed ${focusRing}`}
           >
-            {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} 저장
+            {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />} {t('gitCredentials.saveButton')}
           </button>
         </div>
       </form>

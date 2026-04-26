@@ -71,12 +71,18 @@ export function AppShell(props: AppShellProps): React.ReactElement {
   const overflowItems = useMemo<OverflowMenuItem[]>(() => [
     { id: 'language', label: t('header.actions.language'), width: 132, hideBelowPx: 720 },
   ], [t]);
+  // fallbackContainerWidth — ResizeObserver 가 없거나(SSR/jsdom) 마운트 직전 단계에선
+  // clientWidth=0 이라 useOverflowMenu 가 EMPTY_STATE 로 떨어진다. 그러면 hideBelowPx
+  // 가드와 무관하게 모든 항목이 사라지고 LanguageToggle 까지 화면에서 빠져, 사용자가
+  // "토글이 동작하지 않는다" 고 인지하는 회귀(#75cac73a)가 발생한다. 충분히 큰 폴백을
+  // 깔아 두면 측정 전에도 가시 상태가 유지되며, 실제 폭이 좁아지면 ResizeObserver 가
+  // 즉시 정상 그리디 결과로 갱신한다.
   const {
     containerRef: actionBarRef,
     visibleItems,
     overflowItems: hiddenActions,
     activeBreakpoint,
-  } = useOverflowMenu({ items: overflowItems, overflowTriggerWidth: 40 });
+  } = useOverflowMenu({ items: overflowItems, overflowTriggerWidth: 40, fallbackContainerWidth: 1280 });
   const isLanguageVisible = visibleItems.some(it => it.id === 'language');
   const hasHiddenActions = hiddenActions.length > 0;
 

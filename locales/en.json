@@ -16,6 +16,47 @@
     "en": "English",
     "ko": "Korean"
   },
+  "auth": {
+    "brand": "LLM TYCOON",
+    "login": {
+      "title": "Sign in",
+      "username": "Username",
+      "password": "Password",
+      "capsLockWarning": "⚠ Caps Lock is on.",
+      "submit": "▶ Sign in",
+      "submitting": "Signing in…",
+      "switchToSignup": "No account yet? Sign up",
+      "oauthIntro": "Sign in with your {provider} account.",
+      "oauthCta": "Continue with {provider}"
+    },
+    "signup": {
+      "title": "Create account",
+      "username": "Username",
+      "email": "Email",
+      "password": "Password",
+      "passwordConfirm": "Confirm password",
+      "submit": "Create account",
+      "submitting": "Creating account…",
+      "switchToLogin": "I already have an account",
+      "backToLogin": "Back to sign in",
+      "passwordHint": {
+        "minLength": "At least 8 characters",
+        "letterAndDigit": "Letters and digits"
+      },
+      "passwordMatch": "Passwords match.",
+      "passwordMismatch": "Passwords don't match.",
+      "oauthIntro": "Signing up with your {provider} account. The account is created automatically on first login.",
+      "oauthCta": "Sign up with {provider}",
+      "errors": {
+        "usernameTooShort": "Username must be at least 3 characters.",
+        "usernameCharset": "Username may only contain letters, digits, and ._- characters.",
+        "emailInvalid": "Email format is invalid.",
+        "passwordTooShort": "Password must be at least 8 characters.",
+        "passwordCharset": "Password must include both letters and digits.",
+        "passwordMismatch": "Password confirmation doesn't match."
+      }
+    }
+  },
   "projects": {
     "create": {
       "modalTitle": "Create a new project",
@@ -56,8 +97,6 @@
           "unlocked": "Keep this role across the next recommendation"
         }
       },
-      "countLabel": "Team size: {count} (default 5)",
-      "countAriaLabel": "Recommended team size (2–5)",
       "loading": "Loading recommendations…",
       "empty": "Recommendations appear as you type.",
       "error": "Couldn't load recommendations.",
@@ -70,6 +109,8 @@
       "seedOnCreate": "Seed on create",
       "seedCount": "Seed {count} on create",
       "pendingSeed": "Pending",
+      "countLabel": "Team size: {count} (default 5)",
+      "countAriaLabel": "Recommended team size (2–5)",
       "source": {
         "heuristic": "Heuristic fallback",
         "claude": "Recommended by Claude",
@@ -213,6 +254,121 @@
     },
     "toast": {
       "compacted": "Context auto-compacted — saved {count} tokens."
+    },
+    "settings": {
+      "ariaLabel": "Token usage thresholds",
+      "title": "Threshold settings",
+      "close": "Close",
+      "intro": "When the cumulative total (input + output tokens) or the rough cost (USD) crosses either threshold, the top badge switches to that severity color. Empty means \"unset\".",
+      "cautionLegend": "Caution",
+      "warningLegend": "Warning",
+      "tokensLabel": "Token total ≥",
+      "usdLabel": "Cost (USD) ≥",
+      "tokensCautionPlaceholder": "e.g., 500000",
+      "usdCautionPlaceholder": "e.g., 5",
+      "tokensWarningPlaceholder": "e.g., 2000000",
+      "usdWarningPlaceholder": "e.g., 20",
+      "exportLegend": "Export usage history",
+      "exportRangeAria": "Export range",
+      "rangeToday": "Today",
+      "rangeWeek": "Last 7 days",
+      "rangeAll": "All",
+      "clearAll": "Clear all",
+      "resetToday": "Reset today",
+      "save": "Save",
+      "saveError": "Save failed — browser storage is full or unavailable. Try again or use a different browser."
+    }
+  },
+  "theme": {
+    "ariaLabel": "Theme",
+    "options": {
+      "light": "Light",
+      "system": "System",
+      "dark": "Dark"
+    },
+    "selectAria": "Select {label} theme"
+  },
+  "settings": {
+    "drawer": {
+      "title": "Settings",
+      "closeAria": "Close settings",
+      "motionSection": "Motion",
+      "motionGroupAria": "Reduced motion",
+      "motionSystem": "Follow system",
+      "motionForceOff": "Allow motion",
+      "motionForceOn": "Reduce motion",
+      "onboardingSection": "Onboarding",
+      "replayOnboarding": "Replay tour",
+      "shortcutsSection": "Keyboard shortcuts"
+    }
+  },
+  "gitCredentials": {
+    "sectionAria": "Git credentials",
+    "sectionTitle": "Git credentials",
+    "loading": "Loading",
+    "saved": "Saved",
+    "lastSaved": "Last saved: {datetime}",
+    "intro": "Personal access tokens are stored on the server only and never kept in browser storage (localStorage). After saving they appear only as a mask ({mask}).",
+    "providerLabel": "Provider",
+    "providerSelectAria": "Git provider",
+    "usernameLabel": "Username",
+    "usernamePlaceholder": "e.g., serment7",
+    "tokenLabel": "Personal access token",
+    "tokenMaskAria": "Saved token — masked",
+    "tokenMaskTitle": "Saved tokens are not returned in plaintext",
+    "tokenPlaceholderEmpty": "ghp_... or glpat-...",
+    "tokenPlaceholderReplace": "Enter a new token to replace the saved one",
+    "deleteAria": "Delete Git credentials",
+    "deleteButton": "Delete",
+    "saveAria": "Save Git credentials",
+    "saveButton": "Save",
+    "errors": {
+      "missingFields": "Please enter both username and token",
+      "saveFailed": "Failed to save credentials: {message}",
+      "deleteFailed": "Failed to delete credentials: {message}"
+    },
+    "log": {
+      "saved": "Git credentials saved: {provider} · {username}",
+      "deleted": "Git credentials deleted"
+    }
+  },
+  "sharedGoal": {
+    "title": "Shared goal",
+    "intro": "The shared goal that the leader agent will distribute to teammates. Auto-development can begin only after the goal is saved.",
+    "loadingTitle": "Loading shared goal…",
+    "loadingDescription": "One moment please. A saved goal will be prefilled if found.",
+    "loadErrorTitle": "Failed to load the shared goal",
+    "loadErrorDescription": "Try again later or check your network.",
+    "noProjectTitle": "Pick a project first",
+    "noProjectDescription": "Once a project is selected, the shared-goal form appears here.",
+    "titleLabel": "Goal title",
+    "titlePlaceholder": "e.g., Harden the payment module",
+    "titleRange": "Use between {min} and {max} characters.",
+    "descriptionLabel": "Details",
+    "descriptionPlaceholder": "e.g., Token validation, AES encryption, PCI audit logs — describe the context (20+ chars) for the leader to distribute.",
+    "descriptionRange": "Use between {min} and {max} characters.",
+    "priorityAria": "Priority",
+    "priorityLegend": "Priority",
+    "priorityHigh": "P1-Urgent",
+    "priorityNormal": "P2-Important",
+    "priorityLow": "P3-Normal",
+    "deadline": "Deadline",
+    "save": "Save goal",
+    "saving": "Saving…",
+    "savedBadge": "Saved",
+    "editingBadge": "Unsaved",
+    "emptyBadge": "No goal yet",
+    "readOnlySaveAria": "Save goal (read-only mode)",
+    "readOnlyTitle": "Tokens exhausted — saving is paused",
+    "errors": {
+      "readOnlyBlocked": "Session tokens are exhausted; saving is paused. Restore the subscription and retry.",
+      "saveHttp": "Save failed (HTTP {status})",
+      "unknown": "Unknown error"
+    },
+    "log": {
+      "readOnlyBlocked": "Save of shared goal blocked — session tokens exhausted",
+      "saveFailed": "Shared goal save failed: {message}",
+      "saved": "Shared goal saved: {title}"
     }
   }
 }

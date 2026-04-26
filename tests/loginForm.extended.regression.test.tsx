@@ -22,6 +22,11 @@ import React from 'react';
 import { render, cleanup } from '@testing-library/react';
 
 import { LoginForm, type LoginFormProps } from '../src/components/LoginForm.tsx';
+import { __resetLocaleForTests } from '../src/i18n/index.ts';
+
+// 지시 #75cac73a — i18n 치환 후 기본 'en' 로케일이라 한국어 라벨 검증이
+// 깨지지 않도록 모듈 로드 시점에 'ko' 로 고정한다.
+__resetLocaleForTests('ko');
 
 type Overrides = Partial<LoginFormProps>;
 

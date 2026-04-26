@@ -16,6 +16,47 @@
     "en": "English",
     "ko": "Korean"
   },
+  "auth": {
+    "brand": "LLM TYCOON",
+    "login": {
+      "title": "Sign in",
+      "username": "Username",
+      "password": "Password",
+      "capsLockWarning": "⚠ Caps Lock is on.",
+      "submit": "▶ Sign in",
+      "submitting": "Signing in…",
+      "switchToSignup": "No account yet? Sign up",
+      "oauthIntro": "Sign in with your {provider} account.",
+      "oauthCta": "Continue with {provider}"
+    },
+    "signup": {
+      "title": "Create account",
+      "username": "Username",
+      "email": "Email",
+      "password": "Password",
+      "passwordConfirm": "Confirm password",
+      "submit": "Create account",
+      "submitting": "Creating account…",
+      "switchToLogin": "I already have an account",
+      "backToLogin": "Back to sign in",
+      "passwordHint": {
+        "minLength": "At least 8 characters",
+        "letterAndDigit": "Letters and digits"
+      },
+      "passwordMatch": "Passwords match.",
+      "passwordMismatch": "Passwords don't match.",
+      "oauthIntro": "Signing up with your {provider} account. The account is created automatically on first login.",
+      "oauthCta": "Sign up with {provider}",
+      "errors": {
+        "usernameTooShort": "Username must be at least 3 characters.",
+        "usernameCharset": "Username may only contain letters, digits, and ._- characters.",
+        "emailInvalid": "Email format is invalid.",
+        "passwordTooShort": "Password must be at least 8 characters.",
+        "passwordCharset": "Password must include both letters and digits.",
+        "passwordMismatch": "Password confirmation doesn't match."
+      }
+    }
+  },
   "projects": {
     "create": {
       "modalTitle": "Create a new project",
@@ -236,46 +277,6 @@
       "resetToday": "Reset today",
       "save": "Save",
       "saveError": "Save failed — browser storage is full or unavailable. Try again or use a different browser."
-    }
-  },
-  "auth": {
-    "login": {
-      "title": "Sign in",
-      "username": "Username",
-      "password": "Password",
-      "capsLockWarning": "⚠ Caps Lock is on.",
-      "submit": "▶ Sign in",
-      "submitting": "Signing in…",
-      "switchToSignup": "No account? Sign up",
-      "oauthHint": "Sign in with your {provider} account.",
-      "oauthSubmit": "Continue with {provider}"
-    },
-    "signup": {
-      "title": "Create account",
-      "username": "Username",
-      "email": "Email",
-      "password": "Password",
-      "passwordConfirm": "Confirm password",
-      "submit": "Create account",
-      "submitting": "Creating…",
-      "switchToLogin": "Already have an account",
-      "oauthSwitchToLogin": "Back to sign in",
-      "oauthHint": "Sign up with your {provider} account. The account is created automatically on first sign-in.",
-      "oauthSubmit": "Sign up with {provider}",
-      "rules": {
-        "lengthOk": "8 or more characters",
-        "letterDigit": "Letters and digits",
-        "matchOk": "Passwords match.",
-        "matchFail": "Passwords do not match."
-      },
-      "errors": {
-        "usernameMin": "Username must be at least 3 characters.",
-        "usernamePattern": "Username may contain only letters, digits, and ._-",
-        "emailFormat": "Email format is invalid.",
-        "passwordMin": "Password must be at least 8 characters.",
-        "passwordCharset": "Password must include both letters and digits.",
-        "passwordMismatch": "Password confirmation does not match."
-      }
     }
   },
   "theme": {

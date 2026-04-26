@@ -6,6 +6,8 @@
  */
 
 import React, { useState } from 'react';
+import { useI18n } from '../i18n';
+import { LanguageToggle } from '../ui/LanguageToggle';
 
 export interface LoginFormProps {
   onPremise: boolean;
@@ -17,6 +19,7 @@ export interface LoginFormProps {
 }
 
 export function LoginForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToSignup, error }: LoginFormProps) {
+  const { t } = useI18n();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -60,9 +63,14 @@ export function LoginForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToSi
         color: 'var(--pixel-white)',
       }}
     >
+      {/* 지시 #75cac73a — 로그인 전에도 언어를 전환할 수 있도록 토글을 카드 상단에 배치.
+          토글 클릭 → setLocale(전역) → useI18n 구독자(현 컴포넌트 포함) 즉시 재렌더. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        <LanguageToggle />
+      </div>
       <header style={{ marginBottom: 20, textAlign: 'center' }}>
-        <div style={{ fontSize: 12, letterSpacing: 2, color: 'var(--pixel-accent)' }}>LLM TYCOON</div>
-        <h1 style={{ margin: '6px 0 0', fontSize: 22 }}>로그인</h1>
+        <div style={{ fontSize: 12, letterSpacing: 2, color: 'var(--pixel-accent)' }}>{t('auth.brand')}</div>
+        <h1 style={{ margin: '6px 0 0', fontSize: 22 }}>{t('auth.login.title')}</h1>
       </header>
 
       {error && (
@@ -87,7 +95,7 @@ export function LoginForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToSi
       {onPremise ? (
         <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-            <span style={{ color: 'var(--pixel-accent)' }}>아이디</span>
+            <span style={{ color: 'var(--pixel-accent)' }}>{t('auth.login.username')}</span>
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -100,7 +108,7 @@ export function LoginForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToSi
             />
           </label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-            <span style={{ color: 'var(--pixel-accent)' }}>비밀번호</span>
+            <span style={{ color: 'var(--pixel-accent)' }}>{t('auth.login.password')}</span>
             <input
               type="password"
               value={password}
@@ -116,7 +124,7 @@ export function LoginForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToSi
             />
             {capsLockOn && (
               <span id={capsLockId} role="status" style={{ fontSize: 11, color: 'var(--pixel-text)' }}>
-                ⚠ Caps Lock 이 켜져 있습니다.
+                {t('auth.login.capsLockWarning')}
               </span>
             )}
           </label>
@@ -129,19 +137,19 @@ export function LoginForm({ onPremise, provider, onSubmit, onOAuth, onSwitchToSi
               cursor: canSubmit ? 'pointer' : 'not-allowed',
             }}
           >
-            {submitting ? '로그인 중…' : '▶ 로그인'}
+            {submitting ? t('auth.login.submitting') : t('auth.login.submit')}
           </button>
           <button type="button" className="link" onClick={onSwitchToSignup} style={linkButton}>
-            계정이 없으신가요? 회원가입
+            {t('auth.login.switchToSignup')}
           </button>
         </form>
       ) : (
         <div className="oauth-panel" style={{ display: 'flex', flexDirection: 'column', gap: 14, textAlign: 'center' }}>
           <p style={{ margin: 0, fontSize: 13, color: '#b8b8d1' }}>
-            {providerLabel} 계정으로 로그인하세요.
+            {t('auth.login.oauthIntro').replace('{provider}', providerLabel)}
           </p>
           <button type="button" onClick={onOAuth} style={primaryButton}>
-            {providerLabel} 로 계속하기
+            {t('auth.login.oauthCta').replace('{provider}', providerLabel)}
           </button>
         </div>
       )}

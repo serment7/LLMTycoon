@@ -14,6 +14,7 @@ import React, { useCallback, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 
 import { KeyboardShortcutCheatsheet } from './KeyboardShortcutCheatsheet';
+import { useI18n } from '../i18n';
 
 // ────────────────────────────────────────────────────────────────────────────
 // 순수 함수 — 테스트 대상
@@ -83,6 +84,7 @@ export function SettingsDrawer({
   onReplayOnboarding,
   className,
 }: SettingsDrawerProps): React.ReactElement | null {
+  const { t } = useI18n();
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
   // Esc 닫기 + 열릴 때 드로어에 포커스 이동.
@@ -138,11 +140,11 @@ export function SettingsDrawer({
       >
         <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-md)' }}>
           <h2 id="settings-drawer-title" style={{ fontSize: 'var(--font-size-md)', fontWeight: 'var(--font-weight-bold)' }}>
-            설정
+            {t('settings.drawer.title')}
           </h2>
           <button
             type="button"
-            aria-label="설정 닫기"
+            aria-label={t('settings.drawer.closeAria')}
             onClick={onClose}
             data-testid="settings-drawer-close"
             style={{ background: 'transparent', border: 'none', color: 'var(--color-text-muted)', cursor: 'pointer' }}
@@ -151,11 +153,11 @@ export function SettingsDrawer({
           </button>
         </header>
 
-        <section aria-label="모션 설정" style={{ marginBottom: 'var(--space-lg)' }}>
+        <section aria-label={t('settings.drawer.motionSection')} style={{ marginBottom: 'var(--space-lg)' }}>
           <h3 className="text-[11px] uppercase tracking-wider" style={{ color: 'var(--color-text-muted)', marginBottom: 'var(--space-xs)' }}>
-            모션
+            {t('settings.drawer.motionSection')}
           </h3>
-          <div role="radiogroup" aria-label="리듀스드 모션" style={{ display: 'flex', gap: 'var(--space-xs)' }}>
+          <div role="radiogroup" aria-label={t('settings.drawer.motionGroupAria')} style={{ display: 'flex', gap: 'var(--space-xs)' }}>
             {(['system', 'force-off', 'force-on'] as ReducedMotionPreference[]).map(value => (
               <button
                 key={value}
@@ -173,15 +175,19 @@ export function SettingsDrawer({
                   cursor: 'pointer',
                 }}
               >
-                {value === 'system' ? '시스템 따름' : value === 'force-off' ? '모션 허용' : '모션 최소화'}
+                {value === 'system'
+                  ? t('settings.drawer.motionSystem')
+                  : value === 'force-off'
+                    ? t('settings.drawer.motionForceOff')
+                    : t('settings.drawer.motionForceOn')}
               </button>
             ))}
           </div>
         </section>
 
-        <section aria-label="온보딩" style={{ marginBottom: 'var(--space-lg)' }}>
+        <section aria-label={t('settings.drawer.onboardingSection')} style={{ marginBottom: 'var(--space-lg)' }}>
           <h3 className="text-[11px] uppercase tracking-wider" style={{ color: 'var(--color-text-muted)', marginBottom: 'var(--space-xs)' }}>
-            온보딩
+            {t('settings.drawer.onboardingSection')}
           </h3>
           <button
             type="button"
@@ -198,13 +204,13 @@ export function SettingsDrawer({
               opacity: onReplayOnboarding ? 1 : 0.6,
             }}
           >
-            투어 다시 보기
+            {t('settings.drawer.replayOnboarding')}
           </button>
         </section>
 
-        <section aria-label="키보드 단축키">
+        <section aria-label={t('settings.drawer.shortcutsSection')}>
           <h3 className="text-[11px] uppercase tracking-wider" style={{ color: 'var(--color-text-muted)', marginBottom: 'var(--space-xs)' }}>
-            키보드 단축키
+            {t('settings.drawer.shortcutsSection')}
           </h3>
           <KeyboardShortcutCheatsheet />
         </section>

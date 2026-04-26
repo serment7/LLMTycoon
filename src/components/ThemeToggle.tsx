@@ -12,8 +12,9 @@
 //   · `role="radiogroup"` + 각 버튼 `aria-pressed` — 현재 선택을 스크린리더에 고지.
 //   · 키보드: Tab 으로 이동, Enter/Space 로 선택(브라우저 기본).
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Sun, Moon, Monitor } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 // ────────────────────────────────────────────────────────────────────────────
 // 순수 함수 — Node 테스트에서 직접 호출해 계약을 잠근다.
@@ -93,13 +94,23 @@ export interface ThemeToggleProps {
   className?: string;
 }
 
-const OPTIONS: ReadonlyArray<{ value: ThemePreference; label: string; icon: React.ReactElement }> = Object.freeze([
-  { value: 'light', label: '라이트', icon: <Sun size={12} aria-hidden="true" /> },
-  { value: 'system', label: '시스템', icon: <Monitor size={12} aria-hidden="true" /> },
-  { value: 'dark', label: '다크', icon: <Moon size={12} aria-hidden="true" /> },
-]);
+const OPTION_ICONS: Record<ThemePreference, React.ReactElement> = {
+  light: <Sun size={12} aria-hidden="true" />,
+  system: <Monitor size={12} aria-hidden="true" />,
+  dark: <Moon size={12} aria-hidden="true" />,
+};
+const OPTION_VALUES: ReadonlyArray<ThemePreference> = ['light', 'system', 'dark'];
 
 export function ThemeToggle({ className }: ThemeToggleProps = {}): React.ReactElement {
+  const { t } = useI18n();
+  const options = useMemo(
+    () => OPTION_VALUES.map(value => ({
+      value,
+      label: t(`theme.options.${value}`),
+      icon: OPTION_ICONS[value],
+    })),
+    [t],
+  );
   const [preference, setPreference] = useState<ThemePreference>(() => readStored());
 
   // 마운트 시 저장값을 DOM 에 적용.
@@ -121,7 +132,7 @@ export function ThemeToggle({ className }: ThemeToggleProps = {}): React.ReactEl
   return (
     <div
       role="radiogroup"
-      aria-label="테마 선택"
+      aria-label={t('theme.ariaLabel')}
       data-testid="theme-toggle"
       data-tour-anchor="theme-toggle"
       className={`theme-toggle${className ? ` ${className}` : ''}`}
@@ -135,7 +146,7 @@ export function ThemeToggle({ className }: ThemeToggleProps = {}): React.ReactEl
         borderRadius: 'var(--radius-sm)',
       }}
     >
-      {OPTIONS.map(opt => {
+      {options.map(opt => {
         const pressed = preference === opt.value;
         return (
           <button
@@ -144,7 +155,7 @@ export function ThemeToggle({ className }: ThemeToggleProps = {}): React.ReactEl
             role="radio"
             aria-checked={pressed}
             aria-pressed={pressed}
-            aria-label={`${opt.label} 테마 선택`}
+            aria-label={t('theme.selectAria').replace('{label}', opt.label)}
             data-testid={`theme-toggle-${opt.value}`}
             data-active={pressed ? 'true' : 'false'}
             onClick={() => onSelect(opt.value)}

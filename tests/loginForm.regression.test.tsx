@@ -25,6 +25,13 @@ import React from 'react';
 import { act, render, cleanup, fireEvent } from '@testing-library/react';
 
 import { LoginForm, type LoginFormProps } from '../src/components/LoginForm.tsx';
+import { __resetLocaleForTests } from '../src/i18n/index.ts';
+
+// 지시 #75cac73a — LoginForm 이 i18n 으로 치환된 뒤로는 기본 'en' 로케일에서
+// 영어 라벨이 나오므로, 본 회귀 스위트가 검증하던 한국어 텍스트가 안정적으로
+// 노출되도록 매 테스트 직전에 로케일을 'ko' 로 강제 고정한다. 전역 영속화는
+// 테스트가 자체 메모리만 쓰므로 별도 storage 주입 없이 모듈 상태만 갱신.
+__resetLocaleForTests('ko');
 
 type Overrides = Partial<LoginFormProps>;
 
