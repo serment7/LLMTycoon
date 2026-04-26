@@ -257,3 +257,316 @@ test('T4-2. 기본 cap 에서 144,000 토큰은 soft, 180,000 토큰은 hard 로
   assert.equal(shouldDegrade(freshTotals({ inputTokens: 179_999 })), 'soft');
   assert.equal(shouldDegrade(freshTotals({ inputTokens: 180_000 })), 'hard');
 });
+
+// ────────────────────────────────────────────────────────────────────────────
+// 지시 #e4c60f64 — 토큰 한도 전략 회귀 (truncateToBudget · 스트리밍 watchdog)
+//
+// 본 섹션은 아직 src/ 에 추출되지 않은 두 헬퍼의 **계약(contract)** 을 잠근다.
+// 스펙은 자급자족(self-contained) — 참조 구현을 inline 으로 포함해 dev 가
+// 향후 src/llm/{truncate,streamingWatchdog}.ts 로 이전할 때 그대로 옮길 수 있도록 한다.
+// 이전이 끝나면 inline impl 을 import 로 치환하기만 하면 된다(테스트 본문 무변경).
+//
+// 모델 한도 매트릭스 — 로컬 Ollama 모델별 컨텍스트 윈도(2026-04 시점):
+//   · llama3:8b   → 8_192
+//   · qwen2.5:7b  → 32_768
+//   · mistral:7b  → 8_192
+// ────────────────────────────────────────────────────────────────────────────
+
+interface BudgetMessage {
+  readonly role: 'system' | 'user' | 'assistant';
+  readonly content: string;
+  readonly tokens: number;
+}
+
+interface TruncateOptions {
+  readonly modelLimit: number;
+  /** 출력에 남겨 둘 토큰. 기본 = floor(modelLimit · 0.1). */
+  readonly reservedOutputTokens?: number;
+}
+
+interface TruncateResult {
+  readonly messages: readonly BudgetMessage[];
+  readonly droppedCount: number;
+  readonly totalTokens: number;
+  readonly budgetTokens: number;
+  readonly preservedSystemPrompt: boolean;
+  readonly preservedLatestUser: boolean;
+}
+
+class OverBudgetError extends Error {
+  constructor(
+    readonly required: number,
+    readonly budget: number,
+  ) {
+    super(`OverBudgetError: 시스템+최신 사용자 입력 ${required}토큰이 예산 ${budget}토큰을 초과`);
+    this.name = 'OverBudgetError';
+  }
+}
+
+/**
+ * 메시지 배열을 모델 한도 안으로 줄인다. 보존 우선순위:
+ *   (1) 모든 system 메시지 — 항상 살린다.
+ *   (2) 가장 마지막 user 메시지 — 항상 살린다.
+ *   (3) 그 사이 history(assistant/user 혼재) — 오래된 순부터 드랍한다.
+ *
+ * 시스템+최신 user 의 토큰 합이 예산을 초과하면 `OverBudgetError` 를 던진다 —
+ * 호출자는 (a) 시스템 프롬프트 축약(applySoftDegrade) 또는 (b) 모델 교체로 처리.
+ */
+function truncateToBudget(
+  messages: readonly BudgetMessage[],
+  options: TruncateOptions,
+): TruncateResult {
+  const reserved = options.reservedOutputTokens ?? Math.floor(options.modelLimit * 0.1);
+  const budget = Math.max(0, options.modelLimit - reserved);
+
+  const systems = messages.filter((m) => m.role === 'system');
+  const nonSystem = messages.filter((m) => m.role !== 'system');
+  let lastUserIdx = -1;
+  for (let i = nonSystem.length - 1; i >= 0; i -= 1) {
+    if (nonSystem[i].role === 'user') { lastUserIdx = i; break; }
+  }
+  if (lastUserIdx < 0) {
+    throw new Error('truncateToBudget: 마지막 user 메시지가 필요합니다');
+  }
+  const latestUser = nonSystem[lastUserIdx];
+  const middle = nonSystem.slice(0, lastUserIdx); // 최신 user 직전까지의 history
+  const tail = nonSystem.slice(lastUserIdx + 1); // 최신 user 이후 assistant 등(보존)
+
+  const sumTokens = (arr: readonly BudgetMessage[]) => arr.reduce((a, m) => a + Math.max(0, m.tokens | 0), 0);
+  const fixedTokens = sumTokens(systems) + latestUser.tokens + sumTokens(tail);
+  if (fixedTokens > budget) {
+    throw new OverBudgetError(fixedTokens, budget);
+  }
+
+  // 가장 오래된(앞쪽) middle 부터 드랍.
+  let kept = middle.slice();
+  let droppedCount = 0;
+  while (sumTokens(kept) + fixedTokens > budget && kept.length > 0) {
+    kept.shift();
+    droppedCount += 1;
+  }
+
+  const finalMessages = [...systems, ...kept, latestUser, ...tail];
+  return {
+    messages: finalMessages,
+    droppedCount,
+    totalTokens: sumTokens(finalMessages),
+    budgetTokens: budget,
+    preservedSystemPrompt: systems.length > 0,
+    preservedLatestUser: true,
+  };
+}
+
+const MODEL_TOKEN_LIMITS: Readonly<Record<string, number>> = Object.freeze({
+  'llama3:8b': 8_192,
+  'qwen2.5:7b': 32_768,
+  'mistral:7b': 8_192,
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// T5. truncateToBudget — 시스템 프롬프트·최신 사용자 입력 보존 계약
+// ────────────────────────────────────────────────────────────────────────────
+
+test('T5-1. 예산 미만 — 입력 그대로 통과, 드랍 0', () => {
+  const messages: BudgetMessage[] = [
+    { role: 'system', content: '시스템', tokens: 100 },
+    { role: 'user', content: 'q1', tokens: 50 },
+    { role: 'assistant', content: 'a1', tokens: 80 },
+    { role: 'user', content: 'q2', tokens: 30 },
+  ];
+  const r = truncateToBudget(messages, { modelLimit: 8_192, reservedOutputTokens: 1_024 });
+  assert.equal(r.droppedCount, 0);
+  assert.equal(r.messages.length, messages.length);
+  assert.equal(r.preservedSystemPrompt, true);
+  assert.equal(r.preservedLatestUser, true);
+  assert.equal(r.budgetTokens, 8_192 - 1_024);
+});
+
+test('T5-2. 한도 초과 — 가장 오래된 history 부터 드랍, 시스템·최신 user 는 보존', () => {
+  const messages: BudgetMessage[] = [
+    { role: 'system', content: '시스템 프롬프트(중요)', tokens: 1_000 },
+    { role: 'user', content: 'oldest q', tokens: 1_500 }, // 드랍 1순위
+    { role: 'assistant', content: 'oldest a', tokens: 1_500 }, // 드랍 2순위
+    { role: 'user', content: 'mid q', tokens: 1_500 },
+    { role: 'assistant', content: 'mid a', tokens: 1_500 },
+    { role: 'user', content: 'latest q (보존)', tokens: 1_000 },
+  ];
+  // 합 8000, 한도 6000(예산 5400 reserved 600)
+  const r = truncateToBudget(messages, { modelLimit: 6_000, reservedOutputTokens: 600 });
+  assert.ok(r.totalTokens <= r.budgetTokens, `총합 ${r.totalTokens} ≤ 예산 ${r.budgetTokens}`);
+  assert.ok(r.droppedCount > 0, `드랍 발생 — 실제 ${r.droppedCount}`);
+  assert.equal(r.messages[0].content, '시스템 프롬프트(중요)', '시스템 메시지가 항상 첫 자리');
+  assert.equal(r.messages[r.messages.length - 1].content, 'latest q (보존)', '최신 user 가 마지막');
+  assert.equal(r.preservedSystemPrompt, true);
+  assert.equal(r.preservedLatestUser, true);
+});
+
+test('T5-3. 시스템+최신 user 만으로도 예산 초과 → OverBudgetError', () => {
+  const messages: BudgetMessage[] = [
+    { role: 'system', content: '거대 시스템', tokens: 6_000 },
+    { role: 'user', content: '거대 user', tokens: 4_000 },
+  ];
+  assert.throws(
+    () => truncateToBudget(messages, { modelLimit: 8_192, reservedOutputTokens: 1_024 }),
+    (err: unknown) => err instanceof OverBudgetError && err.required === 10_000 && err.budget === 7_168,
+  );
+});
+
+test('T5-4. 시스템 메시지가 여러 개여도 모두 보존된다(누적 직렬화)', () => {
+  const messages: BudgetMessage[] = [
+    { role: 'system', content: '시스템1', tokens: 500 },
+    { role: 'system', content: '시스템2(코드 컨벤션)', tokens: 500 },
+    { role: 'user', content: 'old q', tokens: 1_000 },
+    { role: 'assistant', content: 'old a', tokens: 1_000 },
+    { role: 'user', content: 'now', tokens: 200 },
+  ];
+  const r = truncateToBudget(messages, { modelLimit: 2_000, reservedOutputTokens: 0 });
+  // 시스템 두 개 + 최신 user = 1200 토큰 → history(2000) 전체 드랍 필요
+  assert.equal(r.droppedCount, 2);
+  assert.equal(r.messages.filter((m) => m.role === 'system').length, 2, '시스템 2개 모두 보존');
+  assert.equal(r.messages[r.messages.length - 1].content, 'now');
+});
+
+test('T5-5. 마지막 user 가 없으면 즉시 throw — 호출 계약 위반 가드', () => {
+  const messages: BudgetMessage[] = [
+    { role: 'system', content: '시스템', tokens: 100 },
+    { role: 'assistant', content: 'a', tokens: 50 },
+  ];
+  assert.throws(
+    () => truncateToBudget(messages, { modelLimit: 8_192 }),
+    /마지막 user 메시지/,
+  );
+});
+
+test('T5-6. reservedOutputTokens 미지정 → 모델 한도의 10% 가 자동 예약', () => {
+  const messages: BudgetMessage[] = [
+    { role: 'system', content: 's', tokens: 10 },
+    { role: 'user', content: 'u', tokens: 10 },
+  ];
+  const r = truncateToBudget(messages, { modelLimit: 1_000 });
+  assert.equal(r.budgetTokens, 900, '1_000 - floor(1_000·0.1) = 900');
+});
+
+// 모델별 한도 매트릭스 — 같은 입력을 세 모델에 적용해 보존/드랍 결과의 일관성을 잠근다.
+for (const [model, limit] of Object.entries(MODEL_TOKEN_LIMITS)) {
+  test(`T5-7[${model}]. 한도 ${limit} — 시스템·최신 user 항상 보존, history 만 드랍 후보`, () => {
+    // 의도적으로 모든 모델에서 한도를 넘기는 상황을 만든다(40_000 토큰 history).
+    const heavy = Array.from({ length: 40 }, (_, i): BudgetMessage => ({
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `turn-${i}`,
+      tokens: 1_000,
+    }));
+    const messages: BudgetMessage[] = [
+      { role: 'system', content: `시스템(${model})`, tokens: 200 },
+      ...heavy,
+      { role: 'user', content: '최신 질문', tokens: 100 },
+    ];
+    const r = truncateToBudget(messages, { modelLimit: limit });
+    assert.ok(r.totalTokens <= r.budgetTokens, `${model}: 총합 ${r.totalTokens} ≤ 예산 ${r.budgetTokens}`);
+    assert.equal(r.messages[0].role, 'system', `${model}: 시스템 첫 자리`);
+    assert.equal(r.messages[0].content, `시스템(${model})`);
+    assert.equal(r.messages[r.messages.length - 1].content, '최신 질문', `${model}: 최신 user 마지막`);
+    // 한도가 가장 큰 qwen2.5:7b 도 40_000 history 는 모두 못 담는다.
+    assert.ok(r.droppedCount > 0, `${model}: 적어도 한 건은 드랍`);
+  });
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// T6. 스트리밍 watchdog — 90% 임계 조기 종료
+// ────────────────────────────────────────────────────────────────────────────
+//
+// 호출자는 토큰이 스트림될 때마다 `observe(delta)` 를 부른다. 누적 토큰이
+// modelLimit · 0.9 에 도달하면 watchdog 이 조기 종료를 발화한다(아래 onAbort).
+// 한 번 발화하면 멱등(idempotent) — 후속 observe 는 추가 발화 없이 무시.
+
+interface WatchdogOptions {
+  readonly ratio?: number;
+  readonly onAbort?: (info: { tokensSeen: number; threshold: number }) => void;
+}
+
+interface StreamingWatchdog {
+  readonly threshold: number;
+  observe(deltaTokens: number): void;
+  isAborted(): boolean;
+  cumulative(): number;
+}
+
+function createStreamingWatchdog(modelLimit: number, opts: WatchdogOptions = {}): StreamingWatchdog {
+  const ratio = opts.ratio ?? 0.9;
+  const threshold = Math.floor(Math.max(0, modelLimit) * ratio);
+  let cumulative = 0;
+  let aborted = false;
+  return {
+    threshold,
+    observe(delta: number) {
+      if (aborted) return;
+      cumulative += Math.max(0, delta | 0);
+      if (cumulative >= threshold) {
+        aborted = true;
+        opts.onAbort?.({ tokensSeen: cumulative, threshold });
+      }
+    },
+    isAborted() { return aborted; },
+    cumulative() { return cumulative; },
+  };
+}
+
+test('T6-1. 임계 미만 — 발화 없음(누적만 갱신)', () => {
+  let abortCount = 0;
+  const wd = createStreamingWatchdog(1_000, { onAbort: () => { abortCount += 1; } });
+  assert.equal(wd.threshold, 900);
+  wd.observe(100);
+  wd.observe(200);
+  wd.observe(599); // 누적 899 — 임계 직전
+  assert.equal(wd.isAborted(), false);
+  assert.equal(wd.cumulative(), 899);
+  assert.equal(abortCount, 0);
+});
+
+test('T6-2. 임계 정확 도달 — onAbort 1회 발화 + isAborted=true', () => {
+  let info: { tokensSeen: number; threshold: number } | null = null;
+  const wd = createStreamingWatchdog(1_000, { onAbort: (i) => { info = i; } });
+  wd.observe(900);
+  assert.equal(wd.isAborted(), true);
+  assert.deepEqual(info, { tokensSeen: 900, threshold: 900 });
+});
+
+test('T6-3. 임계 초과 후 추가 observe — 멱등(추가 발화 없음)', () => {
+  let abortCount = 0;
+  const wd = createStreamingWatchdog(1_000, { onAbort: () => { abortCount += 1; } });
+  wd.observe(950);
+  assert.equal(abortCount, 1);
+  wd.observe(100); // 무시되어야 한다 — 이미 종료됨
+  wd.observe(500);
+  assert.equal(abortCount, 1, '발화는 정확히 1회');
+  assert.equal(wd.cumulative(), 950, '발화 이후 누적 갱신 중지');
+});
+
+test('T6-4. 커스텀 ratio — 50% 임계로도 동작', () => {
+  const wd = createStreamingWatchdog(2_000, { ratio: 0.5 });
+  assert.equal(wd.threshold, 1_000);
+  wd.observe(999);
+  assert.equal(wd.isAborted(), false);
+  wd.observe(1);
+  assert.equal(wd.isAborted(), true);
+});
+
+test('T6-5. 음수/0 delta 는 무시(잡음 방지)', () => {
+  const wd = createStreamingWatchdog(1_000);
+  wd.observe(-500);
+  wd.observe(0);
+  assert.equal(wd.cumulative(), 0);
+  assert.equal(wd.isAborted(), false);
+});
+
+// 모델별 90% 임계 매트릭스 — 회귀 시 어느 모델이 어긋나는지 즉시 식별.
+for (const [model, limit] of Object.entries(MODEL_TOKEN_LIMITS)) {
+  test(`T6-6[${model}]. 90% 임계 = floor(${limit}·0.9) = ${Math.floor(limit * 0.9)}`, () => {
+    const wd = createStreamingWatchdog(limit);
+    assert.equal(wd.threshold, Math.floor(limit * 0.9), `${model} threshold`);
+    wd.observe(wd.threshold - 1);
+    assert.equal(wd.isAborted(), false, `${model}: 임계 직전 미발화`);
+    wd.observe(1);
+    assert.equal(wd.isAborted(), true, `${model}: 임계 도달 발화`);
+  });
+}
