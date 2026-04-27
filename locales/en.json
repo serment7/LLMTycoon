@@ -66,6 +66,18 @@
       "descriptionPlaceholder": "What is the project about?",
       "workspacePath": "Workspace path",
       "workspacePathHint": "Leave blank to use the default.",
+      "docStorage": {
+        "title": "Doc storage",
+        "intro": "Choose where the agents' docs/ files are written.",
+        "workspace": {
+          "title": "Project folder",
+          "hint": "Save under the project's workspace docs/ folder (default behavior)."
+        },
+        "central": {
+          "title": "LLMTycoon repo",
+          "hint": "Isolate under LLMTycoon's .llmtycoon/projects/<id>/docs."
+        }
+      },
       "submit": "Create project",
       "cancel": "Cancel",
       "errors": {
@@ -479,6 +491,42 @@
       "onboardingSection": "Onboarding",
       "replayOnboarding": "Replay tour",
       "shortcutsSection": "Keyboard shortcuts"
+    },
+    "docStorage": {
+      "title": "Doc storage",
+      "intro": "Where this project's docs/ files are saved. Changing the mode prompts how to handle existing files.",
+      "noProject": "Select a project to change its doc storage location.",
+      "workspace": {
+        "title": "Project folder",
+        "hint": "Save inside the workspace docs/."
+      },
+      "central": {
+        "title": "LLMTycoon repo",
+        "hint": "Isolate under .llmtycoon/projects/<id>/docs."
+      },
+      "migrate": {
+        "title": "Change doc storage location",
+        "intro": "Switching from {from} to {to}. How should existing docs/ files be handled?",
+        "strategyLabel": "Migration strategy",
+        "strategy": {
+          "move": {
+            "title": "Move",
+            "hint": "Move existing files to the new location and clear the original."
+          },
+          "copy": {
+            "title": "Copy",
+            "hint": "Copy existing files to the new location (keeps the original)."
+          },
+          "none": {
+            "title": "Don't move",
+            "hint": "Only change the setting; leave existing files in place."
+          }
+        },
+        "confirm": "Apply",
+        "successTitle": "Doc storage location updated",
+        "successSummary": "Moved {moved} · skipped {skipped}",
+        "errorTitle": "Failed to update doc storage location"
+      }
     }
   },
   "gitCredentials": {

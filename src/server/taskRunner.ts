@@ -27,6 +27,8 @@ import {
   type LeaderMessageKind,
 } from '../utils/leaderMessage';
 import type { GitAutomationRunResult } from '../utils/gitAutomation';
+import { extractDocStorage, resolveCentralDocsRoot } from '../utils/docStorage';
+import type { McpServerRecord } from '../stores/projectMcpServersStore';
 
 // Git 자동화 트리거 경로 전용 디버그 스위치. 리더 경유 단일 브랜치 경로
 // (handleImprovementReport → runGitAutomation) 에서 어느 단계가 누락됐는지
@@ -78,6 +80,7 @@ export class TaskRunner {
   private filesCol: Collection<CodeFile>;
   private settingsCol: Collection<{ key: string; value: any }>;
   private sharedGoalsCol: Collection<SharedGoal>;
+  private mcpServersCol: Collection<McpServerRecord>;
 
   private autoDevTimer: NodeJS.Timeout | null = null;
   // auto-dev 는 서버 메모리 + DB 영속화. 기동 시 DB 에서 복원한다.
@@ -103,6 +106,7 @@ export class TaskRunner {
     this.filesCol = this.db.collection<CodeFile>('files');
     this.settingsCol = this.db.collection<{ key: string; value: any }>('settings');
     this.sharedGoalsCol = this.db.collection<SharedGoal>('shared_goals');
+    this.mcpServersCol = this.db.collection<McpServerRecord>('mcp_servers');
   }
 
   // 프로젝트의 활성 공동 목표를 반환. 자동 개발 루프와 리더 프롬프트 조립 양쪽에서
@@ -169,10 +173,29 @@ export class TaskRunner {
     // 로컬 LLM(ollama/vllm) 과 claude-cli 는 노출되는 도구 이름·호출 규약이 다르므로,
     // 현재 프로바이더를 프롬프트 빌더에 넘겨 알맞은 도구 목록과 규칙 블록을 선택한다.
     const systemPrompt = buildSystemPrompt(agent, { provider: readLLMEnv().provider });
+    // 문서 저장 위치 결정 — 'central' 모드면 LLMTycoon 저장소 루트(=프로세스 cwd)
+    // 아래 .llmtycoon/projects/<id>/docs 로 고정. workspace 모드면 undefined 라
+    // 기존 동작(<workspace>/docs) 이 유지된다. 모드 변경은 호출부(마이그레이션 API)
+    // 가 워커를 dispose 한 뒤 다시 ensure 호출해야 반영된다.
+    const docStorage = extractDocStorage(project.settingsJson);
+    const centralDocsRoot = docStorage.mode === 'central'
+      ? resolveCentralDocsRoot(process.cwd(), project.id)
+      : undefined;
+    if (centralDocsRoot) {
+      try { mkdirSync(centralDocsRoot, { recursive: true }); } catch { /* noop */ }
+    }
+    // 사용자 등록 MCP 서버 스냅샷 — DB 가 단일 출처. 추가/삭제 라우트가 워커를
+    // dispose 하므로, 이 시점에 읽은 목록이 다음 spawn 직전 상태와 일치한다.
+    const mcpServers = await this.mcpServersCol
+      .find({ projectId: project.id }, { projection: { _id: 0 } })
+      .sort({ createdAt: 1 })
+      .toArray();
     return this.registry.ensure({
       agentId: agent.id,
       projectId: project.id,
       workspacePath,
+      centralDocsRoot,
+      mcpServers,
       port: this.port,
       systemPrompt,
       // 리더 단일 브랜치 경로로 통합된 뒤, 에이전트 단위 완료 훅은 제거됐다.

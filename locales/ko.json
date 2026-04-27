@@ -66,6 +66,18 @@
       "descriptionPlaceholder": "이 프로젝트는 무엇을 다루나요?",
       "workspacePath": "작업 공간 경로",
       "workspacePathHint": "비워 두면 기본 경로를 사용합니다.",
+      "docStorage": {
+        "title": "문서 저장 위치",
+        "intro": "에이전트가 만드는 docs/ 문서를 어디에 저장할지 선택하세요.",
+        "workspace": {
+          "title": "프로젝트 폴더",
+          "hint": "프로젝트 작업 공간의 docs/ 폴더에 저장합니다(기존 동작)."
+        },
+        "central": {
+          "title": "LLMTycoon 저장소",
+          "hint": "LLMTycoon 안의 .llmtycoon/projects/<id>/docs 로 격리합니다."
+        }
+      },
       "submit": "프로젝트 생성",
       "cancel": "취소",
       "errors": {
@@ -479,6 +491,42 @@
       "onboardingSection": "온보딩",
       "replayOnboarding": "투어 다시 보기",
       "shortcutsSection": "키보드 단축키"
+    },
+    "docStorage": {
+      "title": "문서 저장 위치",
+      "intro": "현재 프로젝트의 docs/ 문서가 저장되는 위치입니다. 변경 시 기존 파일 처리 방식을 묻습니다.",
+      "noProject": "프로젝트를 선택하면 문서 저장 위치를 변경할 수 있습니다.",
+      "workspace": {
+        "title": "프로젝트 폴더",
+        "hint": "워크스페이스의 docs/ 에 저장."
+      },
+      "central": {
+        "title": "LLMTycoon 저장소",
+        "hint": ".llmtycoon/projects/<id>/docs 에 격리."
+      },
+      "migrate": {
+        "title": "문서 저장 위치 변경",
+        "intro": "{from} → {to} 로 변경합니다. 기존 docs/ 파일을 어떻게 처리할까요?",
+        "strategyLabel": "마이그레이션 전략",
+        "strategy": {
+          "move": {
+            "title": "이동",
+            "hint": "기존 파일을 새 위치로 옮기고 원본은 비웁니다."
+          },
+          "copy": {
+            "title": "복사",
+            "hint": "기존 파일을 새 위치로 복사합니다(원본 유지)."
+          },
+          "none": {
+            "title": "옮기지 않기",
+            "hint": "위치 설정만 바꾸고 기존 파일은 그대로 둡니다."
+          }
+        },
+        "confirm": "변경",
+        "successTitle": "문서 저장 위치 변경 완료",
+        "successSummary": "이동 {moved}개 · 스킵 {skipped}개",
+        "errorTitle": "문서 저장 위치 변경 실패"
+      }
     }
   },
   "gitCredentials": {

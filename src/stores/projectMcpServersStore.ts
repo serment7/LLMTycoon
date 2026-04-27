@@ -434,12 +434,110 @@ export function createIndexedDbMcpServerStorage(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// 싱글턴 편의 API
+// REST 백엔드 store — 서버 mongo(mcp_servers 컬렉션) 를 단일 출처로 삼는다.
+// ────────────────────────────────────────────────────────────────────────────
+//
+// IndexedDB 시기에는 클라이언트 단말이 단일 출처여서 서버 측 에이전트 워커가
+// 사용자 등록을 읽을 길이 없었다(figma-dev 도달 불가 회귀). REST store 는 동일
+// 인터페이스(ProjectMcpServersStore) 를 만족하면서, CRUD 를 모두 server.ts 의
+// /api/projects/:id/mcp-servers 엔드포인트로 위임해 워커 spawn 시점이 데이터를
+// 읽을 수 있게 한다. subscribe 는 메모리 리스너 — 탭 간 동기화는 후속 작업.
+
+export interface RestProjectMcpServersStoreOptions {
+  fetchImpl?: typeof fetch;
+}
+
+interface ServerListResponse { servers: McpServerRecord[]; }
+
+export function createRestProjectMcpServersStore(
+  options: RestProjectMcpServersStoreOptions = {},
+): ProjectMcpServersStore {
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const listeners = new Map<string, Set<() => void>>();
+  function notify(projectId: string) {
+    listeners.get(projectId)?.forEach((l) => { try { l(); } catch { /* ignore */ } });
+  }
+  async function readJson<T>(res: Response): Promise<T> {
+    const text = await res.text();
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      try {
+        const parsed = JSON.parse(text) as { error?: string };
+        if (parsed.error) message = parsed.error;
+      } catch { /* 텍스트 그대로 */ }
+      throw new Error(message);
+    }
+    return text ? JSON.parse(text) as T : ({} as T);
+  }
+  return {
+    async add(input) {
+      const errors = validateMcpServerInput(input);
+      if (errors.length > 0) throw new Error(errors.map((e) => e.message).join(' '));
+      const res = await fetchImpl(`/api/projects/${encodeURIComponent(input.projectId)}/mcp-servers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: input.name,
+          transport: input.transport ?? 'stdio',
+          command: input.command,
+          args: input.args,
+          env: input.env,
+          url: input.url,
+          headers: input.headers,
+          authToken: input.authToken,
+        }),
+      });
+      const record = await readJson<McpServerRecord>(res);
+      notify(input.projectId);
+      return record;
+    },
+    async remove(projectId, id) {
+      const res = await fetchImpl(
+        `/api/projects/${encodeURIComponent(projectId)}/mcp-servers/${encodeURIComponent(id)}`,
+        { method: 'DELETE' },
+      );
+      // 404 는 이미 삭제된 상태로 간주(IDB store 와 동일하게 silent).
+      if (!res.ok && res.status !== 404) {
+        await readJson<unknown>(res);
+      }
+      notify(projectId);
+    },
+    async list(projectId) {
+      const res = await fetchImpl(`/api/projects/${encodeURIComponent(projectId)}/mcp-servers`);
+      const body = await readJson<ServerListResponse>(res);
+      return (body.servers ?? []).slice().sort((a, b) => b.createdAt - a.createdAt);
+    },
+    subscribe(projectId, listener) {
+      if (!listeners.has(projectId)) listeners.set(projectId, new Set());
+      listeners.get(projectId)!.add(listener);
+      return () => {
+        const set = listeners.get(projectId);
+        if (!set) return;
+        set.delete(listener);
+        if (set.size === 0) listeners.delete(projectId);
+      };
+    },
+    async clearAll() {
+      // REST 백엔드는 전체 삭제를 허용하지 않는다(권한 분리). 등록된 청자에게만
+      // notify 를 보내 UI 가 새로고침을 시도하게 한다.
+      Array.from(listeners.keys()).forEach(notify);
+    },
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 싱글턴 편의 API — 브라우저(window 가 있고 fetch 가 있으면) 에서는 REST store,
+// 그 외(Node 테스트/SSR) 는 기존 IndexedDB(메모리 폴백) store 를 쓴다.
 // ────────────────────────────────────────────────────────────────────────────
 
 let defaultStore: ProjectMcpServersStore | null = null;
 function getDefaultStore(): ProjectMcpServersStore {
-  if (!defaultStore) defaultStore = createProjectMcpServersStore();
+  if (!defaultStore) {
+    const isBrowser = typeof window !== 'undefined' && typeof globalThis.fetch === 'function';
+    defaultStore = isBrowser
+      ? createRestProjectMcpServersStore()
+      : createProjectMcpServersStore();
+  }
   return defaultStore;
 }
 
@@ -461,4 +559,111 @@ export function listProjectMcpServers(projectId: string): Promise<McpServerRecor
 
 export function subscribeProjectMcpServers(projectId: string, listener: () => void): () => void {
   return getDefaultStore().subscribe(projectId, listener);
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// IndexedDB → 서버 일회성 마이그레이션
+// ────────────────────────────────────────────────────────────────────────────
+//
+// IndexedDB 시기 사용자 데이터가 사라지지 않도록, 브라우저 첫 마운트 시 한 번
+// IDB 의 모든 레코드를 서버 POST 로 전송한다. localStorage 에 마커를 남겨 다음
+// 마운트에는 다시 돌지 않는다. 일부 레코드만 실패한 경우 IDB 는 비우지 않고
+// 마커도 남기지 않아 다음 진입 시 재시도된다(중복 레코드는 409 로 silent 처리).
+
+const IDB_MIGRATION_MARK = 'llmtycoon.mcp-servers.idb-migrated';
+
+// 모듈 레벨 in-flight guard — React StrictMode 의 useEffect 이중 invocation, 또는
+// 패널이 짧은 시간에 unmount/remount 되는 경우에 마이그레이션이 두 번 돌면서 동일
+// (projectId, name) POST 가 race 로 겹쳐 한 쪽이 unique 인덱스에 걸리는 회귀가 있다.
+// 같은 프로미스를 공유해 한 번만 돌게 하고, 끝나면 캐시를 비워 다음 페이지 라이프
+// 사이클(예: 명시적 reset 후 재진입)에는 다시 시도할 수 있게 한다.
+let migrationInflight: Promise<McpServersMigrationResult> | null = null;
+
+export interface MigrateMcpServersOptions {
+  fetchImpl?: typeof fetch;
+  /** localStorage 접근 폴백 — SSR/테스트 환경에서 주입. 미지정 시 globalThis.localStorage. */
+  localStorageImpl?: Pick<Storage, 'getItem' | 'setItem'> | null;
+  /** IndexedDB 어댑터 주입(테스트). 미지정 시 createIndexedDbMcpServerStorage. */
+  adapter?: McpServerStorageAdapter;
+}
+
+export interface McpServersMigrationResult {
+  migrated: number;
+  failed: number;
+  skipped: boolean; // 이미 마이그레이션 완료 또는 IDB 비어 있음
+}
+
+export async function migrateMcpServersFromIdb(
+  options: MigrateMcpServersOptions = {},
+): Promise<McpServersMigrationResult> {
+  // 동시 호출은 같은 프로미스를 받아 한 번만 실제 마이그레이션이 돌게 한다. 테스트
+  // 경로(adapter/localStorageImpl 주입)도 같은 가드를 따른다 — 본 함수 호출자가
+  // 멱등성을 신경 쓸 필요가 없도록.
+  if (migrationInflight) return migrationInflight;
+  migrationInflight = (async () => {
+    try {
+      return await runMcpServersMigration(options);
+    } finally {
+      migrationInflight = null;
+    }
+  })();
+  return migrationInflight;
+}
+
+async function runMcpServersMigration(
+  options: MigrateMcpServersOptions,
+): Promise<McpServersMigrationResult> {
+  const ls = options.localStorageImpl === undefined
+    ? (typeof window !== 'undefined' ? window.localStorage : null)
+    : options.localStorageImpl;
+  try {
+    if (ls?.getItem(IDB_MIGRATION_MARK) === 'done') {
+      return { migrated: 0, failed: 0, skipped: true };
+    }
+  } catch { /* SSR/거부 — 무시하고 진행 */ }
+
+  const adapter = options.adapter ?? createIndexedDbMcpServerStorage();
+  let records: McpServerRecord[] = [];
+  try {
+    records = (await adapter.list()).filter(isMcpServerRecord);
+  } catch {
+    // IDB 자체에 접근할 수 없으면(권한·시크릿 모드) 마이그레이션을 'skipped' 로 종료.
+    return { migrated: 0, failed: 0, skipped: true };
+  }
+  if (records.length === 0) {
+    try { ls?.setItem(IDB_MIGRATION_MARK, 'done'); } catch { /* ignore */ }
+    return { migrated: 0, failed: 0, skipped: true };
+  }
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  let migrated = 0;
+  let failed = 0;
+  for (const r of records) {
+    try {
+      const res = await fetchImpl(
+        `/api/projects/${encodeURIComponent(r.projectId)}/mcp-servers`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: r.name,
+            transport: r.transport ?? 'stdio',
+            command: r.command,
+            args: r.args,
+            env: r.env,
+            url: r.url,
+            headers: r.headers,
+            authToken: r.authToken,
+          }),
+        },
+      );
+      // 409(중복) 는 서버에 이미 동일 레코드가 있다는 뜻 — 마이그레이션 성공으로 본다.
+      if (res.ok || res.status === 409) migrated++;
+      else failed++;
+    } catch { failed++; }
+  }
+  if (failed === 0) {
+    try { await adapter.clear(); } catch { /* ignore */ }
+    try { ls?.setItem(IDB_MIGRATION_MARK, 'done'); } catch { /* ignore */ }
+  }
+  return { migrated, failed, skipped: false };
 }

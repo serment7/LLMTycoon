@@ -5,7 +5,7 @@ import { Server } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { spawn } from 'child_process';
-import { writeFileSync, unlinkSync, mkdirSync, readFileSync, readdirSync, existsSync } from 'fs';
+import { writeFileSync, unlinkSync, mkdirSync, readFileSync, readdirSync, existsSync, statSync, renameSync, copyFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { MongoClient, Db, ObjectId } from 'mongodb';
@@ -51,6 +51,20 @@ import {
   projectOptionsView,
   updateProjectOptionsSchema,
 } from './src/utils/projectOptions';
+import {
+  DEFAULT_DOC_STORAGE,
+  DOC_STORAGE_MODE_VALUES,
+  extractDocStorage,
+  mergeDocStorage,
+  resolveCentralDocsRoot,
+  type DocStorageMode,
+} from './src/utils/docStorage';
+import {
+  validateMcpServerInput,
+  type McpServerInput,
+  type McpServerRecord,
+  type McpTransport,
+} from './src/stores/projectMcpServersStore';
 import {
   DEFAULT_GIT_AUTOMATION_CONFIG,
   formatCommitMessage,
@@ -473,6 +487,12 @@ async function startServer() {
   // 루프는 활성 목표가 있는 프로젝트만 돌린다.
   const sharedGoalsCol = db.collection<SharedGoal>('shared_goals');
   await sharedGoalsCol.createIndex({ projectId: 1, status: 1, createdAt: -1 });
+  // 프로젝트별 사용자 등록 MCP 서버. 클라이언트 IndexedDB 가 단일 진실 원본이던 시기
+  // 가 있어, 본 컬렉션은 v2 (transport 필드 보유) 레코드를 그대로 받아 보관한다.
+  // (projectId, name) 쌍은 유일해야 하며, 사용자가 같은 이름을 두 번 등록하면 거부된다.
+  const mcpServersCol = db.collection<McpServerRecord>('mcp_servers');
+  await mcpServersCol.createIndex({ projectId: 1, name: 1 }, { unique: true });
+  await mcpServersCol.createIndex({ projectId: 1, createdAt: -1 });
   // 관리 메뉴(연동·가져온 저장소)는 프로젝트별로 격리한다. 전역 컬렉션을 공유하면
   // 한 프로젝트가 PR 대상으로 지정한 외부 저장소가 다른 프로젝트 화면에 섞여 나와
   // "어느 게임 프로젝트에 속한 것인지" 구분이 흐려진다. projectId 필드를 필수 키로
@@ -867,10 +887,23 @@ async function startServer() {
   });
 
   app.post('/api/projects', async (req, res) => {
-    const { name, description, workspacePath } = req.body;
+    const { name, description, workspacePath, docStorageMode } = req.body || {};
     const id = uuidv4();
     const finalPath = workspacePath || `./workspaces/${name.toLowerCase().replace(/\s+/g, '-')}`;
     resolveWorkspace(finalPath);
+
+    // 생성 시점에 사용자가 docStorage 모드를 선택했으면 settingsJson 에 반영.
+    // 미지정/잘못된 값이면 기본('workspace') 으로 폴백한다.
+    let initialSettings: Record<string, unknown> = { ...PROJECT_OPTION_DEFAULTS.settingsJson };
+    if (typeof docStorageMode === 'string'
+      && DOC_STORAGE_MODE_VALUES.includes(docStorageMode as DocStorageMode)) {
+      initialSettings = mergeDocStorage(initialSettings, { mode: docStorageMode as DocStorageMode });
+    }
+    // central 모드로 시작하면 docs root 디렉터리를 미리 만든다 — 첫 에이전트 작업
+    // 시점에 mkdir 비용이 분산되지 않도록 한다.
+    if ((initialSettings.docStorage as { mode?: string } | undefined)?.mode === 'central') {
+      try { mkdirSync(resolveCentralDocsRoot(process.cwd(), id), { recursive: true }); } catch { /* noop */ }
+    }
 
     const leader = await agentsCol.findOne({ role: 'Leader' });
     const project: Project = {
@@ -887,7 +920,7 @@ async function startServer() {
       autoCommitEnabled: PROJECT_OPTION_DEFAULTS.autoCommitEnabled,
       autoPushEnabled: PROJECT_OPTION_DEFAULTS.autoPushEnabled,
       defaultBranch: PROJECT_OPTION_DEFAULTS.defaultBranch,
-      settingsJson: { ...PROJECT_OPTION_DEFAULTS.settingsJson },
+      settingsJson: initialSettings,
     };
     await projectsCol.insertOne(project);
 
@@ -1014,6 +1047,204 @@ async function startServer() {
     io.emit('state:updated', await getGameState());
     io.emit('project-options:updated', { projectId: id, options: projectOptionsView(saved) });
     res.json(projectOptionsView(saved));
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // MCP 서버 등록 — 프로젝트별 외부 MCP 서버(figma-dev 등) 를 서버 DB 에 영속화.
+  // 이전에는 클라이언트 IndexedDB 가 단일 출처였으나, 에이전트 워커(서버 측 spawn)
+  // 가 그 데이터를 읽을 채널이 없어 사용자가 등록한 도구가 Claude CLI 에 도달하지
+  // 못하는 회귀가 있었다. POST/DELETE 가 호출되면 해당 프로젝트의 모든 워커를
+  // dispose 해 다음 ensure 시점에 새 MCP 목록으로 spawn 되도록 한다.
+  // ──────────────────────────────────────────────────────────────────────────
+  app.get('/api/projects/:id/mcp-servers', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+    const list = await mcpServersCol
+      .find({ projectId: id }, { projection: { _id: 0 } })
+      .sort({ createdAt: -1 })
+      .toArray();
+    res.json({ servers: list });
+  });
+
+  app.post('/api/projects/:id/mcp-servers', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+
+    const body = (req.body || {}) as Record<string, unknown>;
+    const input: McpServerInput = {
+      projectId: id,
+      name: typeof body.name === 'string' ? body.name : '',
+      transport: typeof body.transport === 'string' ? (body.transport as McpTransport) : undefined,
+      command: typeof body.command === 'string' ? body.command : undefined,
+      args: Array.isArray(body.args) ? (body.args as string[]) : undefined,
+      env: (body.env && typeof body.env === 'object' && !Array.isArray(body.env))
+        ? (body.env as Record<string, string>) : undefined,
+      url: typeof body.url === 'string' ? body.url : undefined,
+      headers: (body.headers && typeof body.headers === 'object' && !Array.isArray(body.headers))
+        ? (body.headers as Record<string, string>) : undefined,
+      authToken: typeof body.authToken === 'string' ? body.authToken : undefined,
+    };
+    // 'llm-tycoon' 은 내부 MCP 서버 이름이라 사용자 등록을 거절한다 — writeMcpConfig
+    // 가 외부 등록과 병합할 때 키 충돌이 일어나면 사용자 정의가 덮어써질 수 있다.
+    if (input.name.trim() === 'llm-tycoon') {
+      res.status(400).json({ error: '"llm-tycoon" 은 예약된 이름입니다', field: 'name' });
+      return;
+    }
+    const errors = validateMcpServerInput(input);
+    if (errors.length > 0) {
+      res.status(400).json({ error: errors.map(e => e.message).join(' '), field: errors[0]?.field });
+      return;
+    }
+    const transport: McpTransport = input.transport ?? 'stdio';
+    const record: McpServerRecord = {
+      id: uuidv4(),
+      projectId: id,
+      name: input.name.trim(),
+      transport,
+      command: (input.command ?? '').trim(),
+      args: (input.args ?? []).map(a => String(a)),
+      env: { ...(input.env ?? {}) },
+      ...(transport !== 'stdio' ? {
+        url: (input.url ?? '').trim(),
+        headers: { ...(input.headers ?? {}) },
+        ...(input.authToken !== undefined ? { authToken: input.authToken } : {}),
+      } : {}),
+      createdAt: Date.now(),
+      schemaVersion: 2,
+    };
+    // 동일 (projectId, name) 중복은 unique index 에 위임한다. 사전 조회 + insertOne
+    // 사이의 race window 에서 동시 요청 두 개가 모두 통과해 한 쪽이 E11000 으로
+    // throw → process crash 하는 회귀가 있어, insertOne 의 에러를 직접 잡아 409 로
+    // 변환한다. mongo 드라이버는 11000 을 code 필드에 그대로 채워 준다.
+    try {
+      await mcpServersCol.insertOne(record);
+    } catch (err) {
+      const code = (err as { code?: number }).code;
+      if (code === 11000) {
+        res.status(409).json({ error: `동일한 이름("${input.name.trim()}") 의 MCP 서버가 이미 존재합니다`, field: 'name' });
+        return;
+      }
+      console.error('[mcp-servers] insertOne failed:', (err as Error).message);
+      res.status(500).json({ error: 'MCP 서버 저장 실패', detail: (err as Error).message });
+      return;
+    }
+    // 프로젝트에 배정된 모든 워커 dispose — 다음 dispatch 시 새 MCP 목록으로 spawn.
+    if (project.agents) {
+      for (const agentId of project.agents) taskRunner.disposeAgentWorker(agentId);
+    }
+    res.json(record);
+  });
+
+  app.delete('/api/projects/:id/mcp-servers/:serverId', async (req, res) => {
+    const { id, serverId } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+    const result = await mcpServersCol.deleteOne({ projectId: id, id: serverId });
+    if (result.deletedCount === 0) {
+      res.status(404).json({ error: 'mcp server not found' });
+      return;
+    }
+    if (project.agents) {
+      for (const agentId of project.agents) taskRunner.disposeAgentWorker(agentId);
+    }
+    res.json({ ok: true });
+  });
+
+  // 문서 저장 위치 마이그레이션 — 'workspace' ↔ 'central' 모드 전환을 한 번에 처리.
+  // 현재 모드의 docs/ 폴더를 새 모드 위치로 복사/이동/그대로 두기 중 사용자가
+  // 선택한 전략으로 옮기고, settingsJson 을 갱신한 뒤 해당 프로젝트의 워커를 모두
+  // dispose 해 다음 ensure 호출에서 새 모드로 spawn 되게 한다.
+  app.post('/api/projects/:id/docs/migrate', async (req, res) => {
+    const { id } = req.params;
+    const project = await projectsCol.findOne({ id });
+    if (!project) { res.status(404).json({ error: 'project not found' }); return; }
+
+    const body = (req.body || {}) as { targetMode?: unknown; strategy?: unknown };
+    const targetMode = body.targetMode;
+    const strategy = body.strategy;
+    if (typeof targetMode !== 'string' || !DOC_STORAGE_MODE_VALUES.includes(targetMode as DocStorageMode)) {
+      res.status(400).json({ error: `targetMode 는 ${DOC_STORAGE_MODE_VALUES.join('|')} 중 하나여야 합니다`, field: 'targetMode' });
+      return;
+    }
+    if (strategy !== 'move' && strategy !== 'copy' && strategy !== 'none') {
+      res.status(400).json({ error: 'strategy 는 move|copy|none 중 하나여야 합니다', field: 'strategy' });
+      return;
+    }
+
+    const currentMode = extractDocStorage(project.settingsJson).mode;
+    const target = targetMode as DocStorageMode;
+
+    // 같은 모드로의 전환은 no-op. 호출자가 idempotent 하게 호출할 수 있도록 200 반환.
+    if (currentMode === target) {
+      res.json({ ok: true, mode: target, moved: 0, skipped: 0, alreadyInMode: true });
+      return;
+    }
+
+    const workspaceAbs = resolveWorkspace(project.workspacePath);
+    const workspaceDocs = path.resolve(workspaceAbs, 'docs');
+    const centralDocs = resolveCentralDocsRoot(process.cwd(), id);
+    const fromAbs = currentMode === 'workspace' ? workspaceDocs : centralDocs;
+    const toAbs = target === 'workspace' ? workspaceDocs : centralDocs;
+
+    // 파일 옮기기 — strategy='none' 이면 건너뛴다. 'move'/'copy' 는 동일 트리를
+    // 재귀 순회해 한 번에 처리하고, 결과(개수·실패) 를 응답에 담는다.
+    let moved = 0;
+    let skipped = 0;
+    const failed: { path: string; error: string }[] = [];
+    if (strategy !== 'none' && existsSync(fromAbs)) {
+      try { mkdirSync(toAbs, { recursive: true }); } catch { /* noop */ }
+      const walk = async (dir: string, rel: string): Promise<void> => {
+        let entries: string[];
+        try { entries = readdirSync(dir); } catch { return; }
+        for (const name of entries) {
+          const srcAbs = path.join(dir, name);
+          const dstAbs = path.join(toAbs, rel, name);
+          let st: ReturnType<typeof statSync> | null = null;
+          try { st = statSync(srcAbs); } catch { continue; }
+          if (!st) continue;
+          if (st.isDirectory()) {
+            try { mkdirSync(dstAbs, { recursive: true }); } catch { /* noop */ }
+            await walk(srcAbs, path.join(rel, name));
+          } else if (st.isFile()) {
+            // 충돌 회피: 대상에 동일 경로 파일이 이미 있으면 옮기지 않고 skipped 로 집계.
+            if (existsSync(dstAbs)) { skipped++; continue; }
+            try {
+              if (strategy === 'move') renameSync(srcAbs, dstAbs);
+              else copyFileSync(srcAbs, dstAbs);
+              moved++;
+            } catch (err) {
+              failed.push({ path: path.join(rel, name).split(path.sep).join('/'), error: (err as Error).message });
+            }
+          }
+        }
+      };
+      await walk(fromAbs, '');
+      // move 의 경우 빈 source 디렉터리들을 정리(가능하면). 실패는 무해 — 비어있지 않으면 그대로 둔다.
+      if (strategy === 'move') {
+        try { rmSync(fromAbs, { recursive: true, force: true }); } catch { /* noop */ }
+      }
+    }
+
+    // settingsJson 갱신 — 다른 키는 보존, docStorage 만 교체. 이후 워커 dispose 로
+    // 다음 ensure 호출이 새 모드로 spawn 되도록 한다.
+    const nextSettings = mergeDocStorage(
+      (project.settingsJson as Record<string, unknown> | undefined) ?? {},
+      { mode: target },
+    );
+    await projectsCol.updateOne({ id }, { $set: { settingsJson: nextSettings } });
+
+    if (project.agents) {
+      for (const agentId of project.agents) taskRunner.disposeAgentWorker(agentId);
+    }
+
+    const saved = await projectsCol.findOne({ id }, { projection: { _id: 0 } });
+    if (saved) {
+      io.emit('state:updated', await getGameState());
+      io.emit('project-options:updated', { projectId: id, options: projectOptionsView(saved) });
+    }
+    res.json({ ok: true, mode: target, moved, skipped, failed, from: fromAbs, to: toAbs });
   });
 
   app.delete('/api/projects/:id', async (req, res) => {

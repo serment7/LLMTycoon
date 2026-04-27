@@ -31,6 +31,7 @@ import { chatLoop, type ChatTransport } from './llm/local-chat';
 import { OllamaTransport } from './llm/ollama-transport';
 import { VllmTransport } from './llm/vllm-transport';
 import { getToolDefinitions } from './llm/tools-adapter';
+import { createMcpClientPool, type McpClientPool } from './llm/mcp-client-pool';
 import { readLLMEnv, type LLMMessage, type AgentSession } from './llm/provider';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -427,6 +428,16 @@ interface WorkerInit {
   // 리더 단일 브랜치 경로로 통합된 이후에는 Git 자동화 개시도 여기서 파생된 리더
   // 태스크 흐름이 전담하므로, 에이전트 단위 완료 훅은 더 이상 존재하지 않는다.
   onImprovementReport?: ImprovementReportHandler;
+  // 'central' 문서 저장소 절대경로. project.settingsJson.docStorage.mode === 'central'
+  // 일 때 taskRunner 가 채워 준다. LocalAgentWorker 가 toolContext 에 흘려 넣어
+  // workspace-fs 도구가 docs/ 경로를 이 root 로 라우팅한다. workspace 모드면 undefined.
+  centralDocsRoot?: string;
+  // 사용자가 프로젝트에 등록한 외부 MCP 서버 목록(figma-dev 등). taskRunner 가
+  // mcp_servers 컬렉션에서 읽어 spawn 시점에 주입한다. AgentWorker 의 writeMcpConfig
+  // 가 임시 .mcp.json 에 'llm-tycoon' 내부 서버와 함께 병합해 Claude CLI 에 노출한다.
+  // 변경(추가/삭제) 시 server.ts 라우트가 워커를 dispose 하므로, 본 init 은 항상
+  // 최신 스냅샷을 받는다. 빈 배열/undefined 면 외부 서버 없이 기존 동작 유지.
+  mcpServers?: import('../stores/projectMcpServersStore').McpServerRecord[];
 }
 
 type WorkerStatus = 'idle' | 'busy';
@@ -441,6 +452,9 @@ export class AgentWorker implements AgentSession {
   private child: ChildProcessWithoutNullStreams | null = null;
   private mcpConfigPath: string | null = null;
   private onImprovementReport?: ImprovementReportHandler;
+  // 사용자 등록 MCP 서버 스냅샷. ensure 시점에 init 으로 받아와 spawn 시점의
+  // writeMcpConfig 가 'llm-tycoon' 내부 서버와 함께 임시 .mcp.json 에 병합한다.
+  private externalMcpServers: import('../stores/projectMcpServersStore').McpServerRecord[] = [];
 
   private queue: QueueItem[] = [];
   private processing: QueueItem | null = null;
@@ -461,6 +475,7 @@ export class AgentWorker implements AgentSession {
     this.port = init.port ?? DEFAULT_PORT;
     this.systemPrompt = init.systemPrompt;
     this.onImprovementReport = init.onImprovementReport;
+    this.externalMcpServers = init.mcpServers ?? [];
   }
 
   // 개선 보고 훅은 워커 재사용 경로에서 교체 가능해야 한다. ensure() 가 이미
@@ -531,19 +546,45 @@ export class AgentWorker implements AgentSession {
       process.platform === 'win32' ? 'tsx.cmd' : 'tsx',
     );
     const mcpScript = path.resolve('mcp-agent-server.ts');
-    const config = {
-      mcpServers: {
-        'llm-tycoon': {
-          command: tsxBin,
-          args: [mcpScript],
-          env: {
-            API_URL: `http://localhost:${this.port}`,
-            AGENT_ID: this.agentId,
-            PROJECT_ID: this.projectId,
-          },
+    // mcpServers 맵의 키는 Claude CLI 가 도구 이름의 prefix 로 그대로 노출한다.
+    // 'llm-tycoon' 은 본 프로젝트의 내부 MCP 서버 식별자라 항상 첫 자리에 둔다.
+    const mcpServers: Record<string, unknown> = {
+      'llm-tycoon': {
+        command: tsxBin,
+        args: [mcpScript],
+        env: {
+          API_URL: `http://localhost:${this.port}`,
+          AGENT_ID: this.agentId,
+          PROJECT_ID: this.projectId,
         },
       },
     };
+    // 사용자 등록 외부 서버 병합. 'llm-tycoon' 키는 server.ts 라우트에서 거부하므로
+    // 여기서 충돌이 발생하지 않는 게 원칙이지만, 방어적으로 한 번 더 건너뛴다.
+    for (const ext of this.externalMcpServers) {
+      if (ext.name === 'llm-tycoon') continue;
+      if (ext.transport === 'stdio') {
+        mcpServers[ext.name] = {
+          command: ext.command,
+          args: ext.args,
+          env: ext.env,
+        };
+      } else {
+        // http / streamable-http — Claude CLI 의 공식 매핑은 type=http + url + headers.
+        // SDK 내부에서 streamable-http 도 동일 키로 구성되며, 토큰은 Authorization
+        // 헤더로 추가한다(사용자가 별도 헤더에 넣어 두지 않은 경우만 보강).
+        const headers: Record<string, string> = { ...(ext.headers ?? {}) };
+        if (ext.authToken && !headers.Authorization && !headers.authorization) {
+          headers.Authorization = `Bearer ${ext.authToken}`;
+        }
+        mcpServers[ext.name] = {
+          type: ext.transport === 'streamable-http' ? 'streamable-http' : 'http',
+          url: ext.url,
+          headers,
+        };
+      }
+    }
+    const config = { mcpServers };
     const configPath = path.join(
       tmpdir(),
       `claude-mcp-worker-${this.agentId}-${Date.now()}.json`,
@@ -933,6 +974,13 @@ export class LocalAgentWorker implements AgentSession {
   readonly agentId: string;
   projectId: string;
   workspacePath: string;
+  centralDocsRoot?: string;
+  // 사용자 등록 MCP 서버 스냅샷. 첫 drain 시 풀로 변환되어 LLM 도구 셋에 합쳐진다.
+  private mcpServersSnapshot: import('../stores/projectMcpServersStore').McpServerRecord[] = [];
+  // 풀 lazy init — connect 비용은 첫 도구 호출 직전까지 미룬다. 같은 워커 인스턴스의
+  // 후속 turn 은 동일 풀을 재사용해 connect 왕복을 피한다.
+  private mcpPool: McpClientPool | null = null;
+  private mcpPoolInit: Promise<McpClientPool | null> | null = null;
   private port: number;
   private systemPrompt?: string;
   private onImprovementReport?: ImprovementReportHandler;
@@ -951,6 +999,8 @@ export class LocalAgentWorker implements AgentSession {
     this.agentId = init.agentId;
     this.projectId = init.projectId;
     this.workspacePath = init.workspacePath;
+    this.centralDocsRoot = init.centralDocsRoot;
+    this.mcpServersSnapshot = init.mcpServers ?? [];
     this.port = init.port ?? DEFAULT_PORT;
     this.systemPrompt = init.systemPrompt;
     this.onImprovementReport = init.onImprovementReport;
@@ -1035,6 +1085,51 @@ export class LocalAgentWorker implements AgentSession {
       this.processing.onError(new Error(WORKER_ERROR.disposed));
       this.processing = null;
     }
+    // MCP 풀 정리 — close 자체는 Promise 지만, dispose 호출자는 동기를 기대하므로
+    // 결과를 기다리지 않고 background 로 닫는다(close 실패는 로그만 남기고 무시).
+    const pool = this.mcpPool;
+    this.mcpPool = null;
+    this.mcpPoolInit = null;
+    if (pool) {
+      pool.close().catch((err) => {
+        console.warn(`[worker:${this.agentId}] MCP pool close 실패:`, (err as Error).message);
+      });
+    }
+  }
+
+  /**
+   * MCP 풀을 lazy 하게 초기화한다. 첫 호출자만 실제 connect 비용을 부담하고, 동시에
+   * 호출되더라도 같은 Promise 를 받아 connect 왕복이 한 번으로 수렴한다. 등록된 서버
+   * 가 0 개면 null 을 돌려 외부 도구 노출 없이 기존 동작을 유지한다.
+   */
+  private async ensureMcpPool(): Promise<McpClientPool | null> {
+    if (this.closed) return null;
+    if (this.mcpServersSnapshot.length === 0) return null;
+    if (this.mcpPool) return this.mcpPool;
+    if (!this.mcpPoolInit) {
+      this.mcpPoolInit = createMcpClientPool(this.mcpServersSnapshot, { agentId: this.agentId })
+        .then((pool) => {
+          if (this.closed) {
+            // 초기화 도중 dispose 가 들어왔으면 즉시 닫는다.
+            pool.close().catch(() => { /* ignore */ });
+            return null;
+          }
+          this.mcpPool = pool;
+          // 부분 실패 (한 서버는 connect 안 됨)는 status 로 노출. 운영자가 logs 로 추적.
+          for (const s of pool.status) {
+            if (!s.ok) {
+              console.warn(`[worker:${this.agentId}] MCP 서버 "${s.name}" 연결 실패: ${s.error}`);
+            }
+          }
+          return pool;
+        })
+        .catch((err) => {
+          console.warn(`[worker:${this.agentId}] MCP 풀 초기화 실패:`, (err as Error).message);
+          this.mcpPoolInit = null;
+          return null;
+        });
+    }
+    return this.mcpPoolInit;
   }
 
   private async drain() {
@@ -1045,11 +1140,17 @@ export class LocalAgentWorker implements AgentSession {
       // 이번 턴 user 메시지를 히스토리에 추가. chatLoop 가 assistant/tool 메시지를
       // in-place 로 이어 붙인다 — 즉 동일 세션이 계속 누적된다.
       this.messages.push({ role: 'user', content: item.prompt.replace(/\r\n/g, '\n') });
+      // 첫 turn 에서 외부 MCP 풀을 lazy 하게 connect — 등록된 서버 0개면 null 로
+      // 떨어져 기존 도구 셋만 노출된다. 매 turn 같은 풀을 재사용해 connect 왕복은
+      // 단 한 번. dispose 직전에는 ensureMcpPool 이 null 을 돌려 노출이 자연 종료된다.
+      const mcpPool = await this.ensureMcpPool();
       const toolContext = {
         agentId: this.agentId,
         projectId: this.projectId,
         port: this.port,
         workspacePath: this.workspacePath,
+        centralDocsRoot: this.centralDocsRoot,
+        mcpPool: mcpPool ?? undefined,
       };
       const text = await chatLoop(this.transport, this.messages, {
         maxToolIterations: this.maxToolIterations,

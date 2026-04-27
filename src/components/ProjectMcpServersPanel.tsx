@@ -15,6 +15,7 @@ import { Plus, Trash2, Server, Globe } from 'lucide-react';
 import {
   addProjectMcpServer,
   listProjectMcpServers,
+  migrateMcpServersFromIdb,
   removeProjectMcpServer,
   subscribeProjectMcpServers,
   validateMcpServerInput,
@@ -95,6 +96,31 @@ export function ProjectMcpServersPanel({ projectId, store, onLog }: Props) {
       subscribe: subscribeProjectMcpServers,
     };
   }, [store]);
+
+  // IndexedDB → 서버 일회성 마이그레이션. store 가 주입된 테스트 경로에서는 건너뛴다
+  // (주입 store 는 보통 메모리 어댑터라 IDB 와 무관). 마운트 시 한 번 시도하고,
+  // 결과를 onLog 로 안내한 뒤 list 를 다시 부르는 흐름은 useEffect 본체와 자연스럽게
+  // 합쳐진다 — 마이그레이션이 새 레코드를 만들면 바로 화면에 반영된다.
+  useEffect(() => {
+    if (store) return;
+    let cancelled = false;
+    migrateMcpServersFromIdb()
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.skipped) {
+          if (result.migrated > 0) {
+            onLog?.(`MCP 서버 ${result.migrated}건을 서버로 이전했습니다.`);
+          }
+          if (result.failed > 0) {
+            onLog?.(`MCP 서버 ${result.failed}건 이전 실패 — 다음 진입 시 재시도됩니다.`);
+          }
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) onLog?.(`MCP 서버 이전 실패: ${(err as Error).message}`);
+      });
+    return () => { cancelled = true; };
+  }, [store, onLog]);
 
   useEffect(() => {
     let cancelled = false;

@@ -1674,6 +1674,7 @@ function App() {
       <SettingsDrawer
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
+        currentProjectId={selectedProjectId}
         onReplayOnboarding={() => {
           setOnboardingRestartKey(k => k + 1);
           setSettingsOpen(false);
@@ -2687,6 +2688,7 @@ function App() {
                   name: trimmed,
                   description: input.description,
                   workspacePath: input.workspacePath,
+                  docStorageMode: input.docStorageMode,
                 }),
               });
               const project = (await res.json()) as { id: string };

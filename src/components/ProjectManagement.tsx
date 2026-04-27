@@ -10,6 +10,7 @@ import {
 import { GitAutomationPanel, DEFAULT_AUTOMATION, type GitAutomationSettings, type GitFlowLevel, type BranchMode } from './GitAutomationPanel';
 import { GitCredentialsSection } from './GitCredentialsSection';
 import { SharedGoalForm } from './SharedGoalForm';
+import { DocStorageSection } from './DocStorageSection';
 import { EmptyState } from './EmptyState';
 import { ProjectEditingHeader } from './EmptyProjectPlaceholder';
 import { FileHistoryPanel } from './FileHistoryPanel';
@@ -1324,6 +1325,25 @@ function ProjectManagementInner({ onLog, currentProjectId }: Props & { currentPr
             에도 사용자의 편집이 서버 응답에 덮이지 않는다 — GitAutomationPanel
             1587ea9 하이드레이션 레이스와 동일 교훈. */}
         <SharedGoalForm projectId={selectedProjectId} onLog={onLog} />
+
+        {/* 문서 저장 위치 — 프로젝트별 docs/ 가 워크스페이스에 쌓일지, LLMTycoon
+            저장소(.llmtycoon/projects/<id>/docs)에 격리될지 선택. 모드 변경은
+            DocStorageSection 내부의 마이그레이션 모달이 책임진다(이동/복사/그대로). */}
+        <section
+          aria-label="문서 저장 위치"
+          data-testid="project-management-doc-storage"
+          style={{
+            marginTop: 'var(--space-md, 16px)',
+            padding: 'var(--space-md, 12px)',
+            border: '1px solid var(--color-border)',
+            borderRadius: 'var(--radius-sm, 6px)',
+          }}
+        >
+          <h3 className="text-[11px] uppercase tracking-wider mb-2" style={{ color: 'var(--color-text-muted)' }}>
+            문서 저장 위치
+          </h3>
+          <DocStorageSection projectId={selectedProjectId} />
+        </section>
 
         {prTargetManaged.length > 0 && (
           <ResearchInsights

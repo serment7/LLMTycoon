@@ -14,6 +14,7 @@ import React, { useCallback, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 
 import { KeyboardShortcutCheatsheet } from './KeyboardShortcutCheatsheet';
+import { DocStorageSection } from './DocStorageSection';
 import { useI18n } from '../i18n';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -75,6 +76,8 @@ export interface SettingsDrawerProps {
   onClose: () => void;
   /** 온보딩 "다시 보기" 트리거. 상위가 OnboardingTour 의 restartKey 를 증가시킨다. */
   onReplayOnboarding?: () => void;
+  /** 현재 활성 프로젝트 ID. 주어지면 문서 저장 위치 섹션이 노출된다. */
+  currentProjectId?: string | null;
   className?: string;
 }
 
@@ -82,6 +85,7 @@ export function SettingsDrawer({
   open,
   onClose,
   onReplayOnboarding,
+  currentProjectId,
   className,
 }: SettingsDrawerProps): React.ReactElement | null {
   const { t } = useI18n();
@@ -206,6 +210,13 @@ export function SettingsDrawer({
           >
             {t('settings.drawer.replayOnboarding')}
           </button>
+        </section>
+
+        <section aria-label={t('settings.docStorage.title')} style={{ marginBottom: 'var(--space-lg)' }}>
+          <h3 className="text-[11px] uppercase tracking-wider" style={{ color: 'var(--color-text-muted)', marginBottom: 'var(--space-xs)' }}>
+            {t('settings.docStorage.title')}
+          </h3>
+          <DocStorageSection projectId={currentProjectId ?? null} />
         </section>
 
         <section aria-label={t('settings.drawer.shortcutsSection')}>

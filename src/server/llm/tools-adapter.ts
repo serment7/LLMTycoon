@@ -17,6 +17,7 @@ import {
   type ListEntry,
   type ReadFileResult,
 } from './workspace-fs';
+import type { McpClientPool } from './mcp-client-pool';
 
 export interface LocalToolContext {
   agentId: string;
@@ -29,6 +30,19 @@ export interface LocalToolContext {
    * 전부 비활성 상태로 간주된다(진단 ping 등 컨텍스트 없는 호출).
    */
   workspacePath?: string;
+  /**
+   * 'central' 모드 docs 저장소 절대경로. 프로젝트가 LLMTycoon 내부 저장소에 docs 를
+   * 격리하도록 설정된 경우 server 가 ctx 생성 시 채워 준다. workspace-fs 의 5 도구가
+   * docs/ prefix 경로를 이 root 로 라우팅한다(workspace 모드면 undefined).
+   */
+  centralDocsRoot?: string;
+  /**
+   * 사용자 등록 외부 MCP 서버 풀. LocalAgentWorker 가 spawn 시 외부 MCP 서버에 미리
+   * connect 한 뒤 본 풀을 컨텍스트로 흘려 넣는다. getToolDefinitions 가 풀의 도구를
+   * 합쳐 LLM 에 노출하고, executeLocalTool 이 namespaced 이름의 도구 호출을 풀로
+   * 위임한다. 미지정 시 외부 MCP 도구는 노출되지 않는다(기존 동작 유지).
+   */
+  mcpPool?: McpClientPool;
 }
 
 // MCP mcp-agent-server.ts 에 정의된 7개 도구를 OpenAI function-calling 스키마로
@@ -188,11 +202,17 @@ export const WORKSPACE_FILE_TOOL_DEFINITIONS: readonly ToolDefinition[] = [
  * 파일 직통 도구는 숨긴다. 로컬 LLM 이 혼란스러운 "있어 보이지만 실패하는" 도구를 물지
  * 않도록 스키마 단계에서 제외.
  */
-export function getToolDefinitions(ctx: Pick<LocalToolContext, 'workspacePath'>): ToolDefinition[] {
-  if (ctx.workspacePath) {
-    return [...LOCAL_TOOL_DEFINITIONS, ...WORKSPACE_FILE_TOOL_DEFINITIONS];
-  }
-  return [...LOCAL_TOOL_DEFINITIONS];
+export function getToolDefinitions(
+  ctx: Pick<LocalToolContext, 'workspacePath' | 'mcpPool'>,
+): ToolDefinition[] {
+  const base: ToolDefinition[] = ctx.workspacePath
+    ? [...LOCAL_TOOL_DEFINITIONS, ...WORKSPACE_FILE_TOOL_DEFINITIONS]
+    : [...LOCAL_TOOL_DEFINITIONS];
+  // 외부 MCP 풀이 주어졌으면 그 도구들을 namespaced 이름으로 함께 노출한다 — LLM 에
+  // 같은 폼식의 function-calling 도구 셋으로 보이고, executeLocalTool 이 호출을
+  // 풀로 dispatch 한다.
+  const mcpDefs = ctx.mcpPool?.toolDefinitions() ?? [];
+  return mcpDefs.length > 0 ? [...base, ...mcpDefs] : base;
 }
 
 async function api(ctx: LocalToolContext, route: string, init?: RequestInit): Promise<unknown> {
@@ -217,6 +237,12 @@ export async function executeLocalTool(
   ctx: LocalToolContext,
 ): Promise<string> {
   try {
+    // 외부 MCP 풀 도구가 우선 — namespaced 이름 (`<server>__<tool>`) 이라 내장 도구와
+    // 충돌 가능성이 거의 없지만, 풀이 자기 도구를 인지하면 즉시 dispatch 해 LLM 응답
+    // 흐름이 한 번에 끝난다.
+    if (ctx.mcpPool && ctx.mcpPool.hasTool(name)) {
+      return await ctx.mcpPool.callTool(name, args);
+    }
     if (name === 'whoami') {
       return JSON.stringify({
         agentId: ctx.agentId,
@@ -299,6 +325,9 @@ export async function executeLocalTool(
       if (!ctx.workspacePath) {
         throw new Error('workspacePath 가 설정되지 않아 파일 도구를 사용할 수 없습니다');
       }
+      // central docs 모드에서만 채워지는 옵션. 5개 도구가 동일한 객체를 받아
+      // docs/ prefix 경로를 별도 root 로 라우팅한다.
+      const fsOpts = ctx.centralDocsRoot ? { centralDocsRoot: ctx.centralDocsRoot } : undefined;
       if (name === 'read_file') {
         const p = requireString(args.path, 'path');
         const offset = toNonNegInt(args.offset);
@@ -308,13 +337,13 @@ export async function executeLocalTool(
         // 의도적으로 더 보고 싶으면 limit 을 명시하도록 한다.
         const LOCAL_DEFAULT_READ_LIMIT = 200;
         const limit = args.limit === undefined ? LOCAL_DEFAULT_READ_LIMIT : toPosInt(args.limit);
-        const r = await readFileChunk(ctx.workspacePath, p, offset, limit);
+        const r = await readFileChunk(ctx.workspacePath, p, offset, limit, fsOpts);
         return formatReadFileResult(p, r);
       }
       if (name === 'write_file') {
         const p = requireString(args.path, 'path');
         const content = requireString(args.content, 'content');
-        const r = await writeFileContent(ctx.workspacePath, p, content);
+        const r = await writeFileContent(ctx.workspacePath, p, content, fsOpts);
         return JSON.stringify(r);
       }
       if (name === 'edit_file') {
@@ -324,7 +353,9 @@ export async function executeLocalTool(
         const offset = args.offset === undefined ? undefined : toNonNegInt(args.offset);
         const limit = args.limit === undefined ? undefined : toPosInt(args.limit);
         const replaceAll = args.replace_all === true;
-        const r = await editFileContent(ctx.workspacePath, p, oldStr, newStr, { offset, limit, replaceAll });
+        const r = await editFileContent(ctx.workspacePath, p, oldStr, newStr, {
+          offset, limit, replaceAll, centralDocsRoot: ctx.centralDocsRoot,
+        });
         return JSON.stringify(r);
       }
       if (name === 'list_files_fs') {
@@ -337,7 +368,7 @@ export async function executeLocalTool(
         const maxDepth = args.max_depth === undefined
           ? LOCAL_DEFAULT_MAX_DEPTH
           : toNonNegInt(args.max_depth);
-        const entries = await listFilesFs(ctx.workspacePath, dir, glob, maxDepth);
+        const entries = await listFilesFs(ctx.workspacePath, dir, glob, maxDepth, fsOpts);
         return formatListFilesAsTree(dir, entries);
       }
       if (name === 'grep_files') {
@@ -345,7 +376,7 @@ export async function executeLocalTool(
         const glob = typeof args.glob === 'string' && args.glob ? args.glob : undefined;
         const cursor = typeof args.cursor === 'string' && args.cursor ? args.cursor : undefined;
         const limit = args.limit === undefined ? undefined : toPosInt(args.limit);
-        const r = await grepFilesFs(ctx.workspacePath, pattern, glob, cursor, limit);
+        const r = await grepFilesFs(ctx.workspacePath, pattern, glob, cursor, limit, fsOpts);
         return JSON.stringify(r);
       }
     }

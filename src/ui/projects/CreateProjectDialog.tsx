@@ -35,6 +35,7 @@ import {
   type RecommenderFetcher,
 } from '../../project/recommendationClient';
 import { translate, useLocale, type Locale } from '../../i18n';
+import { DEFAULT_DOC_STORAGE, type DocStorageMode } from '../../utils/docStorage';
 import {
   MAX_RECOMMEND_COUNT,
   MIN_RECOMMEND_COUNT,
@@ -81,6 +82,12 @@ export interface CreateProjectDialogSubmit {
   readonly locale: RecommendationLocale;
   /** 사용자가 "팀에 바로 추가" 로 선택한 추천 항목. 서버가 생성 직후 seed 한다. */
   readonly recommendedAgents: readonly AgentRecommendation[];
+  /**
+   * 문서('docs/') 저장 위치. 'workspace' = 프로젝트 폴더 안에 저장(기존 동작),
+   * 'central' = LLMTycoon 자체 저장소(.llmtycoon/projects/<id>/docs)에 격리.
+   * 미지정이면 서버가 'workspace' 로 폴백한다.
+   */
+  readonly docStorageMode?: DocStorageMode;
 }
 
 export interface CreateProjectDialogResult {
@@ -110,6 +117,7 @@ interface DialogState {
   readonly name: string;
   readonly description: string;
   readonly workspacePath: string;
+  readonly docStorageMode: DocStorageMode;
   readonly status: RecommendStatus;
   readonly team?: AgentTeamRecommendation;
   /** 생성 시 seed 대상으로 선택된 추천의 인덱스 집합. */
@@ -124,6 +132,7 @@ const INITIAL_STATE: DialogState = {
   name: '',
   description: '',
   workspacePath: '',
+  docStorageMode: DEFAULT_DOC_STORAGE.mode,
   status: 'idle',
   seedQueue: [],
   submitting: false,
@@ -344,6 +353,7 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
           workspacePath: state.workspacePath.trim() || undefined,
           locale: locale as RecommendationLocale,
           recommendedAgents: picked,
+          docStorageMode: state.docStorageMode,
         });
         setState(INITIAL_STATE);
         props.onClose();
@@ -461,6 +471,33 @@ export function CreateProjectDialog(props: CreateProjectDialogProps): React.Reac
               placeholder={t('projects.create.workspacePathHint')}
             />
           </label>
+          {/* 문서 저장 위치 — 'workspace'(프로젝트 폴더 안) vs 'central'(LLMTycoon 격리).
+              생성 시점은 마이그레이션 대상 파일이 없으니 단순 라디오로 충분하고, 추후
+              SettingsDrawer 의 동일 컨트롤이 마이그레이션 모달까지 책임진다. */}
+          <fieldset className="cpd-field cpd-doc-storage" data-testid="cpd-doc-storage">
+            <legend>{t('projects.create.docStorage.title')}</legend>
+            <p className="cpd-doc-storage-intro">{t('projects.create.docStorage.intro')}</p>
+            <div role="radiogroup" aria-label={t('projects.create.docStorage.title')} className="cpd-doc-storage-options">
+              {(['workspace', 'central'] as DocStorageMode[]).map((mode) => {
+                const checked = state.docStorageMode === mode;
+                return (
+                  <label key={mode} className="cpd-doc-storage-option" data-checked={checked || undefined}>
+                    <input
+                      type="radio"
+                      name="cpd-doc-storage"
+                      value={mode}
+                      checked={checked}
+                      onChange={() => setState((prev) => ({ ...prev, docStorageMode: mode }))}
+                    />
+                    <span className="cpd-doc-storage-label">
+                      <strong>{t(`projects.create.docStorage.${mode}.title`)}</strong>
+                      <small>{t(`projects.create.docStorage.${mode}.hint`)}</small>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
         </fieldset>
 
         <section className="cpd-recommend" aria-label={t('projects.recommend.title')}>
