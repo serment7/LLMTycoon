@@ -121,7 +121,7 @@ function claudeToolSection(): string[] {
     '- list_files(): 현재 프로젝트의 코드그래프 파일 노드 목록/ID 조회',
     '- add_file(name, type?): 그래프에 파일 노드를 추가. 이미 존재하면 서버가 기존 노드를 반환(멱등). 호출이 과해서 생기는 부작용은 없다.',
     '- add_dependency(from_file_id, to_file_id): 두 파일 사이 의존성 엣지 기록',
-    '- update_status(status, working_on_file_id): 작업 시작/종료 시 상태 보고',
+    '- update_status(status, working_on_file_id): 작업 시작/종료뿐 아니라 파일·페이즈 경계마다 **선보고**한다. working_on_file_id 는 코드를 만지는 동안에는 비워두지 말 것.',
     '- whoami(): 현재 컨텍스트 확인',
     '',
   ];
@@ -130,10 +130,12 @@ function claudeToolSection(): string[] {
 function claudeChecklist(): string[] {
   return [
     '[필수 체크리스트 — 매 지시마다 반드시 이 순서로 수행]',
-    '1) update_status("working", <파일ID 또는 "">)로 착수 보고',
+    '1) update_status("working", <파일ID 또는 "">) 로 착수 보고. **상태 선(先)보고 원칙**: 아래 경계 지점에서도 작업을 시작하기 전에 update_status 를 다시 호출해 working_on_file_id 와 짧은 한국어 진행 메시지를 갱신한다(작업이 끝난 뒤 몰아서 보고하는 것은 위반).',
+    '   - 파일 경계: 새 파일을 처음 Read/Write/Edit 하기 직전 1회 (같은 파일 연속 수정은 추가 호출 불필요)',
+    '   - 페이즈 경계: 탐색 → 구현 → 테스트 → 문서화 등 단계가 바뀌기 직전 1회',
     '2) list_files() 를 한 번 호출해 현재 코드그래프 상태를 **반드시** 캡처',
     '3) Read/Glob/Grep 으로 워크스페이스 현황 파악',
-    '4) Write/Edit 로 실제 코드 변경 수행',
+    '4) Write/Edit 로 실제 코드 변경 수행 (새 파일을 처음 만지기 직전 1) 의 경계 재보고 규칙 적용)',
     '5) **그래프 동기화 — 누락 금지 규칙**:',
     '   - 이번 턴에 Read/Write/Edit 로 한 번이라도 건드린 모든 파일에 대해 add_file 을 호출한다.',
     '   - "이미 등록돼 있을 것 같다" 는 판단으로 스킵하지 말 것. add_file 은 멱등하므로 중복 호출이 안전하다.',
@@ -143,6 +145,7 @@ function claudeChecklist(): string[] {
     '7) 최종 출력: 동료에게 전달할 한국어 한 줄(≤20단어). 따옴표·이름표·도구 호출 로그 금지.',
     '',
     '체크리스트 5) 는 게임 코드그래프의 정합성을 유지하기 위한 핵심 단계다. 누락되면 UI 가 실제 코드 구조를 추적하지 못해 게임이 깨진다. 의심되면 더 많이 호출하는 쪽을 택하라.',
+    '항목 1) 의 경계 재보고는 사용자가 "지금 무슨 파일에서 어느 단계를 진행 중인지" 실시간으로 추적하기 위한 핵심 장치다. 토큰 비용이 약간 늘더라도 의심되면 한 번 더 호출하라.',
   ];
 }
 
@@ -169,6 +172,7 @@ function localChecklist(): string[] {
   return [
     '[행동 원칙]',
     '- 지시를 받으면 곧바로 update_status 를 호출해 상태 working 을 보고하며 시작한다.',
+    '- **상태 선(先)보고**: 새 파일을 처음 read_file / write_file / edit_file 하기 직전, 그리고 단계가 바뀔 때(탐색→구현→테스트→문서화 등)마다 update_status 를 다시 호출해 working_on_file_id 와 짧은 한국어 진행 메시지를 갱신한다. 작업을 다 마친 뒤 한 번에 몰아서 보고하면 실패다.',
     '- 파일 내용을 파악할 땐 list_files_fs / grep_files / read_file 을, 수정할 땐 write_file / edit_file 을 호출한다.',
     '- 건드린 파일마다 add_file 을 호출해 코드그래프에 반영한다(멱등, 중복 안전).',
     '- import 나 require 로 끌어오는 관계가 있으면 add_dependency 로 의존성을 기록한다.',
