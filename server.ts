@@ -45,6 +45,8 @@ import { getMediaAssetStore } from './src/server/mediaAssetStore';
 import { ProjectCompletionTracker } from './src/server/completionWatcher';
 import { parseEntry, type LedgerEntry } from './src/utils/handoffLedger';
 import { inferFileType, isExcludedFromCodeGraph, normalizeCodeGraphPath } from './src/utils/codeGraphFilter';
+import { uniqueAgentName } from './src/utils/agentNameDedup';
+import { applyAgentNameDedup } from './src/server/migrations/dedupeAgentNames';
 import {
   ProjectOptionsValidationError,
   hasAnyUpdate,
@@ -550,6 +552,25 @@ async function startServer() {
     { status: 'working' },
     { $set: { status: 'idle', currentTask: '' } },
   );
+
+  // 이름 중복 마이그레이션 — 기동 시 1회. 멱등이라 매번 실행해도 안전하다.
+  // 사용자가 보고한 회귀("동일 이름 에이전트가 한 팀에 섞여서 합류") 의 잔여
+  // 데이터를 일괄 정리한다. 자세한 정책은 `applyAgentNameDedup` 주석.
+  try {
+    const migration = await applyAgentNameDedup(agentsCol);
+    if (migration.renames.length > 0) {
+      console.log(
+        `[migration] agent-name-dedup: ${migration.renames.length}명 리네이밍`
+        + ` (${migration.duplicateGroups}개 중복 그룹, 총 ${migration.scanned}명 스캔)`,
+      );
+      for (const r of migration.renames) {
+        console.log(`  · ${r.id}: "${r.from}" → "${r.to}"`);
+      }
+    }
+  } catch (err) {
+    // 마이그레이션 실패는 서비스 기동을 막지 않는다 — 다음 기동에서 재시도.
+    console.error('[migration] agent-name-dedup 실패:', (err as Error).message);
+  }
 
   app.use(express.json());
 
@@ -1343,9 +1364,19 @@ async function startServer() {
 
   app.post('/api/agents/hire', async (req, res) => {
     const { name, role, spriteTemplate, persona } = req.body;
+    const desired = typeof name === 'string' ? name.trim() : '';
+    if (!desired) { res.status(400).json({ error: 'name required' }); return; }
+    // 글로벌 이름 유일성 — 동일 이름의 에이전트가 이미 있으면 숫자 접미사로 비충돌
+    // 이름을 부여한다(예: "Dev" → "Dev2"). UI 가 추천 카드에 표시한 이름과 달라질
+    // 수 있으므로 응답 body 의 name 필드로 실제 저장된 이름을 반드시 돌려준다.
+    const existingNames = await agentsCol
+      .find({}, { projection: { _id: 0, name: 1 } })
+      .map(doc => doc.name)
+      .toArray();
+    const finalName = uniqueAgentName(existingNames, desired);
     const agent: Agent = {
       id: uuidv4(),
-      name,
+      name: finalName,
       role,
       spriteTemplate,
       persona: persona?.trim() || undefined,

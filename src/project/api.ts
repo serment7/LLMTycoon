@@ -15,6 +15,7 @@
 
 import type { AgentRole } from '../types';
 import type { AgentRecommendation } from './recommendAgentTeam';
+import { dedupeRecommendationNames } from '../utils/agentNameDedup';
 import { translate, type Locale } from '../i18n';
 
 export interface ApplyRecommendedTeamOptions {
@@ -145,9 +146,15 @@ export async function applyRecommendedTeam(
   const spriteFor =
     options.spriteTemplateFor ?? ((role: AgentRole) => DEFAULT_SPRITE_TEMPLATE[role]);
 
+  // 클라이언트 측 1차 방어선 — 호출자가 dedup 안 된 추천을 그대로 넘긴 경우에도
+  // hire 직전에 배치 내 이름 충돌을 접미사로 해소한다. 서버는 글로벌 충돌도 다시
+  // 검사하지만, 클라이언트에서 미리 끊어 사용자가 hire 응답에서 예상 이름과 다른
+  // 결과를 받는 빈도를 줄인다.
+  const deduped = dedupeRecommendationNames(recommendations);
+
   const items: AppliedAgentResult[] = [];
   let appliedCount = 0;
-  for (const rec of recommendations) {
+  for (const rec of deduped) {
     try {
       const agentId = await hireAgent(fetchImpl, baseUrl, rec, spriteFor(rec.role), options.locale);
       await attachAgent(fetchImpl, baseUrl, projectId, agentId, options.locale);

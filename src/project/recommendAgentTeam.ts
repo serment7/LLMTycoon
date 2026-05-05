@@ -20,6 +20,7 @@ import { messagesWithCache } from '../server/llm/messagesWithCache';
 import type { CacheableClaudeMessages } from '../server/claudeClient';
 import type { AgentRole } from '../types';
 import { translate } from '../i18n';
+import { dedupeRecommendationNames } from '../utils/agentNameDedup';
 import {
   analyzeDescription,
   buildReason,
@@ -138,6 +139,7 @@ export const SYSTEM_PROMPTS: Record<
       'Respond with a single JSON object and nothing else (no prose, no markdown).',
       'Allowed role values are exactly: Leader, Developer, QA, Designer, Researcher.',
       'The first item must be role="Leader"; there is exactly one Leader.',
+      'Each item.name must be unique within items[] — never reuse the same alias across two cards.',
       'Response schema:',
       '{"items":[{"role":"<AgentRole>","name":"<short English alias>","rationale":"<one sentence in English>","reason":"<one short clause citing matched domain/skill/deliverable>"}]}',
       'rationale: one sentence (<=80 chars) in English. name: <=8 chars alias.',
@@ -161,6 +163,7 @@ export const SYSTEM_PROMPTS: Record<
       '반드시 JSON 오브젝트 하나를 응답하고 그 외 텍스트·마크다운·설명을 붙이지 마세요.',
       '허용된 role 값은 다음 5 가지뿐입니다: Leader, Developer, QA, Designer, Researcher.',
       '첫 번째 추천은 항상 role="Leader" 여야 하며, Leader 는 단 1명입니다.',
+      'items 안의 name 은 서로 달라야 합니다 — 같은 별칭을 두 카드에 재사용하지 마세요.',
       '응답 스키마:',
       '{"items":[{"role":"<AgentRole>","name":"<짧은 한국어 이름>","rationale":"<한 문장 한국어 설명>","reason":"<매칭된 도메인/스킬/산출물을 짧게 인용한 한 줄>"}]}',
       'rationale 은 1문장(80자 이하) 한국어, name 은 8자 이하 별칭, reason 은 60자 이하 짧은 절(예: "커머스·보안 매칭") 로 작성하세요.',
@@ -295,7 +298,9 @@ export function validateRecommendations(
     });
     if (out.length >= limit) break;
   }
-  return out;
+  // 배치 내 이름 충돌 해소 — LLM 이 같은 별칭을 두 카드에 부여한 경우 두 번째부터
+  // 숫자 접미사를 붙여 유일하게 만든다(스킵하지 않으므로 추천 인원수 보존).
+  return dedupeRecommendationNames(out);
 }
 
 function safeJsonParse(text: string): unknown {
